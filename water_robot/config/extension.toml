@@ -1,0 +1,23 @@
+[package]
+title = "Water Tank Jetbot Cleaner"
+version = "0.1.0"
+name = "water_robot.water_tank_jetbot_ext"
+description = "JetBot water-tank cleaning interactive sample (water_robot)."
+category = "Simulation"
+keywords = ["robotics", "isaac", "jetbot"]
+
+[core]
+reloadable = true
+
+# Isaac Sim 4.7+ 형식: [[python.module]] + name= (구식 [python] module = 는 TypeError 유발)
+#
+# Extension 검색 경로는 반드시 이 파일의 "부모의 부모"인 패키지 루트 또는 그 상위(src)만 추가한다.
+# ".../water_robot/config" 를 경로로 넣으면 확장 ID가 config-0.1.0 처럼 잡히고 시작 실패가 난다.
+[dependencies]
+"isaacsim.examples.browser" = {}
+"isaacsim.examples.interactive" = {}
+"isaacsim.robot.wheeled_robots" = {}
+"omni.kit.uiapp" = {}
+
+[[python.module]]
+name = "water_robot.robot_controller_extension"
