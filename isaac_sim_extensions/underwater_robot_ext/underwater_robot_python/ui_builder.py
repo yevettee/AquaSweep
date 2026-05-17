@@ -13,22 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import carb
 import numpy as np
 import omni.timeline
 import omni.ui as ui
-from isaacsim.core.api.objects.cuboid import FixedCuboid
 from isaacsim.core.api.world import World
-from isaacsim.core.prims import SingleArticulation, XFormPrim
-from isaacsim.core.utils.prims import is_prim_path_valid
-from isaacsim.core.utils.stage import add_reference_to_stage, create_new_stage, get_current_stage
+from isaacsim.core.prims import XFormPrim
+from isaacsim.core.utils.stage import create_new_stage, get_current_stage
 from isaacsim.examples.extension.core_connectors import LoadButton, ResetButton
 from isaacsim.gui.components.element_wrappers import CollapsableFrame, StateButton
 from isaacsim.gui.components.ui_utils import get_style
+from isaacsim.robot.wheeled_robots.robots import WheeledRobot
 from isaacsim.storage.native import get_assets_root_path
 from omni.usd import StageEventType
 from pxr import Sdf, UsdLux
 
-from .scenario import ExampleScenario
+from .global_variables import JETBOT_SCENE_NAME
+from .scenario import UnderwaterTankJetbotFsm
 
 
 class UIBuilder:
@@ -137,9 +138,7 @@ class UIBuilder:
     ######################################################################################
 
     def _on_init(self):
-        self._articulation = None
-        self._cuboid = None
-        self._scenario = ExampleScenario()
+        self._scenario = UnderwaterTankJetbotFsm()
 
     def _add_light_to_stage(self):
         """
@@ -162,32 +161,27 @@ class UIBuilder:
         and avoid loading anything if they are.  In this case, the user would still need to add
         their assets to the World (which has low overhead).  See commented code section in this function.
         """
-        # Load the UR10e
-        robot_prim_path = "/ur10e"
-        path_to_robot_usd = get_assets_root_path() + "/Isaac/Robots/UniversalRobots/ur10e/ur10e.usd"
-
-        # Do not reload assets when hot reloading.  This should only be done while extension is under development.
-        # if not is_prim_path_valid(robot_prim_path):
-        #     create_new_stage()
-        #     add_reference_to_stage(path_to_robot_usd, robot_prim_path)
-        # else:
-        #     print("Robot already on Stage")
+        assets_root_path = get_assets_root_path()
+        if assets_root_path is None:
+            carb.log_error("Isaac Sim assets 경로를 찾을 수 없습니다.")
+            return
+        jetbot_asset_path = assets_root_path + "/Isaac/Robots/NVIDIA/Jetbot/jetbot.usd"
 
         create_new_stage()
         self._add_light_to_stage()
-        add_reference_to_stage(path_to_robot_usd, robot_prim_path)
 
-        # Create a cuboid
-        self._cuboid = FixedCuboid(
-            "/Scenario/cuboid", position=np.array([0.3, 0.3, 0.5]), size=0.05, color=np.array([255, 0, 0])
-        )
-
-        self._articulation = SingleArticulation(robot_prim_path)
-
-        # Add user-loaded objects to the World
         world = World.instance()
-        world.scene.add(self._articulation)
-        world.scene.add(self._cuboid)
+        world.scene.add_default_ground_plane()
+        world.scene.add(
+            WheeledRobot(
+                prim_path="/World/Jetbot",
+                name=JETBOT_SCENE_NAME,
+                wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
+                create_robot=True,
+                usd_path=jetbot_asset_path,
+                position=np.array([0.0, 0.0, 0.05]),
+            )
+        )
 
     def _setup_scenario(self):
         """
@@ -195,10 +189,11 @@ class UIBuilder:
         The user may assume that their assets have been loaded by their setup_scene_fn callback, that
         their objects are properly initialized, and that the timeline is paused on timestep 0.
 
-        In this example, a scenario is initialized which will move each robot joint one at a time in a loop while moving the
-        provided prim in a circle around the robot.
+        In this example, a tank-cleaning FSM is initialized for the JetBot differential drive.
         """
-        self._reset_scenario()
+        world = World.instance()
+        jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
+        self._scenario.initialize(jetbot)
 
         # UI management
         self._scenario_state_btn.reset()
@@ -206,8 +201,9 @@ class UIBuilder:
         self._reset_btn.enabled = True
 
     def _reset_scenario(self):
-        self._scenario.teardown_scenario()
-        self._scenario.setup_scenario(self._articulation, self._cuboid)
+        world = World.instance()
+        jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
+        self._scenario.sync_after_world_reset(jetbot)
 
     def _on_post_reset_btn(self):
         """
@@ -215,7 +211,6 @@ class UIBuilder:
         The user may assume that their objects are properly initialized, and that the timeline is paused on timestep 0.
 
         They may also assume that objects that were added to the World.Scene have been moved to their default positions.
-        I.e. the cube prim will move back to the position it was in when it was created in self._setup_scene().
         """
         self._reset_scenario()
 
@@ -232,7 +227,7 @@ class UIBuilder:
         Args:
             step (float): The dt of the current physics step
         """
-        self._scenario.update_scenario(step)
+        self._scenario.on_physics_step(step)
 
     def _on_run_scenario_a_text(self):
         """
@@ -254,7 +249,7 @@ class UIBuilder:
 
         Pausing the timeline on b_text is not strictly necessary for this example to run.
         Clicking "STOP" will cancel the physics subscription that updates the scenario, which means that
-        the robot will stop getting new commands and the cube will stop updating without needing to
+        the robot will stop getting new wheel commands without needing to
         pause at all.  The reason that the timeline is paused here is to prevent the robot being carried
         forward by momentum for a few frames after the physics subscription is canceled.  Pausing here makes
         this example prettier, but if curious, the user should observe what happens when this line is removed.

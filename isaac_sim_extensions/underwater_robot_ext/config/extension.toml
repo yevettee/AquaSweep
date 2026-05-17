@@ -13,7 +13,11 @@ writeTarget.kit = true
 [dependencies]
 "isaacsim.core.api" = {}
 "isaacsim.gui.components" = {}
+"isaacsim.robot.wheeled_robots" = {}
 "omni.kit.uiapp" = {}
 
 [[python.module]]
 name = "underwater_robot_python"
+
+[core]
+reloadable = true

@@ -16,3 +16,6 @@
 EXTENSION_TITLE = "underwater.robot"
 
 EXTENSION_DESCRIPTION = ""
+
+# World.scene에 등록하는 WheeledRobot의 scene 이름 (다른 확장과 충돌 방지)
+JETBOT_SCENE_NAME = "underwater_tank_jetbot"

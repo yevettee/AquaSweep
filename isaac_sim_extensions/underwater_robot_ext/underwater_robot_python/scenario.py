@@ -10,143 +10,191 @@
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
+# See the License for the specific governing permissions and
 # limitations under the License.
 
+"""
+JetBot tank-cleaning FSM (logic ported from water_robot).
+`UIBuilder` loads the robot, then drives this scenario via the Run Scenario physics callback.
+"""
 
-class ScenarioTemplate:
-    def __init__(self):
-        pass
+from enum import Enum, auto
 
-    def setup_scenario(self):
-        pass
-
-    def teardown_scenario(self):
-        pass
-
-    def update_scenario(self):
-        pass
-
-
+import carb
 import numpy as np
-from isaacsim.core.utils.types import ArticulationAction
+from isaacsim.robot.wheeled_robots.controllers.differential_controller import DifferentialController
 
-"""
-This scenario takes in a robot Articulation and makes it move through its joint DOFs.
-Additionally, it adds a cuboid prim to the stage that moves in a circle around the robot.
+# JetBot 물리 파라미터 (공식 예제와 동일)
+JETBOT_WHEEL_RADIUS = 0.03
+JETBOT_WHEEL_BASE = 0.1125
 
-The particular framework under which this scenario operates should not be taken as a direct
-recomendation to the user about how to structure their code.  In the simple example put together
-in this template, this particular structure served to improve code readability and separate
-the logic that runs the example from the UI design.
-"""
+# 수조·로봇 치수 (m) — 실제 수조에 맞게 조정
+TANK_WIDTH_M = 2
+ROBOT_DIAMETER_M = 0.14
+
+# 명령 속도: DifferentialController.forward(command=[선속도 v, 각속도 ω])
+ROW_LINEAR = 1
+TURN_ANGULAR = np.pi / 2
+
+# 종료 허용 오차
+DIST_TOL_M = 0.02
+YAW_TOL_RAD = 0.04
+
+LOG_TAG = "[underwater.robot]"
 
 
-class ExampleScenario(ScenarioTemplate):
-    def __init__(self):
-        self._object = None
-        self._articulation = None
+class _MotionKind(Enum):
+    MOVE = auto()
+    TURN = auto()
 
-        self._running_scenario = False
 
-        self._time = 0.0  # s
+class UnderwaterTankJetbotFsm:
+    """수조 너비·로봇 지름 기준 한 번 왕복 FSM (전진·90°·…)."""
 
-        self._object_radius = 0.5  # m
-        self._object_height = 0.5  # m
-        self._object_frequency = 0.25  # Hz
+    def __init__(self) -> None:
+        self._jetbot = None
+        self._controller = None
+        self._phase_index = 0
+        self._phase_origin_xy = None
+        self._phase_target_yaw = None
+        self._specs = None
+        self._cycle_start_xy = None
+        self._cycle_start_yaw = None
 
-        self._joint_index = 0
-        self._max_joint_speed = 4  # rad/sec
-        self._lower_joint_limits = None
-        self._upper_joint_limits = None
+    def initialize(self, jetbot) -> None:
+        """Load 직후 최초 호출: 제어기 생성·페이즈 스펙 구성·FSM 시작."""
+        self._jetbot = jetbot
+        self._controller = DifferentialController(
+            name="underwater_tank_diff",
+            wheel_radius=JETBOT_WHEEL_RADIUS,
+            wheel_base=JETBOT_WHEEL_BASE,
+        )
+        self._controller.reset()
+        self._build_phase_specs()
+        self._reset_fsm()
 
-        self._joint_time = 0
-        self._path_duration = 0
-        self._calculate_position = lambda t, x: 0
-        self._calculate_velocity = lambda t, x: 0
+    def sync_after_world_reset(self, jetbot) -> None:
+        """World Reset 후: 동일 스펙으로 제어기·상태만 리셋."""
+        self._jetbot = jetbot
+        if self._controller is not None:
+            self._controller.reset()
+        self._reset_fsm()
 
-    def setup_scenario(self, articulation, object_prim):
-        self._articulation = articulation
-        self._object = object_prim
+    def teardown(self) -> None:
+        self._jetbot = None
+        self._controller = None
+        self._specs = None
+        self._phase_index = 0
+        self._phase_origin_xy = None
+        self._phase_target_yaw = None
 
-        self._initial_object_position = self._object.get_world_pose()[0]
-        self._initial_object_phase = np.arctan2(self._initial_object_position[1], self._initial_object_position[0])
-        self._object_radius = np.linalg.norm(self._initial_object_position[:2])
-
-        self._running_scenario = True
-
-        self._joint_index = 0
-        self._lower_joint_limits = articulation.dof_properties["lower"]
-        self._upper_joint_limits = articulation.dof_properties["upper"]
-
-        # teleport robot to lower joint range
-        epsilon = 0.001
-        articulation.set_joint_positions(self._lower_joint_limits + epsilon)
-
-        self._derive_sinusoid_params(0)
-
-    def teardown_scenario(self):
-        self._time = 0.0
-        self._object = None
-        self._articulation = None
-        self._running_scenario = False
-
-        self._joint_index = 0
-        self._lower_joint_limits = None
-        self._upper_joint_limits = None
-
-        self._joint_time = 0
-        self._path_duration = 0
-        self._calculate_position = lambda t, x: 0
-        self._calculate_velocity = lambda t, x: 0
-
-    def update_scenario(self, step: float):
-        if not self._running_scenario:
+    def on_physics_step(self, step_size: float) -> None:
+        del step_size
+        if self._jetbot is None or self._controller is None or self._specs is None:
+            return
+        if self._phase_index >= len(self._specs):
+            self._jetbot.apply_wheel_actions(self._controller.forward(command=[0.0, 0.0]))
             return
 
-        self._time += step
+        kind, mag, sign = self._specs[self._phase_index]
+        pos, orient = self._jetbot.get_world_pose()
+        yaw = self._yaw_from_orientation(orient)
 
-        x = self._object_radius * np.cos(self._initial_object_phase + self._time * self._object_frequency * 2 * np.pi)
-        y = self._object_radius * np.sin(self._initial_object_phase + self._time * self._object_frequency * 2 * np.pi)
-        z = self._initial_object_position[2]
+        if kind == _MotionKind.MOVE:
+            traveled = float(np.hypot(pos[0] - self._phase_origin_xy[0], pos[1] - self._phase_origin_xy[1]))
+            if traveled >= mag - DIST_TOL_M:
+                self._advance_phase()
+                return
+            v = sign * ROW_LINEAR
+            w = 0.0
+            self._jetbot.apply_wheel_actions(self._controller.forward(command=[v, w]))
+            return
 
-        self._object.set_world_pose(np.array([x, y, z]))
+        if self._angle_abs_diff(yaw, self._phase_target_yaw) <= YAW_TOL_RAD:
+            self._advance_phase()
+            return
+        w = sign * TURN_ANGULAR
+        self._jetbot.apply_wheel_actions(self._controller.forward(command=[0.0, w]))
 
-        self._update_sinusoidal_joint_path(step)
+    def _build_phase_specs(self) -> None:
+        hw = np.pi / 2.0
+        self._specs = [
+            (_MotionKind.MOVE, TANK_WIDTH_M, 1.0),
+            (_MotionKind.TURN, hw, 1.0),
+            (_MotionKind.MOVE, ROBOT_DIAMETER_M, 1.0),
+            (_MotionKind.TURN, hw, 1.0),
+            (_MotionKind.MOVE, TANK_WIDTH_M, 1.0),
+        ]
 
-    def _derive_sinusoid_params(self, joint_index: int):
-        # Derive the parameters of the joint target sinusoids for joint {joint_index}
-        start_position = self._lower_joint_limits[joint_index]
+    def _reset_fsm(self) -> None:
+        self._phase_index = 0
+        self._phase_origin_xy = None
+        self._phase_target_yaw = None
+        self._begin_current_phase()
+        self._log_cycle_start_pose()
 
-        P_max = self._upper_joint_limits[joint_index] - start_position
-        V_max = self._max_joint_speed
-        T = P_max * np.pi / V_max
-
-        # T is the expected time of the joint path
-
-        self._path_duration = T
-        self._calculate_position = (
-            lambda time, path_duration: start_position
-            + -P_max / 2 * np.cos(time * 2 * np.pi / path_duration)
-            + P_max / 2
+    def _log_cycle_start_pose(self) -> None:
+        if self._jetbot is None:
+            return
+        pos, orient = self._jetbot.get_world_pose()
+        yaw = self._yaw_from_orientation(orient)
+        self._cycle_start_xy = np.array([pos[0], pos[1]], dtype=float)
+        self._cycle_start_yaw = yaw
+        msg = (
+            f"{LOG_TAG} cycle START world_xyz=({pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}) yaw_rad={yaw:.4f}"
         )
-        self._calculate_velocity = lambda time, path_duration: V_max * np.sin(2 * np.pi * time / path_duration)
+        carb.log_info(msg)
+        print(msg, flush=True)
 
-    def _update_sinusoidal_joint_path(self, step):
-        # Update the target for the robot joints
-        self._joint_time += step
-
-        if self._joint_time > self._path_duration:
-            self._joint_time = 0
-            self._joint_index = (self._joint_index + 1) % self._articulation.num_dof
-            self._derive_sinusoid_params(self._joint_index)
-
-        joint_position_target = self._calculate_position(self._joint_time, self._path_duration)
-        joint_velocity_target = self._calculate_velocity(self._joint_time, self._path_duration)
-
-        action = ArticulationAction(
-            np.array([joint_position_target]),
-            np.array([joint_velocity_target]),
-            joint_indices=np.array([self._joint_index]),
+    def _log_cycle_end_pose(self) -> None:
+        if self._jetbot is None or self._cycle_start_xy is None:
+            return
+        pos, orient = self._jetbot.get_world_pose()
+        yaw = self._yaw_from_orientation(orient)
+        dx = float(pos[0] - self._cycle_start_xy[0])
+        dy = float(pos[1] - self._cycle_start_xy[1])
+        err_xy = float(np.hypot(dx, dy))
+        dyaw = self._angle_abs_diff(yaw, self._cycle_start_yaw)
+        msg = (
+            f"{LOG_TAG} cycle END world_xyz=({pos[0]:.4f},{pos[1]:.4f},{pos[2]:.4f}) "
+            f"yaw_rad={yaw:.4f} | planar_err={err_xy:.4f} m dx={dx:.4f} dy={dy:.4f} |yaw_err|={dyaw:.4f} rad"
         )
-        self._articulation.apply_action(action)
+        carb.log_info(msg)
+        print(msg, flush=True)
+
+    def _advance_phase(self) -> None:
+        self._phase_index += 1
+        if self._specs is not None and self._phase_index == len(self._specs):
+            self._log_cycle_end_pose()
+        self._begin_current_phase()
+
+    def _begin_current_phase(self) -> None:
+        if self._jetbot is None or self._specs is None:
+            return
+        if self._phase_index >= len(self._specs):
+            return
+        kind, mag, sign = self._specs[self._phase_index]
+        pos, orient = self._jetbot.get_world_pose()
+        yaw = self._yaw_from_orientation(orient)
+        if kind == _MotionKind.MOVE:
+            self._phase_origin_xy = np.array([pos[0], pos[1]], dtype=float)
+            self._phase_target_yaw = None
+            return
+        self._phase_origin_xy = None
+        self._phase_target_yaw = self._normalize_angle(yaw + sign * mag)
+
+    @staticmethod
+    def _normalize_angle(a: float) -> float:
+        return (float(a) + np.pi) % (2.0 * np.pi) - np.pi
+
+    def _angle_abs_diff(self, a: float, b: float) -> float:
+        return abs(self._normalize_angle(a - b))
+
+    @staticmethod
+    def _yaw_from_orientation(orient) -> float:
+        """로봇 루트 쿼터니언에서 Z축 요 각 ([w,x,y,z])."""
+        q = np.asarray(orient, dtype=float).reshape(-1)
+        if q.size != 4:
+            return 0.0
+        w, x, y, z = q[0], q[1], q[2], q[3]
+        return float(np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
