@@ -1,7 +1,7 @@
 [package]
 version = "1.0.1"
 category = "Simulation"
-title = "underwater.robot"
+title = "sample.robot"
 description = ""
 keywords = []
 changelog = "docs/CHANGELOG.md"
@@ -13,8 +13,7 @@ writeTarget.kit = true
 [dependencies]
 "isaacsim.core.api" = {}
 "isaacsim.gui.components" = {}
-"isaacsim.robot.wheeled_robots" = {}
 "omni.kit.uiapp" = {}
 
 [[python.module]]
-name = "underwater_robot_python"
+name = "sample_robot_python"
