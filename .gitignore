@@ -1,0 +1,71 @@
+# Claude / IDE / Editor
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+develop-eggs/
+.installed.cfg
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+env/
+
+# ROS 2 / colcon
+install/
+log/
+.colcon/
+COLCON_IGNORE
+
+# Isaac Sim / Omniverse
+**/omni.log
+**/exts/.cache/
+**/.isaac_sim/
+**/cache/
+**/temp/
+
+# Extension build artifacts
+**/build/
+**/dist/
+**/*.egg-info/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+*.swp
+
+# Isaac Sim specific
+**/usd_cache/
+**/nv_cache/
+**/*.usd*~*
+**/.tokens/
+
+# 기타
+LICENSE
+# (필요하면 README.md도 .gitignore에 넣을 수 있지만 보통은 tracking 합니다)
