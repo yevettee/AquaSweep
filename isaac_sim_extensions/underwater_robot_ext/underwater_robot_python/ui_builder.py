@@ -26,10 +26,11 @@ from isaacsim.gui.components.ui_utils import get_style
 from isaacsim.robot.wheeled_robots.robots import WheeledRobot
 from isaacsim.storage.native import get_assets_root_path
 from omni.usd import StageEventType
-from pxr import Sdf, UsdLux
+from pxr import Gf, Sdf, UsdGeom, UsdLux
 
-from .global_variables import JETBOT_SCENE_NAME
+from .global_variables import JETBOT_LINEAR_SCALE, JETBOT_SCENE_NAME
 from .scenario import UnderwaterTankJetbotFsm
+from .track_visual_attach import attach_track_visuals_to_jetbot
 
 
 class UIBuilder:
@@ -182,6 +183,22 @@ class UIBuilder:
                 position=np.array([0.0, 0.0, 0.05]),
             )
         )
+        self._apply_jetbot_uniform_scale(float(JETBOT_LINEAR_SCALE))
+
+    def _apply_jetbot_uniform_scale(self, scale: float) -> None:
+        prim_path = "/World/Jetbot"
+        stage = get_current_stage()
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            carb.log_error(f"[underwater.robot] JetBot prim not found for scale: {prim_path}")
+            return
+        xf = UsdGeom.Xformable(prim)
+        for op in xf.GetOrderedXformOps():
+            if op.GetOpType() == UsdGeom.XformOp.TypeScale:
+                op.Set(Gf.Vec3f(scale, scale, scale))
+                return
+        scale_op = xf.AddScaleOp()
+        scale_op.Set(Gf.Vec3f(scale, scale, scale))
 
     def _setup_scenario(self):
         """
@@ -192,6 +209,7 @@ class UIBuilder:
         In this example, a tank-cleaning FSM is initialized for the JetBot differential drive.
         """
         world = World.instance()
+        attach_track_visuals_to_jetbot("/World/Jetbot")
         jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
         self._scenario.initialize(jetbot)
 

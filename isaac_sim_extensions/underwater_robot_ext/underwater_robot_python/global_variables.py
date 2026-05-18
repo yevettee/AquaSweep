@@ -19,3 +19,11 @@ EXTENSION_DESCRIPTION = ""
 
 # World.scene에 등록하는 WheeledRobot의 scene 이름 (다른 확장과 충돌 방지)
 JETBOT_SCENE_NAME = "underwater_tank_jetbot"
+
+# 휠 링크 아래에 추가되는 트랙 비주얼 Xform 이름 (기본 JetBot 휠 메시 대신 얹을 레이어)
+TRACK_VISUAL_CHILD_NAME = "track_visual"
+
+# 스톡 JetBot 평면 풋프린트 근사(m) → 목표 약 40cm 에 맞춘 USD/Differential 공통 스케일
+JETBOT_REF_FOOTPRINT_M = 0.14
+JETBOT_TARGET_FOOTPRINT_M = 0.4
+JETBOT_LINEAR_SCALE = JETBOT_TARGET_FOOTPRINT_M / JETBOT_REF_FOOTPRINT_M
