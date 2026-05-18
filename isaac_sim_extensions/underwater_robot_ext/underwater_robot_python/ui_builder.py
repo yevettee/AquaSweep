@@ -29,9 +29,16 @@ from omni.usd import StageEventType
 from pxr import Gf, Sdf, UsdGeom, UsdLux
 
 from .fluid_forces import apply_default_fluid_forces, reset_fluid_force_rigid_cache
-from .global_variables import JETBOT_LINEAR_SCALE, JETBOT_SCENE_NAME
+from .global_variables import (
+    DEBUG_CENTER_TRAIL_ENABLED,
+    JETBOT_LINEAR_SCALE,
+    JETBOT_SCENE_NAME,
+)
 from .scenario import UnderwaterTankJetbotFsm
 from .track_visual_attach import attach_track_visuals_to_jetbot
+from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
+
+PHYSICS_DT = 1.0 / 60.0
 
 
 class UIBuilder:
@@ -86,6 +93,8 @@ class UIBuilder:
         if jetbot is None:
             return
         apply_default_fluid_forces(jetbot, step)
+        if DEBUG_CENTER_TRAIL_ENABLED:
+            tick_center_trail_debug(jetbot)
 
     def on_stage_event(self, event):
         """Callback for Stage Events
@@ -106,6 +115,7 @@ class UIBuilder:
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
         reset_fluid_force_rigid_cache()
+        reset_center_trail_debug()
 
     def build_ui(self):
         """
@@ -119,7 +129,7 @@ class UIBuilder:
                 self._load_btn = LoadButton(
                     "Load Button", "LOAD", setup_scene_fn=self._setup_scene, setup_post_load_fn=self._setup_scenario
                 )
-                self._load_btn.set_world_settings(physics_dt=1 / 60.0, rendering_dt=1 / 60.0)
+                self._load_btn.set_world_settings(physics_dt=PHYSICS_DT, rendering_dt=PHYSICS_DT)
                 self.wrapped_ui_elements.append(self._load_btn)
 
                 self._reset_btn = ResetButton(
@@ -219,9 +229,10 @@ class UIBuilder:
         """
         world = World.instance()
         reset_fluid_force_rigid_cache()
+        reset_center_trail_debug()
         attach_track_visuals_to_jetbot("/World/Jetbot")
         jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
-        self._scenario.initialize(jetbot)
+        self._scenario.initialize(jetbot, PHYSICS_DT)
 
         # UI management
         self._scenario_state_btn.reset()
@@ -230,9 +241,10 @@ class UIBuilder:
 
     def _reset_scenario(self):
         reset_fluid_force_rigid_cache()
+        reset_center_trail_debug()
         world = World.instance()
         jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
-        self._scenario.sync_after_world_reset(jetbot)
+        self._scenario.sync_after_world_reset(jetbot, PHYSICS_DT)
 
     def _on_post_reset_btn(self):
         """
@@ -290,6 +302,7 @@ class UIBuilder:
         All state should be reset.
         """
         reset_fluid_force_rigid_cache()
+        reset_center_trail_debug()
         self._on_init()
         self._reset_ui()
 
