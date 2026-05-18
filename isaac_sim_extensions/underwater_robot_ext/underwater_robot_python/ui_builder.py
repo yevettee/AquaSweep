@@ -28,6 +28,7 @@ from isaacsim.storage.native import get_assets_root_path
 from omni.usd import StageEventType
 from pxr import Gf, Sdf, UsdGeom, UsdLux
 
+from .fluid_forces import apply_default_fluid_forces, reset_fluid_force_rigid_cache
 from .global_variables import JETBOT_LINEAR_SCALE, JETBOT_SCENE_NAME
 from .scenario import UnderwaterTankJetbotFsm
 from .track_visual_attach import attach_track_visuals_to_jetbot
@@ -77,7 +78,14 @@ class UIBuilder:
         Args:
             step (float): Size of physics step
         """
-        pass
+        try:
+            world = World.instance()
+            jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
+        except (AttributeError, KeyError, RuntimeError, ValueError):
+            return
+        if jetbot is None:
+            return
+        apply_default_fluid_forces(jetbot, step)
 
     def on_stage_event(self, event):
         """Callback for Stage Events
@@ -97,6 +105,7 @@ class UIBuilder:
         """
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
+        reset_fluid_force_rigid_cache()
 
     def build_ui(self):
         """
@@ -209,6 +218,7 @@ class UIBuilder:
         In this example, a tank-cleaning FSM is initialized for the JetBot differential drive.
         """
         world = World.instance()
+        reset_fluid_force_rigid_cache()
         attach_track_visuals_to_jetbot("/World/Jetbot")
         jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
         self._scenario.initialize(jetbot)
@@ -219,6 +229,7 @@ class UIBuilder:
         self._reset_btn.enabled = True
 
     def _reset_scenario(self):
+        reset_fluid_force_rigid_cache()
         world = World.instance()
         jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
         self._scenario.sync_after_world_reset(jetbot)
@@ -278,6 +289,7 @@ class UIBuilder:
         """This is called when the user opens a new stage from self.on_stage_event().
         All state should be reset.
         """
+        reset_fluid_force_rigid_cache()
         self._on_init()
         self._reset_ui()
 
