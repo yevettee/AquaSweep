@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""수조·스텝 길이·dt만으로 (v, ω) 구간과 스텝 수를 미리 계산 — 월드 pose 없음.
+"""수조 반지름·dt·등속선속만으로 미리 이산화한 (v, ω) 세그먼트 — 월드 pose 불사용.
 
-방사 직진 후 원심 기준 접선으로 맞추기 위해 제자리 90° 회전(반시계)을 넣고,
-한 바퀴 궤도 후 다음 방사 전에는 접선→반경 방향으로 시계 90° 회전합니다.
-시작 시 로봇 헤딩은 탱크 중심에서 바깥으로 향한다고 가정합니다.
+연속 나선은 아르키메데스형 r(θ)=r₀+kθ 로만 규정하고, 같은 θ를 시간과 함께 적분해
+등속 v 로 주행 시 필요한 헤딩 변화율(요레이트) ω 를 해석적으로 구해 스텝마다 채운다.
+
+가정 — 탱크 중심이 원점, 스타트 헤딩은 +x(반경 바깥), 연속 나선은 r=kθ(θ≥0) 로 원점에서 출발해
+θ=0 에서 접선이 +x 와 일치한다. 종료는 명목 반경 r≥수조 허용 한계(직경 5 m − 마진) 시점까지.
 """
 
 from __future__ import annotations
@@ -16,19 +18,21 @@ from typing import List
 
 from .global_variables import JETBOT_TARGET_FOOTPRINT_M
 
-# geometry (시뮬과 동치: 직경 5m 수조, close-loop 시나리오와 동일한 상수 유지)
-TANK_RADIUS_M = 2.5
+# geometry — 수조 직경 5 m; 명목반경 한계는 중심거리 − 마진
+TANK_DIAMETER_M = 5.0
+TANK_RADIUS_M = TANK_DIAMETER_M * 0.5
 TANK_MARGIN_M = 0.08
 ROBOT_DIAMETER_M = JETBOT_TARGET_FOOTPRINT_M
 
+# 한 회전당 반경 증가량 (≈ 차량 직경, 달팽이 권 간격)
+SPIRAL_RADIUS_INCREASE_PER_REV_M = ROBOT_DIAMETER_M
+
 # speeds (m/s), rad/s cap
-RADIAL_LINEAR = 0.85
 ORBIT_LINEAR = 0.55
-ORBIT_RADIUS_MIN_M = 0.08
 OMEGA_MAX_RAD_S = 2.8
 
-# 제자리 90°: ω 부호는 궤도 구간과 동일 컨벤션(+ = 반시계)
-_TURN_MAG_RAD_S = min(2.5, OMEGA_MAX_RAD_S)
+_MERGE_ROUND = 6
+_MAX_GUARD_STEPS = 5_000_000
 
 
 @dataclass(frozen=True)
@@ -38,48 +42,74 @@ class Segment:
     num_steps: int
 
 
-def _num_steps_quarter_turn(physics_dt: float) -> int:
-    """π/2 rad @ |ω| = _TURN_MAG_RAD_S."""
-    return max(1, int(round((math.pi / 2.0) / (_TURN_MAG_RAD_S * physics_dt))))
-
-
 def build_spiral_segments(physics_dt: float) -> List[Segment]:
     if physics_dt <= 0:
         raise ValueError("physics_dt must be positive")
 
-    d = float(ROBOT_DIAMETER_M)
-    v_rad = float(RADIAL_LINEAR)
-    v_orb = float(ORBIT_LINEAR)
+    k = SPIRAL_RADIUS_INCREASE_PER_REV_M / (2.0 * math.pi)
+    v = float(ORBIT_LINEAR)
     lim = float(TANK_RADIUS_M) - float(TANK_MARGIN_M)
 
+    theta = 0.0
     out: List[Segment] = []
-    r_nom = 0.0
-    n_turn = _num_steps_quarter_turn(physics_dt)
+    cur_v: float | None = None
+    cur_omega: float | None = None
+    cur_n = 0
+    guard = 0
+
+    def flush() -> None:
+        nonlocal cur_v, cur_omega, cur_n
+        if cur_n <= 0 or cur_v is None or cur_omega is None:
+            return
+        out.append(Segment(v=cur_v, omega=float(cur_omega), num_steps=cur_n))
+        cur_v = cur_omega = None
+        cur_n = 0
 
     while True:
-        if r_nom + d > lim:
+        r = k * theta
+        if r >= lim:
             break
 
-        # 이전 고리까지 궤도로 끝났으면 헤딩은 접선(CCW); 다음 방사 직진 전 반경 방향으로 CW 90°
-        if r_nom > 0.0:
-            out.append(Segment(v=0.0, omega=-_TURN_MAG_RAD_S, num_steps=n_turn))
+        denom = math.hypot(k, r)
+        if denom < 1e-12:
+            break
 
-        n_rad = max(1, int(round(d / (v_rad * physics_dt))))
-        out.append(Segment(v=v_rad, omega=0.0, num_steps=n_rad))
+        c = math.cos(theta)
+        sn = math.sin(theta)
+        # p'(θ) for x=r cos θ, y=r sin θ with r=r0+kθ, dr/dθ=k
+        px_p = k * c - r * sn
+        py_p = k * sn + r * c
+        px_pp = -2.0 * k * sn - r * c
+        py_pp = 2.0 * k * c - r * sn
 
-        r_nom += d
+        denom_sq = denom * denom
+        dpsi_dtheta = (px_p * py_pp - py_p * px_pp) / max(denom_sq, 1e-18)
 
-        # 반경 바깥 헤딩 → 탱크 중심 기준 CCW 접선으로 CCW 90°
-        out.append(Segment(v=0.0, omega=_TURN_MAG_RAD_S, num_steps=n_turn))
+        v_allow = float(OMEGA_MAX_RAD_S) * denom / max(abs(dpsi_dtheta), 1e-12)
+        v_eff = min(v, v_allow)
 
-        omega_raw = v_orb / max(r_nom, ORBIT_RADIUS_MIN_M)
+        dtheta_dt = v_eff / denom
+        omega_raw = dpsi_dtheta * dtheta_dt
         omega = float(max(-OMEGA_MAX_RAD_S, min(OMEGA_MAX_RAD_S, omega_raw)))
 
-        arc_len = 2.0 * math.pi * r_nom
-        T_orbit = arc_len / max(v_orb, 1e-6)
-        n_orb = max(1, int(round(T_orbit / physics_dt)))
-        out.append(Segment(v=v_orb, omega=omega, num_steps=n_orb))
+        # 이상적인 나선에 걸린 공간 θ 적분 전개(오차는 오픈루프 특성상 물리에 맡김)
+        theta = theta + dtheta_dt * physics_dt
 
+        key_v = round(v_eff, _MERGE_ROUND)
+        key_o = round(omega, _MERGE_ROUND)
+        if cur_v is None:
+            cur_v, cur_omega, cur_n = key_v, key_o, 1
+        elif key_v == cur_v and key_o == cur_omega:
+            cur_n += 1
+        else:
+            flush()
+            cur_v, cur_omega, cur_n = key_v, key_o, 1
+
+        guard += 1
+        if guard > _MAX_GUARD_STEPS:
+            raise RuntimeError("spiral planner exceeded guard step count")
+
+    flush()
     return out
 
 

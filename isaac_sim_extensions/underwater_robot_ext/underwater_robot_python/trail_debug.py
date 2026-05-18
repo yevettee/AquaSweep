@@ -15,23 +15,64 @@ from . import global_variables as gv
 
 _points: List[Gf.Vec3f] = []
 _warned_once: bool = False
+_warn_bad_trail_path: bool = False
+
+
+def _usd_path_ok_for_curve_prim(p: Sdf.Path) -> bool:
+    if p.isEmpty:
+        return False
+    fn = getattr(p, "IsPrimPath", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            pass
+    s = str(p)
+    return s.startswith("/") and len(s) > 1
+
+
+def _curve_path_sdf() -> Sdf.Path | None:
+    """BasisCurves용 절대 Sdf 경로. 잘못된 상수 또는 상대 문자열 시 None (Ill-formed SdfPath 경고 방지)."""
+    global _warn_bad_trail_path
+    raw = (gv.DEBUG_TRAIL_CURVE_PRIM_PATH or "").strip()
+    if not raw.startswith("/"):
+        if not _warn_bad_trail_path:
+            carb.log_warn(
+                f"[underwater.robot] trail DEBUG_TRAIL_CURVE_PRIM_PATH는 '/' 로 시작해야 합니다: {raw!r} — 트레일 비활성 처리"
+            )
+            _warn_bad_trail_path = True
+        return None
+    p = Sdf.Path(raw)
+    if not _usd_path_ok_for_curve_prim(p):
+        if not _warn_bad_trail_path:
+            carb.log_warn(
+                "[underwater.robot] trail: DEBUG_TRAIL_CURVE_PRIM_PATH 가 유효한 절대 prim 경로가 아닙니다 — 트레일 비활성"
+            )
+            _warn_bad_trail_path = True
+        return None
+    return p
 
 
 def reset_center_trail_debug() -> None:
     """포인트 버퍼 비우고 기존 커브 프림 제거 (다음 틱에서 재생성)."""
     global _points
     _points.clear()
+    curve_path = _curve_path_sdf()
+    if curve_path is None:
+        return
     stage = get_current_stage()
     if stage is None:
         return
-    path = Sdf.Path(gv.DEBUG_TRAIL_CURVE_PRIM_PATH)
-    prim = stage.GetPrimAtPath(path)
+    prim = stage.GetPrimAtPath(curve_path)
     if prim.IsValid():
-        stage.RemovePrim(path)
+        stage.RemovePrim(curve_path)
 
 
 def tick_center_trail_debug(jetbot) -> None:
     if not gv.DEBUG_CENTER_TRAIL_ENABLED:
+        return
+    curve_path = _curve_path_sdf()
+    if curve_path is None:
         return
     stage = get_current_stage()
     if stage is None:
@@ -51,22 +92,23 @@ def tick_center_trail_debug(jetbot) -> None:
     if max_n > 0 and len(_points) > max_n:
         del _points[: len(_points) - max_n]
 
-    _ensure_debug_xform(stage)
-    _ensure_curve_prim(stage)
-    _update_curve_geometry(stage)
+    _ensure_debug_xform(stage, curve_path)
+    _ensure_curve_prim(stage, curve_path)
+    _update_curve_geometry(stage, curve_path)
 
 
-def _ensure_debug_xform(stage) -> None:
-    parent = Sdf.Path(gv.DEBUG_TRAIL_CURVE_PRIM_PATH).GetParentPath()
+def _ensure_debug_xform(stage, curve_path: Sdf.Path) -> None:
+    parent = curve_path.GetParentPath()
+    if parent.isEmpty:
+        return
     if not stage.GetPrimAtPath(parent).IsValid():
         UsdGeom.Xform.Define(stage, parent)
 
 
-def _ensure_curve_prim(stage) -> None:
-    path = Sdf.Path(gv.DEBUG_TRAIL_CURVE_PRIM_PATH)
-    if stage.GetPrimAtPath(path).IsValid():
+def _ensure_curve_prim(stage, curve_path: Sdf.Path) -> None:
+    if stage.GetPrimAtPath(curve_path).IsValid():
         return
-    bc = UsdGeom.BasisCurves.Define(stage, path)
+    bc = UsdGeom.BasisCurves.Define(stage, curve_path)
     bc.CreateTypeAttr().Set(UsdGeom.Tokens.linear)
     bc.CreateBasisAttr().Set(UsdGeom.Tokens.bspline)
     bc.CreateWrapAttr().Set(UsdGeom.Tokens.nonperiodic)
@@ -74,9 +116,8 @@ def _ensure_curve_prim(stage) -> None:
     gprim.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(1.0, 0.05, 0.05)]))
 
 
-def _update_curve_geometry(stage) -> None:
-    path = Sdf.Path(gv.DEBUG_TRAIL_CURVE_PRIM_PATH)
-    prim = stage.GetPrimAtPath(path)
+def _update_curve_geometry(stage, curve_path: Sdf.Path) -> None:
+    prim = stage.GetPrimAtPath(curve_path)
     if not prim.IsValid():
         return
     bc = UsdGeom.BasisCurves(prim)

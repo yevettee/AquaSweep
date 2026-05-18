@@ -28,6 +28,33 @@ from pxr import Sdf, Usd, UsdGeom, UsdPhysics
 from .global_variables import TRACK_VISUAL_CHILD_NAME
 
 
+def _usd_path_is_prim_path_for_geometry(p: Sdf.Path) -> bool:
+    if p.isEmpty:
+        return False
+    fn = getattr(p, "IsPrimPath", None)
+    if callable(fn):
+        try:
+            return bool(fn())
+        except Exception:
+            pass
+    s = str(p)
+    return s.startswith("/") and len(s) > 1
+
+
+def _ref_prim_from_env(key: str, default_abs: str) -> Sdf.Path:
+    """USD 참조용 prim 경로 — 상대 문자열이면 선행 '/' 추가해 Ill-formed SdfPath 경고를 피합니다."""
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return Sdf.Path(default_abs)
+    if not raw.startswith("/"):
+        raw = "/" + raw.lstrip("/")
+    p = Sdf.Path(raw)
+    if not _usd_path_is_prim_path_for_geometry(p):
+        carb.log_warn(f"[track_visual] {key}={raw!r} 는 유효한 prim 경로가 아닙니다. {default_abs} 사용.")
+        return Sdf.Path(default_abs)
+    return p
+
+
 def _extension_track_vis_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "data" / "track_visuals"
 
@@ -39,16 +66,14 @@ def _resolve_track_asset_paths() -> Tuple[
     single = os.environ.get("AQUASWEEP_TRACK_USD", "").strip()
     left_env = os.environ.get("AQUASWEEP_TRACK_LEFT_USD", "").strip()
     right_env = os.environ.get("AQUASWEEP_TRACK_RIGHT_USD", "").strip()
-    left_prim_s = os.environ.get("AQUASWEEP_TRACK_LEFT_PRIM_PATH", "").strip()
-    right_prim_s = os.environ.get("AQUASWEEP_TRACK_RIGHT_PRIM_PATH", "").strip()
 
     d = _extension_track_vis_dir()
     default_left = d / "track_left.usd"
     default_right = d / "track_right.usd"
 
     if single:
-        lp = Sdf.Path(left_prim_s) if left_prim_s else Sdf.Path("/TrackLeft")
-        rp = Sdf.Path(right_prim_s) if right_prim_s else Sdf.Path("/TrackRight")
+        lp = _ref_prim_from_env("AQUASWEEP_TRACK_LEFT_PRIM_PATH", "/TrackLeft")
+        rp = _ref_prim_from_env("AQUASWEEP_TRACK_RIGHT_PRIM_PATH", "/TrackRight")
         return single, single, lp, rp
 
     left_usd = left_env or (str(default_left) if default_left.is_file() else "")

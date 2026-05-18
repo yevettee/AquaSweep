@@ -133,7 +133,10 @@ class UIBuilder:
                 self.wrapped_ui_elements.append(self._load_btn)
 
                 self._reset_btn = ResetButton(
-                    "Reset Button", "RESET", pre_reset_fn=None, post_reset_fn=self._on_post_reset_btn
+                    "Reset Button",
+                    "RESET",
+                    pre_reset_fn=self._on_pre_reset_btn,
+                    post_reset_fn=self._on_post_reset_btn,
                 )
                 self._reset_btn.enabled = False
                 self.wrapped_ui_elements.append(self._reset_btn)
@@ -245,6 +248,14 @@ class UIBuilder:
         world = World.instance()
         jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
         self._scenario.sync_after_world_reset(jetbot, PHYSICS_DT)
+
+    def _on_pre_reset_btn(self) -> None:
+        """world.reset_async 전 타임라인 STOP·시나리오 물리 콜백 해제(extension physx_subscription 포함)."""
+        self._timeline.stop()
+        try:
+            self._scenario_state_btn.reset()
+        except AttributeError:
+            pass
 
     def _on_post_reset_btn(self):
         """

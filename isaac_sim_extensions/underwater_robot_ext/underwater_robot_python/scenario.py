@@ -14,9 +14,10 @@
 # limitations under the License.
 
 """
-원형 수조(직경 5 m, 중심 시작 가정) 나선형 패턴을 오픈루프로 재생합니다.
+원형 수조(직경 5 m, 중심 시작)에서 아르키메데스 나선 r=kθ 형태를 오픈루프로 재생합니다.
 물리 스텝마다 미리 계산한 (v, ω) 구간 큐만 진행하며 pose 기반 피드백은 사용하지 않습니다.
-플랜은 방사 직진 전후 제자리 90° 회전으로 접선 정렬을 포함합니다 — 시작 헤딩은 중심에서 바깥쪽입니다.
+명목 반경이 수조 허용 한계에 도달하면 세그먼트 재생 종료 후 정지 명령이 이어집니다.
+시작 헤딩은 +x 반경 바깥으로, θ=0 대응 접선과 가정합니다.
 """
 
 from typing import List, Optional
@@ -29,6 +30,7 @@ from .global_variables import JETBOT_LINEAR_SCALE
 from .open_loop_plan import (
     ROBOT_DIAMETER_M,
     Segment,
+    TANK_DIAMETER_M,
     TANK_RADIUS_M,
     build_spiral_segments,
     summarize_plan,
@@ -42,7 +44,7 @@ LOG_TAG = "[underwater.robot]"
 
 
 class UnderwaterTankJetbotFsm:
-    """미리 계산한 직진·원주 세그먼트를 순서대로 재생하는 오픈루프 시나리오."""
+    """미리 계산한 등속 나선 (v, ω) 세그먼트를 순서대로 재생하는 오픈루프 시나리오."""
 
     def __init__(self) -> None:
         self._jetbot = None
@@ -105,7 +107,7 @@ class UnderwaterTankJetbotFsm:
         summary = summarize_plan(self._segments)
         msg = (
             f"{LOG_TAG} open-loop spiral START physics_dt={self._physics_dt:.6g}s "
-            f"tank_R={TANK_RADIUS_M} step_d={ROBOT_DIAMETER_M:.4f} — {summary}"
+            f"tank_D={TANK_DIAMETER_M}m tank_R={TANK_RADIUS_M}m spiral_Δr/rev={ROBOT_DIAMETER_M:.4f}m — {summary}"
         )
         carb.log_info(msg)
         print(msg, flush=True)
