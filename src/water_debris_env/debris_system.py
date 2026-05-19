@@ -67,7 +67,7 @@ class DebrisSystem:
         # 랜덤 위치 생성
         pos_x = np.random.uniform(-self.tank_range, self.tank_range, self.count)
         pos_y = np.random.uniform(-self.tank_range, self.tank_range, self.count)
-        pos_z = np.full(self.count, self.z_floor + self.radius)
+        pos_z = np.full(self.count, self.z_floor + self.radius * 2.5) # 충돌 관통 오류 방지를 위해 살짝 공중에서 스폰
         
         positions = Vt.Vec3fArray([Gf.Vec3f(float(pos_x[i]), float(pos_y[i]), float(pos_z[i])) for i in range(self.count)])
         widths = Vt.FloatArray([self.radius * 2.0] * self.count)
