@@ -1,0 +1,5 @@
+# Heavy turbidity — pre-cleaning fish-farm tank, dense teal haze with
+# suspended fines. Red drops out within ~1 m.
+backscatter_value: [0.10, 0.55, 0.42]
+backscatter_coeff: [0.70, 1.00, 0.40]
+atten_coeff:       [1.80, 0.55, 0.28]

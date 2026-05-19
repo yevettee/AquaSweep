@@ -1,0 +1,20 @@
+[package]
+version = "1.0.2"
+category = "Simulation"
+title = "underwater.robot"
+description = ""
+keywords = []
+changelog = "docs/CHANGELOG.md"
+readme = "docs/README.md"
+preview_image = "data/preview.png"
+icon = "data/icon.png"
+writeTarget.kit = true
+
+[dependencies]
+"isaacsim.core.api" = {}
+"isaacsim.gui.components" = {}
+"isaacsim.robot.wheeled_robots" = {}
+"omni.kit.uiapp" = {}
+
+[[python.module]]
+name = "underwater_robot_python"

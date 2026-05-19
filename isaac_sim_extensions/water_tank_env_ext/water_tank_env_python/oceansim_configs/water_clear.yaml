@@ -1,0 +1,5 @@
+# Freshly-cleaned fish-farm tank — clear with a faint teal hint.
+# atten_coeff is per-meter; tank viewing distance is ~0.3–3 m.
+backscatter_value: [0.02, 0.18, 0.15]
+backscatter_coeff: [0.10, 0.15, 0.08]
+atten_coeff:       [0.40, 0.12, 0.06]

@@ -1,0 +1,18 @@
+[package]
+version = "0.1.0"
+category = "Simulation"
+title = "debris.env"
+description = "Tank debris particle system for the AquaSweep indoor aquaculture simulation."
+keywords = ["AquaSweep", "Debris", "Particles", "Aquaculture"]
+changelog = "docs/CHANGELOG.md"
+readme = "docs/README.md"
+writeTarget.kit = true
+
+[dependencies]
+"isaacsim.core.api" = {}
+"isaacsim.gui.components" = {}
+"omni.kit.uiapp" = {}
+"omni.physx" = {}
+
+[[python.module]]
+name = "debris_python"
