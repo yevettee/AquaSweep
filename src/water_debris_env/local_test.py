@@ -159,6 +159,33 @@ def main():
         UsdShade.MaterialBindingAPI(lens.GetPrim()).Bind(material)
         print("  ✓ 카메라 렌즈 유리 → 배럴 하단에 자동 배치 완료")
 
+        # =========================================================================
+        # 💾 [Option A] 완벽 정렬된 카메라 객체를 독립 에셋(camera.usd)으로 패키징
+        # =========================================================================
+        export_path = "/home/rokey/water_ws/src/water_debris_env/src/water_debris_env/camera.usd"
+        try:
+            import os
+            # 기존 패키징 파일 삭제
+            if os.path.exists(export_path):
+                os.remove(export_path)
+                
+            export_stage = Usd.Stage.CreateInMemory()
+            # /World/Camera 트리를 새 스테이지의 /Camera 루트로 복사
+            Sdf.CopySpec(stage.GetRootLayer(), Sdf.Path("/World/Camera"), export_stage.GetRootLayer(), Sdf.Path("/Camera"))
+            export_stage.SetDefaultPrim(export_stage.GetPrimAtPath("/Camera"))
+            
+            # 복사본의 재질 바인딩 경로 재정렬 (절대 경로 보정)
+            export_lens = export_stage.GetPrimAtPath("/Camera/Lens")
+            export_mat = export_stage.GetPrimAtPath("/Camera/Lens/GlassMaterial")
+            if export_lens.IsValid() and export_mat.IsValid():
+                UsdShade.MaterialBindingAPI(export_lens).UnbindAllBindings()
+                UsdShade.MaterialBindingAPI(export_lens).Bind(UsdShade.Material(export_mat))
+                
+            export_stage.GetRootLayer().Export(export_path)
+            print(f"  💾 [패키징 완료] 독립형 카메라 에셋이 완벽하게 저장되었습니다: {export_path}")
+        except Exception as e:
+            print(f"  ⚠️ [패키징 실패] camera.usd 생성 중 오류 발생: {e}")
+
     # 6. 물리 리셋 및 뷰포트 자동 전환
     world.reset()
     try:
