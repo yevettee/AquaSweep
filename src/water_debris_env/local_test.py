@@ -181,6 +181,12 @@ def main():
                 UsdShade.MaterialBindingAPI(export_lens).UnbindAllBindings()
                 UsdShade.MaterialBindingAPI(export_lens).Bind(UsdShade.Material(export_mat))
                 
+            # CAD 에셋 참조를 절대 경로에서 상대 경로로 변경 (팀원들 컴퓨터에서 로드 가능하도록)
+            export_model = export_stage.GetPrimAtPath("/Camera/Model")
+            if export_model.IsValid():
+                export_model.GetReferences().ClearReferences()
+                export_model.GetReferences().AddReference("./LOW-LIGHT-HD-USB-CAMERA-R1.usd")
+                
             export_stage.GetRootLayer().Export(export_path)
             print(f"  💾 [패키징 완료] 독립형 카메라 에셋이 완벽하게 저장되었습니다: {export_path}")
         except Exception as e:
