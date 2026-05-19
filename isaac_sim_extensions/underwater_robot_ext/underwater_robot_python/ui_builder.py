@@ -19,6 +19,7 @@ import carb
 import numpy as np
 import omni.timeline
 import omni.ui as ui
+from isaacsim.core.api.objects.cuboid import VisualCuboid
 from isaacsim.core.api.world import World
 from isaacsim.core.prims import XFormPrim
 from isaacsim.core.utils.stage import create_new_stage, get_current_stage
@@ -36,9 +37,18 @@ from .global_variables import (
     ROBOT_PRIM_PATH,
     ROBOT_SCENE_NAME,
     ROBOT_SPAWN_Z_M,
+    SUCTION_KINEMATIC_ENABLED,
+    SUCTION_TEST_DEBRIS_PRIM_PATH,
+    SUCTION_TEST_DEBRIS_SIZE_M,
 )
 from .dingo_physics_sanitize import prepare_dingo_usd_on_stage
 from .scenario import UnderwaterTankJetbotFsm
+from .suction_kinematic import (
+    bind_simple_suction_targets,
+    place_test_debris_near_intake,
+    reset_simple_suction,
+    tick_simple_suction,
+)
 from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
 
 PHYSICS_DT = 1.0 / 60.0
@@ -88,6 +98,7 @@ class UIBuilder:
         Args:
             step (float): Size of physics step
         """
+        tick_simple_suction(step)
         try:
             world = World.instance()
             robot = world.scene.get_object(ROBOT_SCENE_NAME)
@@ -119,6 +130,7 @@ class UIBuilder:
             ui_elem.cleanup()
         reset_fluid_force_rigid_cache()
         reset_center_trail_debug()
+        reset_simple_suction()
 
     def build_ui(self):
         """
@@ -207,7 +219,18 @@ class UIBuilder:
                 position=np.array([0.0, 0.0, float(ROBOT_SPAWN_Z_M)]),
             )
         )
-        carb.log_info(f"[underwater.robot] Loaded Dingo from {dingo_usd_path}")
+        if SUCTION_KINEMATIC_ENABLED:
+            debris_z = float(ROBOT_SPAWN_Z_M) + 0.05
+            world.scene.add(
+                VisualCuboid(
+                    prim_path=SUCTION_TEST_DEBRIS_PRIM_PATH,
+                    name="suction_test_debris",
+                    position=np.array([0.35, 0.0, debris_z]),
+                    size=SUCTION_TEST_DEBRIS_SIZE_M,
+                    color=np.array([1.0, 0.25, 0.1]),
+                )
+            )
+        carb.log_info(f"[underwater.robot] Loaded robot from {dingo_usd_path}")
 
     def _setup_scenario(self):
         """
@@ -215,14 +238,19 @@ class UIBuilder:
         The user may assume that their assets have been loaded by their setup_scene_fn callback, that
         their objects are properly initialized, and that the timeline is paused on timestep 0.
 
-        Tank-cleaning FSM for Dingo differential drive (data/dingo_transformed.usd).
+        Tank-cleaning: open-loop spiral drive.
         """
         world = World.instance()
         reset_fluid_force_rigid_cache()
         reset_center_trail_debug()
+        reset_simple_suction()
         prepare_dingo_usd_on_stage(ROBOT_PRIM_PATH)
         robot = world.scene.get_object(ROBOT_SCENE_NAME)
         self._scenario.initialize(robot, PHYSICS_DT)
+        if SUCTION_KINEMATIC_ENABLED:
+            debris = world.scene.get_object("suction_test_debris")
+            if bind_simple_suction_targets(debris) is not None:
+                place_test_debris_near_intake()
 
         # UI management
         self._scenario_state_btn.reset()
@@ -232,9 +260,14 @@ class UIBuilder:
     def _reset_scenario(self):
         reset_fluid_force_rigid_cache()
         reset_center_trail_debug()
+        reset_simple_suction()
         world = World.instance()
         robot = world.scene.get_object(ROBOT_SCENE_NAME)
         self._scenario.sync_after_world_reset(robot, PHYSICS_DT)
+        if SUCTION_KINEMATIC_ENABLED:
+            debris = world.scene.get_object("suction_test_debris")
+            if bind_simple_suction_targets(debris) is not None:
+                place_test_debris_near_intake()
 
     def _on_pre_reset_btn(self) -> None:
         """world.reset_async 전 타임라인 STOP·시나리오 물리 콜백 해제(extension physx_subscription 포함)."""
@@ -301,6 +334,7 @@ class UIBuilder:
         """
         reset_fluid_force_rigid_cache()
         reset_center_trail_debug()
+        reset_simple_suction()
         self._on_init()
         self._reset_ui()
 

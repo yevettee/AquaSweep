@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""dingo_transformed.usd 구조·치수가 global_variables 와 일치하는지 오프라인 검증 (Isaac Sim 불필요)."""
+"""로봇 USD 구조·치수가 global_variables 와 일치하는지 오프라인 검증 (Isaac Sim 불필요)."""
 
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ def main() -> int:
             print("FAIL:", e)
         return 1
 
-    print("OK: dingo_transformed.usd matches global_variables")
+    print(f"OK: {gv.DINGO_USD_FILENAME} matches global_variables")
     print(f"  wheel_radius={wheel_radius:.4f} wheel_base={wb:.4f} footprint_xy={footprint_xy:.4f}")
     print(f"  VisualWheels under base_link: {has_tracks}")
     print(f"  wheel_dof_names: left_wheel_joint, right_wheel_joint")

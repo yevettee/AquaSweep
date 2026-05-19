@@ -11,7 +11,11 @@ import carb
 from isaacsim.core.utils.stage import get_current_stage
 from pxr import Usd, UsdPhysics
 
+from . import global_variables as gv
+
 VISUAL_WHEELS_PRIM_NAME = "VisualWheels"
+# underwater_robot_camera_v1.usd 휠 링크 MassAPI (플레이스홀더)
+DINGO_WHEEL_LINK_MASS_KG = 0.111
 
 
 def _find_visual_wheels_prim(robot_root: Usd.Prim) -> Optional[Usd.Prim]:
@@ -45,10 +49,44 @@ def _strip_physics_prim(prim: Usd.Prim) -> None:
         pass
 
 
-def prepare_dingo_usd_on_stage(robot_prim_path: str) -> None:
-    """Load 후 1회: VisualWheels 서브트리 조인트·강체·충돌 비활성.
+def _find_base_link_prim(robot_root: Usd.Prim) -> Optional[Usd.Prim]:
+    if not robot_root.IsValid():
+        return None
+    stage = robot_root.GetStage()
+    root_path = str(robot_root.GetPath())
+    for suffix in ("base_link", "dingo/base_link"):
+        prim = stage.GetPrimAtPath(f"{root_path}/{suffix}")
+        if prim.IsValid():
+            return prim
+    for prim in Usd.PrimRange(robot_root):
+        if prim.GetName() == "base_link" and prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            return prim
+    return None
 
-    VisualWheels → base_link 계층은 dingo_transformed.usd 에서 직접 편집합니다.
+
+def _apply_robot_mass_override(robot_root: Usd.Prim) -> None:
+    """USD 플레이스홀더(~0.22 kg) → global_variables ROBOT_MASS_KG 에 맞춤."""
+    base = _find_base_link_prim(robot_root)
+    if base is None or not base.IsValid():
+        carb.log_warn("[dingo_usd] base_link not found — skip mass override")
+        return
+
+    target_total = float(gv.ROBOT_MASS_KG)
+    wheel_mass = float(DINGO_WHEEL_LINK_MASS_KG)
+    base_mass = max(target_total - 2.0 * wheel_mass, 1.0)
+
+    mass_api = UsdPhysics.MassAPI.Apply(base) if not base.HasAPI(UsdPhysics.MassAPI) else UsdPhysics.MassAPI(base)
+    mass_api.CreateMassAttr().Set(base_mass)
+    carb.log_info(
+        f"[dingo_usd] mass override base_link={base_mass:.2f} kg "
+        f"(wheels ~{2*wheel_mass:.2f} kg, target total ~{target_total:.1f} kg)"
+    )
+
+
+def prepare_dingo_usd_on_stage(robot_prim_path: str) -> None:
+    """Load 후 1회: 질량 보정, VisualWheels 서브트리 물리 비활성.
+
+    VisualWheels → base_link 계층은 underwater_robot_camera_v1.usd 에서 직접 편집합니다.
     """
     stage = get_current_stage()
     if not stage:
@@ -59,6 +97,8 @@ def prepare_dingo_usd_on_stage(robot_prim_path: str) -> None:
     if not root.IsValid():
         carb.log_warn(f"[dingo_usd] robot root invalid: {robot_prim_path}")
         return
+
+    _apply_robot_mass_override(root)
 
     visual = _find_visual_wheels_prim(root)
     if visual is None or not visual.IsValid():
