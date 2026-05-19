@@ -18,15 +18,27 @@ EXTENSION_TITLE = "underwater.robot"
 EXTENSION_DESCRIPTION = ""
 
 # World.scene에 등록하는 WheeledRobot의 scene 이름 (다른 확장과 충돌 방지)
-JETBOT_SCENE_NAME = "underwater_tank_jetbot"
+ROBOT_SCENE_NAME = "underwater_robot_v1"
 
-# 휠 링크 아래에 추가되는 트랙 비주얼 Xform 이름 (기본 JetBot 휠 메시 대신 얹을 레이어)
-TRACK_VISUAL_CHILD_NAME = "track_visual"
+# Stage 상 로봇 루트 (data/dingo_transformed.usd reference)
+ROBOT_PRIM_PATH = "/World/Dingo"
 
-# 스톡 JetBot 평면 풋프린트 근사(m) → 목표 약 40cm 에 맞춘 USD/Differential 공통 스케일
-JETBOT_REF_FOOTPRINT_M = 0.14
-JETBOT_TARGET_FOOTPRINT_M = 0.4
-JETBOT_LINEAR_SCALE = JETBOT_TARGET_FOOTPRINT_M / JETBOT_REF_FOOTPRINT_M
+# extension/data/dingo_transformed.usd — /Root/dingo, VisualWheels 는 base_link 자식으로 편집
+DINGO_USD_FILENAME = "dingo_transformed_tracked.usd"
+
+# data/dingo_transformed.usd 측정값 (usd-core BBoxCache / wheel_link transforms)
+# - left_wheel_link/collisions Cylinder radius
+# - |left_wheel_link − right_wheel_link| in world XY
+# - base_link world bbox max(X,Y)
+DINGO_WHEEL_RADIUS_M = 0.049
+DINGO_WHEEL_BASE_M = 0.4523
+ROBOT_FOOTPRINT_M = 0.686
+
+# Clearpath Dingo-D 플랫폼 질량 (USD collision mass 합 ~1.2 kg 은 플레이스홀더)
+ROBOT_MASS_KG = 9.1
+
+# 휠 반경 근사만큼 지면 위 스폰 (추가 스케일 없음)
+ROBOT_SPAWN_Z_M = 0.05
 
 # 물리 스텝 기본 유체 근사 (타임라인 Play 중 전역 적용)
 DEFAULT_FLUID_FORCES_ENABLED = False
@@ -34,10 +46,15 @@ BUOYANCY_WEIGHT_FRACTION = 0.75
 DRAG_LINEAR_XY = 0.5
 DRAG_LINEAR_Z = 1.0
 GRAVITY_MPS2 = 9.81
-JETBOT_MASS_KG = 3.0
 
 # 루트 중심 궤적 시각화 (Physics step 샘플, 메인 로직과 무관)
 DEBUG_CENTER_TRAIL_ENABLED = True
 DEBUG_TRAIL_MAX_POINTS = 40000
-DEBUG_TRAIL_CURVE_PRIM_PATH = "/World/Debug/JetbotCenterTrail"
+DEBUG_TRAIL_CURVE_PRIM_PATH = "/World/Debug/DingoCenterTrail"
 DEBUG_TRAIL_LINE_WIDTH_WORLD = 0.02
+
+# Deprecated aliases (JetBot era)
+JETBOT_SCENE_NAME = ROBOT_SCENE_NAME
+JETBOT_TARGET_FOOTPRINT_M = ROBOT_FOOTPRINT_M
+JETBOT_MASS_KG = ROBOT_MASS_KG
+JETBOT_LINEAR_SCALE = 1.0

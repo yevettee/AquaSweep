@@ -16,13 +16,13 @@ import math
 from dataclasses import dataclass
 from typing import List
 
-from .global_variables import JETBOT_TARGET_FOOTPRINT_M
+from .global_variables import ROBOT_FOOTPRINT_M
 
 # geometry — 수조 직경 5 m; 명목반경 한계는 중심거리 − 마진
 TANK_DIAMETER_M = 5.0
 TANK_RADIUS_M = TANK_DIAMETER_M * 0.5
 TANK_MARGIN_M = 0.08
-ROBOT_DIAMETER_M = JETBOT_TARGET_FOOTPRINT_M
+ROBOT_DIAMETER_M = ROBOT_FOOTPRINT_M
 
 # 한 회전당 반경 증가량 (≈ 차량 직경, 달팽이 권 간격)
 SPIRAL_RADIUS_INCREASE_PER_REV_M = ROBOT_DIAMETER_M

@@ -26,7 +26,7 @@ import carb
 
 from isaacsim.robot.wheeled_robots.controllers.differential_controller import DifferentialController
 
-from .global_variables import JETBOT_LINEAR_SCALE
+from .global_variables import DINGO_WHEEL_BASE_M, DINGO_WHEEL_RADIUS_M
 from .open_loop_plan import (
     ROBOT_DIAMETER_M,
     Segment,
@@ -36,10 +36,6 @@ from .open_loop_plan import (
     summarize_plan,
 )
 
-# 스케일 적용 후 차동 모델 (스톡 JetBot 물리값 × LINEAR_SCALE)
-JETBOT_WHEEL_RADIUS = 0.03 * JETBOT_LINEAR_SCALE
-JETBOT_WHEEL_BASE = 0.1125 * JETBOT_LINEAR_SCALE
-
 LOG_TAG = "[underwater.robot]"
 
 
@@ -47,27 +43,27 @@ class UnderwaterTankJetbotFsm:
     """미리 계산한 등속 나선 (v, ω) 세그먼트를 순서대로 재생하는 오픈루프 시나리오."""
 
     def __init__(self) -> None:
-        self._jetbot = None
+        self._robot = None
         self._controller: Optional[DifferentialController] = None
         self._physics_dt = 1.0 / 60.0
         self._segments: List[Segment] = []
         self._seg_idx = 0
         self._step_in_seg = 0
 
-    def initialize(self, jetbot, physics_dt: float) -> None:
+    def initialize(self, robot, physics_dt: float) -> None:
         self._physics_dt = float(physics_dt)
-        self._jetbot = jetbot
+        self._robot = robot
         self._controller = DifferentialController(
             name="underwater_tank_diff",
-            wheel_radius=JETBOT_WHEEL_RADIUS,
-            wheel_base=JETBOT_WHEEL_BASE,
+            wheel_radius=DINGO_WHEEL_RADIUS_M,
+            wheel_base=DINGO_WHEEL_BASE_M,
         )
         self._controller.reset()
         self._rebuild_plan_and_indices()
         self._log_session_start()
 
-    def sync_after_world_reset(self, jetbot, physics_dt: float) -> None:
-        self._jetbot = jetbot
+    def sync_after_world_reset(self, robot, physics_dt: float) -> None:
+        self._robot = robot
         self._physics_dt = float(physics_dt)
         if self._controller is not None:
             self._controller.reset()
@@ -75,7 +71,7 @@ class UnderwaterTankJetbotFsm:
         self._log_session_start()
 
     def teardown(self) -> None:
-        self._jetbot = None
+        self._robot = None
         self._controller = None
         self._segments.clear()
         self._seg_idx = 0
@@ -83,15 +79,15 @@ class UnderwaterTankJetbotFsm:
 
     def on_physics_step(self, step_size: float) -> None:
         del step_size
-        if self._jetbot is None or self._controller is None:
+        if self._robot is None or self._controller is None:
             return
 
         if self._seg_idx >= len(self._segments):
-            self._jetbot.apply_wheel_actions(self._controller.forward(command=[0.0, 0.0]))
+            self._robot.apply_wheel_actions(self._controller.forward(command=[0.0, 0.0]))
             return
 
         seg = self._segments[self._seg_idx]
-        self._jetbot.apply_wheel_actions(self._controller.forward(command=[seg.v, seg.omega]))
+        self._robot.apply_wheel_actions(self._controller.forward(command=[seg.v, seg.omega]))
 
         self._step_in_seg += 1
         if self._step_in_seg >= seg.num_steps:

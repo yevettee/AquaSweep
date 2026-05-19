@@ -79,7 +79,7 @@ def _resolve_mass_kg(jetbot) -> float:
                     return float(np.sum(m))
             except Exception:
                 pass
-    return float(gv.JETBOT_MASS_KG)
+    return float(gv.ROBOT_MASS_KG)
 
 
 def _apply_force_world_newton(jetbot, f_world: np.ndarray) -> bool:

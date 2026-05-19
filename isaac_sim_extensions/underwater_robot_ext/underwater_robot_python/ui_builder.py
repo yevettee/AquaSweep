@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import Path
+
 import carb
 import numpy as np
 import omni.timeline
@@ -24,18 +26,19 @@ from isaacsim.examples.extension.core_connectors import LoadButton, ResetButton
 from isaacsim.gui.components.element_wrappers import CollapsableFrame, StateButton
 from isaacsim.gui.components.ui_utils import get_style
 from isaacsim.robot.wheeled_robots.robots import WheeledRobot
-from isaacsim.storage.native import get_assets_root_path
 from omni.usd import StageEventType
-from pxr import Gf, Sdf, UsdGeom, UsdLux
+from pxr import Sdf, UsdLux
 
 from .fluid_forces import apply_default_fluid_forces, reset_fluid_force_rigid_cache
 from .global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
-    JETBOT_LINEAR_SCALE,
-    JETBOT_SCENE_NAME,
+    DINGO_USD_FILENAME,
+    ROBOT_PRIM_PATH,
+    ROBOT_SCENE_NAME,
+    ROBOT_SPAWN_Z_M,
 )
+from .dingo_physics_sanitize import prepare_dingo_usd_on_stage
 from .scenario import UnderwaterTankJetbotFsm
-from .track_visual_attach import attach_track_visuals_to_jetbot
 from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
 
 PHYSICS_DT = 1.0 / 60.0
@@ -87,14 +90,14 @@ class UIBuilder:
         """
         try:
             world = World.instance()
-            jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
+            robot = world.scene.get_object(ROBOT_SCENE_NAME)
         except (AttributeError, KeyError, RuntimeError, ValueError):
             return
-        if jetbot is None:
+        if robot is None:
             return
-        apply_default_fluid_forces(jetbot, step)
+        apply_default_fluid_forces(robot, step)
         if DEBUG_CENTER_TRAIL_ENABLED:
-            tick_center_trail_debug(jetbot)
+            tick_center_trail_debug(robot)
 
     def on_stage_event(self, event):
         """Callback for Stage Events
@@ -184,11 +187,10 @@ class UIBuilder:
         and avoid loading anything if they are.  In this case, the user would still need to add
         their assets to the World (which has low overhead).  See commented code section in this function.
         """
-        assets_root_path = get_assets_root_path()
-        if assets_root_path is None:
-            carb.log_error("Isaac Sim assets 경로를 찾을 수 없습니다.")
+        dingo_usd_path = Path(__file__).resolve().parents[1] / "data" / DINGO_USD_FILENAME
+        if not dingo_usd_path.is_file():
+            carb.log_error(f"[underwater.robot] Dingo USD not found: {dingo_usd_path}")
             return
-        jetbot_asset_path = assets_root_path + "/Isaac/Robots/NVIDIA/Jetbot/jetbot.usd"
 
         create_new_stage()
         self._add_light_to_stage()
@@ -197,30 +199,15 @@ class UIBuilder:
         world.scene.add_default_ground_plane()
         world.scene.add(
             WheeledRobot(
-                prim_path="/World/Jetbot",
-                name=JETBOT_SCENE_NAME,
+                prim_path=ROBOT_PRIM_PATH,
+                name=ROBOT_SCENE_NAME,
                 wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
                 create_robot=True,
-                usd_path=jetbot_asset_path,
-                position=np.array([0.0, 0.0, 0.05]),
+                usd_path=str(dingo_usd_path),
+                position=np.array([0.0, 0.0, float(ROBOT_SPAWN_Z_M)]),
             )
         )
-        self._apply_jetbot_uniform_scale(float(JETBOT_LINEAR_SCALE))
-
-    def _apply_jetbot_uniform_scale(self, scale: float) -> None:
-        prim_path = "/World/Jetbot"
-        stage = get_current_stage()
-        prim = stage.GetPrimAtPath(prim_path)
-        if not prim.IsValid():
-            carb.log_error(f"[underwater.robot] JetBot prim not found for scale: {prim_path}")
-            return
-        xf = UsdGeom.Xformable(prim)
-        for op in xf.GetOrderedXformOps():
-            if op.GetOpType() == UsdGeom.XformOp.TypeScale:
-                op.Set(Gf.Vec3f(scale, scale, scale))
-                return
-        scale_op = xf.AddScaleOp()
-        scale_op.Set(Gf.Vec3f(scale, scale, scale))
+        carb.log_info(f"[underwater.robot] Loaded Dingo from {dingo_usd_path}")
 
     def _setup_scenario(self):
         """
@@ -228,14 +215,14 @@ class UIBuilder:
         The user may assume that their assets have been loaded by their setup_scene_fn callback, that
         their objects are properly initialized, and that the timeline is paused on timestep 0.
 
-        In this example, a tank-cleaning FSM is initialized for the JetBot differential drive.
+        Tank-cleaning FSM for Dingo differential drive (data/dingo_transformed.usd).
         """
         world = World.instance()
         reset_fluid_force_rigid_cache()
         reset_center_trail_debug()
-        attach_track_visuals_to_jetbot("/World/Jetbot")
-        jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
-        self._scenario.initialize(jetbot, PHYSICS_DT)
+        prepare_dingo_usd_on_stage(ROBOT_PRIM_PATH)
+        robot = world.scene.get_object(ROBOT_SCENE_NAME)
+        self._scenario.initialize(robot, PHYSICS_DT)
 
         # UI management
         self._scenario_state_btn.reset()
@@ -246,8 +233,8 @@ class UIBuilder:
         reset_fluid_force_rigid_cache()
         reset_center_trail_debug()
         world = World.instance()
-        jetbot = world.scene.get_object(JETBOT_SCENE_NAME)
-        self._scenario.sync_after_world_reset(jetbot, PHYSICS_DT)
+        robot = world.scene.get_object(ROBOT_SCENE_NAME)
+        self._scenario.sync_after_world_reset(robot, PHYSICS_DT)
 
     def _on_pre_reset_btn(self) -> None:
         """world.reset_async 전 타임라인 STOP·시나리오 물리 콜백 해제(extension physx_subscription 포함)."""

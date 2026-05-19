@@ -1,0 +1,20 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    upAxis = "Z"
+)
+
+def Xform "Root"
+{
+    def Xform "Model"
+    {
+        token ui:displayGroup = "Material Graphs"
+        token ui:displayName = "Model"
+        int ui:order = 1024
+        float3 xformOp:rotateXYZ = (0, -0, 0)
+        float3 xformOp:scale = (1, 1, 1)
+        double3 xformOp:translate = (0, 0, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]
+    }
+}
+
