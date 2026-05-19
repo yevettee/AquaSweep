@@ -100,49 +100,66 @@ def main():
         xformable.AddScaleOp().Set(Gf.Vec3f(0.001, 0.001, 0.001))
         print(f"  ✓ Blue Robotics 카메라 에셋 배치 완료 (Camera 센서에 부착)")
 
-    # 6. 영롱한 보랏빛/푸른빛 반사의 리얼 렌즈 글래스 삽입 (Sphere 기반 데코레이션)
-    lens_glass_path = "/World/Camera/LensGlass"
-    if not stage.GetPrimAtPath(lens_glass_path).IsValid():
-        from pxr import UsdGeom, Gf
-        import omni.kit.commands
-        
-        # 렌즈 개구부 중심에 구체 생성 (반지름 약 1.4cm)
-        lens_sphere = UsdGeom.Sphere.Define(stage, lens_glass_path)
-        lens_sphere.CreateRadiusAttr(0.014)
-        
-        # 카메라 렌즈 중심 오프셋에 위치 (약간 돌출)
-        xform = UsdGeom.Xformable(lens_sphere.GetPrim())
-        xform.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, -0.015))
-        
-        # 렌즈 구체 찌그러뜨려서 렌즈알 표면처럼 평평하게 만들기
-        xform.AddScaleOp().Set(Gf.Vec3f(1.0, 1.0, 0.3))
-        
-        # 렌즈 전용 영롱한 보랏빛/딥블루 코팅 유리 재질 생성
-        material_path = "/World/Camera/LensMaterial"
-        omni.kit.commands.execute("CreateMdlMaterialPrim",
-            mtl_link="OmniPBR.mdl",
-            material_name="LensMaterial",
-            target_path="/World/Camera"
-        )
-        
-        # 재질 물리 속성 튜닝 (투명하고, 반사율이 높고, 보랏빛 코팅이 은은하게 맺히도록)
-        shader_path = f"{material_path}/Shader"
-        shader_prim = stage.GetPrimAtPath(shader_path)
-        if shader_prim.IsValid():
-            shader_prim.GetAttribute("inputs:diffuse_color").Set(Gf.Vec3f(0.1, 0.05, 0.45)) # 영롱한 딥 퍼플/블루
-            shader_prim.GetAttribute("inputs:roughness").Set(0.0) # 완벽한 반사면 (거칠기 0)
-            shader_prim.GetAttribute("inputs:metallic").Set(0.1) # 은은한 금속 느낌 반사광
-            shader_prim.GetAttribute("inputs:enable_opacity").Set(True) # 투명 재질 활성화
-            shader_prim.GetAttribute("inputs:opacity_amount").Set(0.4) # 40% 정도 투명하게 내부 비침
-            
-        # 렌즈알에 재질 바인딩
-        omni.kit.commands.execute("BindMaterial",
-            prim_path=lens_glass_path,
-            material_path=material_path
-        )
-        print("  ✓ 영롱한 보랏빛 렌즈 글래스 이식 완료!")
+    # 5-1. 카메라 렌즈 유리 생성 — CAD 모델의 실제 하단(배럴 끝)에 자동 배치
+    lens_path = "/World/Camera/Lens"
+    if not stage.GetPrimAtPath(lens_path).IsValid():
+        from pxr import UsdGeom, UsdShade, Gf, Sdf, Usd
 
-    # 7. 물리 리셋 및 뷰포트 자동 전환
+        model_xf = UsdGeom.Xformable(camera_model_prim)
+        # 1. 스케일 및 회전 먼저 적용 (바운딩 박스 계산을 위해 필수)
+        model_xf.ClearXformOpOrder()
+        rotate_op = model_xf.AddRotateXYZOp()
+        rotate_op.Set(Gf.Vec3f(-90.0, 0.0, 0.0))
+        scale_op = model_xf.AddScaleOp()
+        scale_op.Set(Gf.Vec3f(0.001, 0.001, 0.001))
+
+        # 2. 바운딩 박스를 계산하여 실제 배럴의 중앙 및 하단 위치 탐색
+        bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        model_bbox = bbox_cache.ComputeWorldBound(camera_model_prim)
+        model_range = model_bbox.ComputeAlignedRange()
+        
+        barrel_bottom_z = model_range.GetMin()[2]
+        barrel_center_x = (model_range.GetMin()[0] + model_range.GetMax()[0]) / 2.0
+        barrel_center_y = (model_range.GetMin()[1] + model_range.GetMax()[1]) / 2.0
+
+        # 3. 모델 중심점 오프셋 보정 (카메라 센서가 배럴 중앙+끝에 오도록 모델 이동)
+        # Camera 센서는 World (0, 0, 2.5)에 위치함
+        offset_x = 0.0 - barrel_center_x
+        offset_y = 0.0 - barrel_center_y
+        offset_z = 2.5 - barrel_bottom_z
+        
+        # TranslateOp를 추가하고 가장 먼저 적용되도록 순서 변경 (Translate -> Rotate -> Scale)
+        translate_op = model_xf.AddTranslateOp()
+        translate_op.Set(Gf.Vec3d(offset_x, offset_y, offset_z))
+        
+        model_xf.SetXformOpOrder([translate_op, rotate_op, scale_op])
+
+        lens_radius = 0.0055  # 11mm 지름
+        print(f"  📐 렌즈 보정 오프셋: X={offset_x*1000:.1f}mm, Y={offset_y*1000:.1f}mm, Z={offset_z*1000:.1f}mm")
+
+        # 4. 렌즈 실린더 생성 (부모 Camera의 기준점(local Z=0)이 곧 완벽한 배럴 입구임)
+        lens = UsdGeom.Cylinder.Define(stage, lens_path)
+        lens.CreateRadiusAttr(lens_radius)
+        lens.CreateHeightAttr(0.001)   # 두께 1mm (얇은 유리)
+        lens.CreateAxisAttr("Z")
+        xf = UsdGeom.Xformable(lens.GetPrim())
+        xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.0))
+
+        # 다크 글래스 재질 (반사 코팅된 카메라 렌즈)
+        mat_path = "/World/Camera/Lens/GlassMaterial"
+        material = UsdShade.Material.Define(stage, mat_path)
+        shader = UsdShade.Shader.Define(stage, f"{mat_path}/Shader")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.01, 0.01, 0.04))
+        shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.9)
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.03)
+        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(0.8)
+        shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.52)
+        material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        UsdShade.MaterialBindingAPI(lens.GetPrim()).Bind(material)
+        print("  ✓ 카메라 렌즈 유리 → 배럴 하단에 자동 배치 완료")
+
+    # 6. 물리 리셋 및 뷰포트 자동 전환
     world.reset()
     try:
         vp = vp_utils.get_active_viewport()
