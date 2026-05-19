@@ -52,7 +52,17 @@ def main():
     # [GPU 강제 인식 스위치] — 팀 가이드 §3 필수 적용
     acquire_physx_interface().overwrite_gpu_setting(1)
 
-    world.scene.add_default_ground_plane()
+    # 💡 무한 평면(Plane) 콜라이더는 PhysX GPU 파티클과의 충돌 연산을 지원하지 않습니다.
+    # 따라서 실제 3D 부피를 가진 얇고 넓은 정적 큐브(FixedCuboid)로 바닥을 대체하여 충돌을 성공시킵니다.
+    from omni.isaac.core.objects import FixedCuboid
+    floor = FixedCuboid(
+        prim_path="/World/FloorCube",
+        name="floor_cube",
+        position=[0.0, 0.0, -0.05], # 윗면이 정확히 Z=0.0에 오도록 설정
+        scale=[5.0, 5.0, 0.1],      # 가로세로 5m, 두께 10cm
+        color=[0.12, 0.22, 0.32]    # 수중 느낌의 진푸른 무광 색상
+    )
+    world.scene.add(floor)
     stage = world.stage
 
     # 2. 조명 배치

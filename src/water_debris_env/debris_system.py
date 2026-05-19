@@ -39,15 +39,20 @@ class DebrisSystem:
         print("=" * 60)
 
         # 1. 물리 씬 설정 (GPU 가속 필수 세팅)
-        # 만약 월드에 이미 물리 씬이 선언되어 있지 않다면 생성 및 설정 진행
+        # 만약 월드에 이미 물리 씬이 선언되어 있다면 가져오고, 없으면 새로 생성하여 강제 설정 진행
         physics_scene_path = "/physicsScene"
         if not stage.GetPrimAtPath(physics_scene_path).IsValid():
             scene_prim = UsdPhysics.Scene.Define(stage, physics_scene_path)
-            physx_scene = PhysxSchema.PhysxSceneAPI.Apply(scene_prim.GetPrim())
-            physx_scene.CreateEnableGPUDynamicsAttr(True)
-            physx_scene.CreateBroadphaseTypeAttr("MBP")
-            physx_scene.CreateSolverTypeAttr("TGS")
-            print("  ✓ physicsScene 생성 및 GPU Dynamics 가속 설정 완료")
+            print("  ✓ physicsScene 신규 생성 완료")
+        else:
+            scene_prim = UsdPhysics.Scene.Get(stage, physics_scene_path)
+            print("  ✓ 기존 physicsScene 감지")
+            
+        physx_scene = PhysxSchema.PhysxSceneAPI.Apply(scene_prim.GetPrim())
+        physx_scene.CreateEnableGPUDynamicsAttr(True)
+        physx_scene.CreateBroadphaseTypeAttr("MBP")
+        physx_scene.CreateSolverTypeAttr("TGS")
+        print("  ✓ physicsScene에 GPU Dynamics 가속 및 MBP Broadphase 설정 적용 완료")
 
         # 2. 통합 파티클 시스템 정의
         sys_path = "/World/Debris/UnifiedSystem"
