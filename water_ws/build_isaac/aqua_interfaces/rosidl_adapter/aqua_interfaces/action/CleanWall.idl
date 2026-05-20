@@ -1,0 +1,24 @@
+// generated from rosidl_adapter/resource/action.idl.em
+// with input from aqua_interfaces/action/CleanWall.action
+// generated code does not contain a copyright notice
+
+
+module aqua_interfaces {
+  module action {
+    @verbatim (language="comment", text=
+      "Goal (trigger — no fields)")
+    struct CleanWall_Goal {
+      uint8 structure_needs_at_least_one_member;
+    };
+    @verbatim (language="comment", text=
+      "Result")
+    struct CleanWall_Result {
+      boolean success;
+    };
+    @verbatim (language="comment", text=
+      "Feedback")
+    struct CleanWall_Feedback {
+      float progress;
+    };
+  };
+};
