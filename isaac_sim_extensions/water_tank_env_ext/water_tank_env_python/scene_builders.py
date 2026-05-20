@@ -2,12 +2,25 @@
 
 Used by UIBuilder._setup_scene. Assumes Isaac Sim is already running (so
 ``pxr`` is importable).
+
+수조 재질 — FRP (유리섬유강화플라스틱)
+  내면 색상: 밝은 청록색  (0.55, 0.88, 0.82)
+  외면 색상: 파란색       (0.14, 0.35, 0.70)
+  재질 특성: 불투명에 가깝고 (opacity ≈ 0.80–0.92), 겔코트 마감으로
+             유리보다 거칠고 금속보다 매끄러운 중간 roughness (0.25–0.35)
 """
 import math
 
 from pxr import Gf, Sdf, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 from . import params
+
+# ── FRP 수조 색상 상수 ─────────────────────────────────────────────────────────
+_FRP_INTERIOR = (0.55, 0.88, 0.82)   # 밝은 청록색 (수조 내면·바닥)
+_FRP_EXTERIOR = (0.14, 0.35, 0.70)   # 파란색      (수조 외면)
+# FRP roughness: 겔코트 마감 ≈ 0.25–0.35 (유리 0.05~0.15보다 거침)
+_FRP_ROUGHNESS_INT = 0.22
+_FRP_ROUGHNESS_EXT = 0.32
 
 
 def enable_gpu_dynamics(stage) -> None:
@@ -175,27 +188,80 @@ def _build_tube_mesh(stage, path, center, height, inner_radius, outer_radius,
     return mesh
 
 
+def _build_lateral_cylinder(stage, path, center, height, radius, color,
+                             opacity=1.0, n_segments=WALL_SEGMENTS,
+                             roughness=0.3):
+    """원기둥 측면 메시 (캡 없음, DoubleSided).
+
+    내면 오버레이처럼 기존 튜브 위에 얇게 씌우는 순수 시각용 메시.
+    충돌 처리는 _build_tube_mesh 가 담당하므로 collision 속성을 붙이지 않는다.
+    """
+    mesh = UsdGeom.Mesh.Define(stage, path)
+
+    half_h = height / 2.0
+    pts = []
+    for z_off in (-half_h, half_h):
+        for i in range(n_segments):
+            theta = 2.0 * math.pi * i / n_segments
+            pts.append(Gf.Vec3f(radius * math.cos(theta),
+                                radius * math.sin(theta), z_off))
+
+    fvc, fvi = [], []
+    for i in range(n_segments):
+        j = (i + 1) % n_segments
+        fvc.append(4)
+        fvi.extend([i, j, n_segments + j, n_segments + i])
+
+    mesh.CreatePointsAttr().Set(pts)
+    mesh.CreateFaceVertexCountsAttr().Set(fvc)
+    mesh.CreateFaceVertexIndicesAttr().Set(fvi)
+    mesh.CreateDoubleSidedAttr().Set(True)
+
+    xform = UsdGeom.Xformable(mesh)
+    xform.ClearXformOpOrder()
+    xform.AddTranslateOp().Set(Gf.Vec3d(*center))
+
+    _bind_preview_material(stage, mesh.GetPrim(), path + "_Mat",
+                           color, opacity, roughness)
+    return mesh
+
+
 def build_tank(stage, root="/World/Tank"):
     if stage.GetPrimAtPath(root).IsValid():
         return
     UsdGeom.Xform.Define(stage, root)
-    r = params.TANK_RADIUS
-    h = params.TANK_INNER_Z
-    t = params.WALL_THICKNESS
+    r  = params.TANK_RADIUS
+    h  = params.TANK_INNER_Z
+    t  = params.WALL_THICKNESS
     z0 = params.TANK_FLOOR_Z
 
-    glass = (0.85, 0.92, 0.95)
-    glass_opacity = 0.15
-
+    # ── 바닥: FRP 내면 색상 (밝은 청록색) ──────────────────────────────────────
+    # FRP 겔코트 마감 → opacity 0.92 (거의 불투명), roughness 낮게 (광택)
     _build_solid_cylinder_mesh(stage, f"{root}/Floor",
                                center=(0, 0, z0 - t / 2),
                                height=t, radius=r + t,
-                               color=glass, opacity=glass_opacity,
-                               collision=True)
+                               color=_FRP_INTERIOR, opacity=0.92,
+                               collision=True,
+                               roughness=_FRP_ROUGHNESS_INT)
+
+    # ── 벽 본체: 충돌 포함, 외면 파란색 FRP ────────────────────────────────────
+    # DoubleSided=True 이므로 양쪽에서 파란색이 보임; 내면 오버레이로 덮어씀
+    # opacity=0.78: 시뮬레이션에서 로봇을 볼 수 있도록 약간 투시
     _build_tube_mesh(stage, f"{root}/Wall",
                      center=(0, 0, z0),
                      height=h, inner_radius=r, outer_radius=r + t,
-                     color=glass, opacity=glass_opacity)
+                     color=_FRP_EXTERIOR, opacity=0.78,
+                     roughness=_FRP_ROUGHNESS_EXT)
+
+    # ── 벽 내면 오버레이: 밝은 청록색 (수조 안에서 보이는 색) ──────────────────
+    # 벽 내반경 r 바로 안쪽(r-0.001)에 캡 없는 측면 메시를 씌워
+    # 내부 시점에서는 청록색, 외부 시점에서는 외면의 파란색이 우세하게 보임
+    _build_lateral_cylinder(stage, f"{root}/WallInterior",
+                            center=(0.0, 0.0, z0 + h / 2.0),
+                            height=h,
+                            radius=r - 0.001,
+                            color=_FRP_INTERIOR, opacity=0.88,
+                            roughness=_FRP_ROUGHNESS_INT)
 
 
 def build_water(stage, root="/World/Water"):
