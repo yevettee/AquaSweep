@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.3] - 2026-05-20
+
+### 변경사항
+- `scripts/add_aquasweep_attrs.py` 복원 (integration_yun 브랜치 누락분)
+  - 파일은 v0.3.1 CHANGELOG에 도입 명시돼있으나 `1차 통합본` 머지 시점에 working tree에서 누락
+  - `origin/yun`에서 그대로 가져옴 (수정 없음)
+  - 로봇 USD에 `aquasweep:*` custom attribute + PhysX mass를 박는 CLI 유틸 — `physics_applier.discover_bodies()`의 reader 측과 짝을 이룸
+
+### 통합 작업 컨텍스트 (integration_yun)
+- yun 브랜치 분석 결과 cherry-pick 후보 4개 중 1개만 채택:
+  - ✅ `add_aquasweep_attrs.py` — physics_applier 시스템의 writer 측 도구로 명백히 보완적
+  - ❌ `buoyancy.py` — 현 `physics_applier._compute_buoyancy()`가 per-body half_height 지원하므로 중복
+  - ❌ `fluid_forces.py` — `aquasweep:*` 속성 기반 시스템과 경쟁 구현 (글로벌 상수 vs per-body USD attr)
+  - ❌ `WaterTankScenario` 리팩터링 — OceanSim camera 제거가 핵심이었으나 OceanSim 유지 결정으로 스킵
+
+### 현재 구현 단계
+- integration_yun = main(`수조 색깔 및 재질 변경` + `1차 통합본`) + add_aquasweep_attrs 도구
+- OceanSim 통합 / debris_env_ext / perception_node 모두 유지
+- 수조 8 m 직경, water level 1.2 m는 main 시점에 이미 동일
+
+### 알려진 이슈 / 미완
+- v0.4.2 이전 알려진 이슈 그대로 유지
+- integration_yun 브랜치 upstream 미설정 — push 시 `git push -u origin integration_yun` 필요
+
 ## [0.4.2] - 2026-05-19
 
 ### 변경사항
