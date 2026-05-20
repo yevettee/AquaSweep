@@ -233,7 +233,7 @@ class UIBuilder:
         world = World.instance()
         reset_center_trail_debug()
         prepare_dingo_usd_on_stage(ROBOT_PRIM_PATH)
-        tag_aquasweep_attrs(ROBOT_PRIM_PATH)   # water_tank_env physics_applier 연동
+        tag_aquasweep_attrs(ROBOT_PRIM_PATH)
         robot = world.scene.get_object(ROBOT_SCENE_NAME)
         self._scenario.initialize(robot, PHYSICS_DT)
 
@@ -281,9 +281,10 @@ class UIBuilder:
             world = World.instance()
             robot = world.scene.get_object(ROBOT_SCENE_NAME)
             if robot is not None:
-                pos, _ = robot.get_world_pose()
+                pos, orient = robot.get_world_pose()
                 newly  = self._suction.step(
-                    get_current_stage(), np.asarray(pos, dtype=float), step
+                    get_current_stage(), np.asarray(pos, dtype=float),
+                    np.asarray(orient, dtype=float), step
                 )
                 if newly > 0:
                     self._suction_label.text = f"{self._suction.collected_count} 개"
