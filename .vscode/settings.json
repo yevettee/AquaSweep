@@ -1,8 +1,0 @@
-{
-    "project_name": "water_debris_env",
-    "python_interpreter": "/home/rokey/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/python.sh",
-    "python.analysis.extraPaths": [
-        "/home/rokey/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/exts",
-        "/home/rokey/dev_ws/isaac_sim/isaacsim/_build/linux-x86_64/release/kit/exts"
-    ]
-}
