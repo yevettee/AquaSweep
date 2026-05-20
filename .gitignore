@@ -1,0 +1,46 @@
+# Claude / IDE / Editor
+.claude/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+develop-eggs/
+.installed.cfg
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+env/
+
+# ROS 2 / colcon
+install/
+log/
+.colcon/
+COLCON_IGNORE
+
+# OS
+Thumbs.db
+
+# Logs / temp
+*.log
+*.tmp
