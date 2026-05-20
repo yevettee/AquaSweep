@@ -24,7 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'dashboard_node = aqua_dashboard.dashboard_node:main'
+            'dashboard_node = aqua_dashboard.dashboard_node:main',
+            'mock_telemetry_node = aqua_dashboard.mock_telemetry_node:main',
         ],
     },
 )
