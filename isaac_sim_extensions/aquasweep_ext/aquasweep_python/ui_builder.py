@@ -15,32 +15,26 @@ from isaacsim.robot.wheeled_robots.robots import WheeledRobot
 from omni.usd import StageEventType
 from pxr import UsdGeom
 
-# ── 각 서브시스템 임포트 (패키지 __init__ 우회, 서브모듈 직접 임포트) ────────
-import importlib
+# ── 각 서브시스템 임포트 ─────────────────────────────────────────────────────
+from water_tank_env_python import scene_builders
+from water_tank_env_python.scenario import WaterTankScenario
 
-_scene_builders   = importlib.import_module("water_tank_env_python.scene_builders")
-scene_builders    = _scene_builders
-WaterTankScenario = importlib.import_module("water_tank_env_python.scenario").WaterTankScenario
+from debris_python.scenario import DebrisScenario
 
-DebrisScenario    = importlib.import_module("debris_python.scenario").DebrisScenario
-
-_robot_phys = importlib.import_module("underwater_robot_python.dingo_physics_sanitize")
-prepare_dingo_usd_on_stage = _robot_phys.prepare_dingo_usd_on_stage
-tag_aquasweep_attrs        = _robot_phys.tag_aquasweep_attrs
-
-UnderwaterTankJetbotFsm = importlib.import_module("underwater_robot_python.scenario").UnderwaterTankJetbotFsm
-SuctionSystem           = importlib.import_module("underwater_robot_python.suction_system").SuctionSystem
-
-_trail = importlib.import_module("underwater_robot_python.trail_debug")
-reset_center_trail_debug = _trail.reset_center_trail_debug
-tick_center_trail_debug  = _trail.tick_center_trail_debug
-
-_gv = importlib.import_module("underwater_robot_python.global_variables")
-DEBUG_CENTER_TRAIL_ENABLED = _gv.DEBUG_CENTER_TRAIL_ENABLED
-DINGO_USD_FILENAME         = _gv.DINGO_USD_FILENAME
-ROBOT_PRIM_PATH            = _gv.ROBOT_PRIM_PATH
-ROBOT_SCENE_NAME           = _gv.ROBOT_SCENE_NAME
-ROBOT_SPAWN_Z_M            = _gv.ROBOT_SPAWN_Z_M
+from underwater_robot_python.dingo_physics_sanitize import (
+    prepare_dingo_usd_on_stage,
+    tag_aquasweep_attrs,
+)
+from underwater_robot_python.scenario import UnderwaterTankJetbotFsm
+from underwater_robot_python.suction_system import SuctionSystem
+from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_center_trail_debug
+from underwater_robot_python.global_variables import (
+    DEBUG_CENTER_TRAIL_ENABLED,
+    DINGO_USD_FILENAME,
+    ROBOT_PRIM_PATH,
+    ROBOT_SCENE_NAME,
+    ROBOT_SPAWN_Z_M,
+)
 
 PHYSICS_DT = 1.0 / 60.0
 _ROBOT_USD_PATH = (
