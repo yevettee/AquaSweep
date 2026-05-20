@@ -143,8 +143,11 @@ class DebrisSystem:
 
     def _add_particles(self, stage) -> None:
         rng   = np.random.default_rng()
-        pos_x = rng.uniform(-self.tank_range, self.tank_range, self.count)
-        pos_y = rng.uniform(-self.tank_range, self.tank_range, self.count)
+        # 원형 수조 내부 균등 분포: sqrt 트릭으로 반경 편향 제거
+        r     = np.sqrt(rng.uniform(0.0, self.tank_range ** 2, self.count))
+        theta = rng.uniform(0.0, 2.0 * np.pi, self.count)
+        pos_x = r * np.cos(theta)
+        pos_y = r * np.sin(theta)
         pos_z = np.full(self.count, self.z_floor + self.radius * 2.5)
 
         positions  = Vt.Vec3fArray([
