@@ -38,6 +38,7 @@ from .global_variables import (
 )
 from .dingo_physics_sanitize import prepare_dingo_usd_on_stage, tag_aquasweep_attrs
 from .scenario import UnderwaterTankJetbotFsm
+from .suction_system import SuctionSystem
 from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
 
 PHYSICS_DT = 1.0 / 60.0
@@ -156,12 +157,25 @@ class UIBuilder:
                 self._scenario_state_btn.enabled = False
                 self.wrapped_ui_elements.append(self._scenario_state_btn)
 
+        suction_frame = CollapsableFrame("Suction Status", collapsed=False)
+
+        with suction_frame:
+            with ui.VStack(style=get_style(), spacing=4, height=0):
+                with ui.HStack(height=22):
+                    ui.Label("반경 (m)",  width=90)
+                    ui.Label(f"{SuctionSystem().suction_radius:.2f} / "
+                             f"수거 {SuctionSystem().collection_radius:.2f}")
+                with ui.HStack(height=22):
+                    ui.Label("수거 완료", width=90)
+                    self._suction_label = ui.Label("0 개")
+
     ######################################################################################
     # Functions Below This Point Support The Provided Example And Can Be Deleted/Replaced
     ######################################################################################
 
     def _on_init(self):
         self._scenario = UnderwaterTankJetbotFsm()
+        self._suction  = SuctionSystem()
 
     def _add_light_to_stage(self):
         """
@@ -230,6 +244,9 @@ class UIBuilder:
 
     def _reset_scenario(self):
         reset_center_trail_debug()
+        self._suction.reset()
+        if hasattr(self, "_suction_label"):
+            self._suction_label.text = "0 개"
         world = World.instance()
         robot = world.scene.get_object(ROBOT_SCENE_NAME)
         self._scenario.sync_after_world_reset(robot, PHYSICS_DT)
@@ -256,15 +273,22 @@ class UIBuilder:
         self._scenario_state_btn.enabled = True
 
     def _update_scenario(self, step: float):
-        """This function is attached to the Run Scenario StateButton.
-        This function was passed in as the physics_callback_fn argument.
-        This means that when the a_text "RUN" is pressed, a subscription is made to call this function on every physics step.
-        When the b_text "STOP" is pressed, the physics callback is removed.
-
-        Args:
-            step (float): The dt of the current physics step
-        """
+        """매 physics step마다 시나리오(나선 이동)와 흡입 시스템을 함께 실행한다."""
         self._scenario.on_physics_step(step)
+
+        # 흡입 시스템: 로봇 위치 기준으로 이물질 파티클에 인력 적용
+        try:
+            world = World.instance()
+            robot = world.scene.get_object(ROBOT_SCENE_NAME)
+            if robot is not None:
+                pos, _ = robot.get_world_pose()
+                newly  = self._suction.step(
+                    get_current_stage(), np.asarray(pos, dtype=float), step
+                )
+                if newly > 0:
+                    self._suction_label.text = f"{self._suction.collected_count} 개"
+        except Exception:
+            pass
 
     def _on_run_scenario_a_text(self):
         """
