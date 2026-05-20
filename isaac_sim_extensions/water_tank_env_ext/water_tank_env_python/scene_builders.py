@@ -24,22 +24,25 @@ _FRP_ROUGHNESS_EXT = 0.32
 
 
 def enable_gpu_dynamics(stage) -> None:
-    """OceanSim particle effects require GPU dynamics.
+    """GPU particle / OceanSim effects require GPU dynamics.
 
-    Tries the World physics context API first (works at runtime).
-    Falls back to USD attribute on every UsdPhysics.Scene prim.
+    World API와 USD 속성을 모두 설정한다.
+
+    중요: physx plugin은 UsdPhysics.Scene prim의 USD 속성을 직접 읽는다.
+    World API 호출만으로는 USD prim이 갱신되지 않으므로 반드시 두 경로를 모두 실행해야 한다.
+    또한 CreateXxxAttr(value)는 속성이 이미 존재하면 value를 무시하므로
+    .Set(True)를 반드시 별도 호출해야 기존 False 값을 덮어쓸 수 있다.
     """
-    # World API: 런타임에도 즉시 반영됨
+    # 1) World API — 런타임 physics context 갱신 (단독으로는 USD 속성 미보장)
     try:
         from isaacsim.core.api.world import World
         world = World.instance()
         if world is not None:
             world.get_physics_context().enable_gpu_dynamics(True)
-            return
     except Exception:
         pass
 
-    # Fallback: USD 속성 직접 설정 (다음 simulation 재시작 시 반영)
+    # 2) USD 속성 직접 설정 — physx plugin이 prim 속성을 읽으므로 필수
     try:
         from pxr import PhysxSchema
     except ImportError:
@@ -49,13 +52,17 @@ def enable_gpu_dynamics(stage) -> None:
     for prim in stage.Traverse():
         if prim.IsA(UsdPhysics.Scene):
             api = PhysxSchema.PhysxSceneAPI.Apply(prim)
-            api.CreateEnableGPUDynamicsAttr(True)
+            api.CreateEnableGPUDynamicsAttr().Set(True)   # .Set() 필수
+            api.CreateBroadphaseTypeAttr().Set("MBP")
+            api.CreateSolverTypeAttr().Set("TGS")
             found = True
 
     if not found:
-        scene_prim = UsdPhysics.Scene.Define(stage, Sdf.Path("/physicsScene"))
+        scene_prim = UsdPhysics.Scene.Define(stage, Sdf.Path("/World/PhysicsScene"))
         api = PhysxSchema.PhysxSceneAPI.Apply(scene_prim.GetPrim())
-        api.CreateEnableGPUDynamicsAttr(True)
+        api.CreateEnableGPUDynamicsAttr().Set(True)
+        api.CreateBroadphaseTypeAttr().Set("MBP")
+        api.CreateSolverTypeAttr().Set("TGS")
 
 WALL_SEGMENTS = 64
 
