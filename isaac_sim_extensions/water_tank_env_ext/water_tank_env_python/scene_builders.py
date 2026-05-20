@@ -283,13 +283,64 @@ def build_water(stage, root="/World/Water"):
     _build_solid_cylinder_mesh(stage, f"{root}/Body",
                                center=(0, 0, body_center_z),
                                height=body_height, radius=r,
-                               color=(0.10, 0.50, 0.40),
-                               opacity=0.35,
+                               color=(0.06, 0.28, 0.38),
+                               opacity=0.72,
                                collision=False,
-                               roughness=0.16,
-                               clearcoat=0.3,
-                               clearcoat_roughness=0.1,
+                               roughness=0.55,
+                               clearcoat=0.05,
+                               clearcoat_roughness=0.4,
                                ior=1.33)
+
+
+def build_water_surface(stage, root="/World/Water"):
+    """와류 애니메이션용 수면 디스크 메시를 생성한다.
+
+    ring × segment 분할된 평탄한 원형 메시를 수면 높이에 배치한다.
+    꼭짓점 Z는 WaterSurfaceAnimator가 매 step 갱신한다.
+    """
+    surface_path = f"{root}/Surface"
+    if stage.GetPrimAtPath(surface_path).IsValid():
+        return
+
+    R = params.TANK_RADIUS - 0.01
+    z = params.water_surface_z()
+
+    N_RINGS = 8
+    N_SEGS = 36
+
+    points = [Gf.Vec3f(0.0, 0.0, z)]
+    ring_radii = [R * (i + 1) / N_RINGS for i in range(N_RINGS)]
+    for r in ring_radii:
+        for j in range(N_SEGS):
+            theta = 2.0 * math.pi * j / N_SEGS
+            points.append(Gf.Vec3f(r * math.cos(theta), r * math.sin(theta), z))
+
+    fvc, fvi = [], []
+    for j in range(N_SEGS):
+        k = (j + 1) % N_SEGS
+        fvc.append(3)
+        fvi.extend([0, 1 + j, 1 + k])
+    for ring in range(N_RINGS - 1):
+        base_c = 1 + ring * N_SEGS
+        base_n = 1 + (ring + 1) * N_SEGS
+        for j in range(N_SEGS):
+            k = (j + 1) % N_SEGS
+            fvc.append(4)
+            fvi.extend([base_c + j, base_c + k, base_n + k, base_n + j])
+
+    mesh = UsdGeom.Mesh.Define(stage, surface_path)
+    mesh.CreatePointsAttr().Set(points)
+    mesh.CreateFaceVertexCountsAttr().Set(fvc)
+    mesh.CreateFaceVertexIndicesAttr().Set(fvi)
+    mesh.CreateDoubleSidedAttr().Set(True)
+
+    _bind_preview_material(stage, mesh.GetPrim(), surface_path + "_Mat",
+                           color=(0.07, 0.20, 0.30),
+                           opacity=0.78,
+                           roughness=0.70,
+                           clearcoat=0.0,
+                           clearcoat_roughness=0.0,
+                           ior=1.33)
 
 
 def add_lighting(stage, root="/World/Lighting"):
@@ -300,7 +351,6 @@ def add_lighting(stage, root="/World/Lighting"):
     UsdGeom.Xform.Define(stage, root)
 
     cool_white = Gf.Vec3f(0.91, 0.96, 1.0)   # #E8F4FF — fluorescent tone
-    teal = Gf.Vec3f(0.00, 0.81, 0.67)        # #00CFAA — underwater accent
 
     # 1) Cool-white key light. DistantLight gives even fill across the tank.
     sun = UsdLux.DistantLight.Define(stage, f"{root}/Sun")
@@ -310,18 +360,11 @@ def add_lighting(stage, root="/World/Lighting"):
 
     # 2) Ceiling fluorescent fixture — a wide rect light placed above the tank.
     ceiling = UsdLux.RectLight.Define(stage, f"{root}/CeilingLight")
-    ceiling.CreateIntensityAttr(5000.0)
+    ceiling.CreateIntensityAttr(2500.0)
     ceiling.CreateColorAttr(cool_white)
     ceiling.CreateWidthAttr(2.5)
     ceiling.CreateHeightAttr(2.5)
     UsdGeom.Xformable(ceiling).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 3.0))
 
-    # 3) Teal underwater accent — submerged sphere light at tank center to
-    #    enhance the volumetric look without blowing out exposure.
-    accent = UsdLux.SphereLight.Define(stage, f"{root}/UnderwaterAccent")
-    accent.CreateIntensityAttr(300.0)
-    accent.CreateColorAttr(teal)
-    accent.CreateRadiusAttr(0.1)
-    UsdGeom.Xformable(accent).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.3))
 
 
