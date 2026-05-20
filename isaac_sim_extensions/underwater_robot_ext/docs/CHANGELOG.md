@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.4] - 2026-05-20
+### Changed
+- `data/underwater_robot_camera_v1.usd`에 `aquasweep:*` custom attribute 적용 (v0.4.1 튜닝값 재현)
+  - `aquasweep:volume = 0.036` m³ (AABB 자동값 0.122는 카메라 프레임 포함으로 과대평가 → 명시 오버라이드)
+  - `aquasweep:half_height = 0.1432` m
+  - `aquasweep:cd_linear = 200` N·s/m
+  - 결과: ρV/m = **0.900** → SINK (알짜 -39 N, ~0.98 m/s² 감속 → 천천히 가라앉음)
+- 적용 도구: `scripts/add_aquasweep_attrs.py` (water_tank_env_ext v0.4.3에서 복원)
+- 백업: `data/underwater_robot_camera_v1.usd.bak` (스크립트 자동 생성, gitignore 누락 → 수동 처리 필요)
+
+### 알려진 이슈 / 미완
+- integration_yun 브랜치 .gitignore 부재 → `*.bak`, `__pycache__/*.pyc` 등이 untracked로 표시. 별도 PR로 .gitignore 추가 권장
+- 실기 검증 미완 — Isaac Sim에서 LOAD → RUN으로 천천히 가라앉는지 확인 필요
+
 ## [1.0.3] - 2026-05-19
 ### Changed
 - 기본 로봇을 JetBot → extension `data/dingo_transformed_tracked.usd` (Clearpath Dingo + VisualWheels) 로 교체, 균일 스케일 제거
