@@ -13,8 +13,6 @@ Drag·AddedMass·GroundEffect는 <repo>/water_tank_env/water_tank_env/ 에서 im
 부력은 Buoyancy 클래스 대신 _compute_buoyancy()로 직접 계산한다
 (Buoyancy 클래스가 half_height를 0.15로 하드코딩하므로 per-body 값 적용 불가).
 """
-import os
-import sys
 from typing import List, Tuple
 
 import numpy as np
@@ -22,26 +20,42 @@ from pxr import Usd, UsdPhysics
 
 from . import params
 
-# ── Make the standalone water_tank_env package importable ───────────────────
-# _HERE is .../src/isaac_sim_extensions/water_tank_env_ext/water_tank_env_python/
-# Old package is at .../src/water_tank_env/water_tank_env/ — to `import
-# water_tank_env.buoyancy` we need `.../src/water_tank_env/` on sys.path,
-# which is THREE levels up from _HERE.
-_HERE = os.path.dirname(os.path.realpath(__file__))
-_OLD_PKG_PARENT = os.path.normpath(
-    os.path.join(_HERE, "..", "..", "..", "water_tank_env")
-)
-if not os.path.isdir(_OLD_PKG_PARENT):
-    raise ImportError(
-        f"water_tank_env package directory not found at: {_OLD_PKG_PARENT}. "
-        "physics_applier expects the old standalone package to live at "
-        "<repo>/water_tank_env/water_tank_env/."
-    )
-if _OLD_PKG_PARENT not in sys.path:
-    sys.path.insert(0, _OLD_PKG_PARENT)
+# ── 인라인 물리 클래스 (기존 water_tank_env 패키지에서 이전) ─────────────────
 
-from water_tank_env.drag import AddedMass, Drag      # noqa: E402
-from water_tank_env.ground_effect import GroundEffect  # noqa: E402
+_WATER_DENSITY = 1000.0  # kg/m³
+
+
+class Drag:
+    def __init__(self, linear_drag_coeff: float = 10.0, angular_drag_coeff: float = 5.0):
+        self.Cd_linear = linear_drag_coeff
+        self.Cd_angular = angular_drag_coeff
+
+    def compute(self, linear_velocity: np.ndarray, angular_velocity: np.ndarray):
+        return -self.Cd_linear * linear_velocity, -self.Cd_angular * angular_velocity
+
+
+class AddedMass:
+    def __init__(self, robot_volume: float, added_mass_coeff: float = 0.5):
+        self._added_mass = added_mass_coeff * _WATER_DENSITY * robot_volume
+
+    def compute(self, linear_acceleration: np.ndarray) -> np.ndarray:
+        return -self._added_mass * linear_acceleration
+
+
+class GroundEffect:
+    def __init__(self, influence_height: float = 0.10, max_extra_factor: float = 0.5):
+        self.influence_height = influence_height
+        self.max_extra_factor = max_extra_factor
+
+    def compute(self, robot_pos_z: float, floor_z: float,
+                linear_velocity: np.ndarray, base_drag_coeff: float) -> np.ndarray:
+        height = robot_pos_z - floor_z
+        if height >= self.influence_height:
+            return np.zeros(3)
+        closeness = 1.0 - (height / self.influence_height)
+        extra_factor = self.max_extra_factor * closeness
+        hv = np.array([linear_velocity[0], linear_velocity[1], 0.0])
+        return -extra_factor * base_drag_coeff * hv
 
 VOLUME_ATTR = "aquasweep:volume"
 HALF_HEIGHT_ATTR = "aquasweep:half_height"

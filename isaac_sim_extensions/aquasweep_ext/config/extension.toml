@@ -12,6 +12,7 @@ writeTarget.kit = true
 "isaacsim.robot.wheeled_robots" = {}
 "omni.kit.uiapp" = {}
 "omni.physx" = {}
+"isaacsim.ros2.bridge" = {}
 # Sibling extensions — aquasweep imports their Python modules at startup.
 "water_tank_env_ext" = {}
 "debris_env_ext" = {}

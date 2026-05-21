@@ -4,27 +4,22 @@ package_name = 'aqua_controller'
 
 setup(
     name=package_name,
-    version='0.0.0',
+    version='0.1.0',
     packages=find_packages(exclude=['test']),
     data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='woody',
-    maintainer_email='woody.myung@gmail.com',
-    description='Under-robot motion control, RobotStatus publishing, CleanFloor/CleanWall action servers',
+    maintainer='AquaSweep Team',
+    maintainer_email='sujinchoi17@gmail.com',
+    description='AquaSweep robot motion controllers',
     license='Apache-2.0',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'controller_node = aqua_controller.controller_node:main'
+            'aqua_controller = controller_node:main',
         ],
     },
 )

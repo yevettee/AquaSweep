@@ -1,5 +1,7 @@
 """AquaSweep 통합 UI — 수조·로봇·이물질을 단일 LOAD/RUN으로 제어한다."""
 
+import sys
+import threading
 from pathlib import Path
 
 import carb
@@ -14,6 +16,12 @@ from isaacsim.gui.components.ui_utils import get_style
 from isaacsim.robot.wheeled_robots.robots import WheeledRobot
 from omni.usd import StageEventType
 from pxr import UsdGeom
+
+_common = Path(__file__).resolve().parents[2] / "common"
+if str(_common) not in sys.path:
+    sys.path.insert(0, str(_common))
+
+from ros_isaac_env import AQUA_INTERFACES_INSTALL_HINT, configure_isaac_ros_env  # noqa: E402
 
 # ── 각 서브시스템 임포트 ─────────────────────────────────────────────────────
 from water_tank_env_python import scene_builders
@@ -90,12 +98,21 @@ ROBOT_SCENE_NAME = PRIMARY_ROBOT_SCENE_NAME
 ROBOT_PRIM_PATH  = PRIMARY_ROBOT_PRIM_PATH
 
 
+CMD_VEL_ROBOT_NAME = "under_robot_1"  # 컨트롤러 노드 기본값과 일치
+
+
 class UIBuilder:
     def __init__(self):
         self.frames = []
         self.wrapped_ui_elements = []
         self._timeline = omni.timeline.get_timeline_interface()
+
+        self._ros_executor = None
+        self._ros_thread = None
+        self._cmd_receiver = None
+
         self._on_init()
+        self._start_ros()
 
     # ── extension 콜백 ────────────────────────────────────────────────────────
 
@@ -124,6 +141,7 @@ class UIBuilder:
             ui_elem.cleanup()
         self._water_scenario.teardown_scenario()
         reset_center_trail_debug()
+        self._stop_ros()
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
@@ -193,6 +211,59 @@ class UIBuilder:
         self._robot_scenario = UnderwaterTankJetbotFsm()
         self._debris_scenario = DebrisScenario()
         self._suction = SuctionSystem()
+        if self._cmd_receiver is not None:
+            self._robot_scenario.set_cmd_vel_receiver(self._cmd_receiver)
+
+    def _start_ros(self) -> None:
+        import traceback
+
+        if not configure_isaac_ros_env():
+            carb.log_warn(
+                f"[aquasweep] ROS env setup failed. {AQUA_INTERFACES_INSTALL_HINT}"
+            )
+            return
+
+        try:
+            import rclpy
+            from rclpy.executors import SingleThreadedExecutor
+            from underwater_robot_python.cmd_vel_receiver import (
+                create_cmd_vel_receiver,
+                get_last_ros_import_error,
+            )
+
+            if not rclpy.ok():
+                rclpy.init()
+
+            self._cmd_receiver = create_cmd_vel_receiver(CMD_VEL_ROBOT_NAME)
+            if self._cmd_receiver is None:
+                carb.log_warn(
+                    f"[aquasweep] cmd_vel receiver unavailable — "
+                    f"{get_last_ros_import_error() or 'unknown import error'}"
+                )
+                return
+
+            self._ros_executor = SingleThreadedExecutor()
+            self._ros_executor.add_node(self._cmd_receiver)
+            self._ros_thread = threading.Thread(
+                target=self._ros_executor.spin,
+                daemon=True,
+                name="aquasweep_ros_spin",
+            )
+            self._ros_thread.start()
+            self._robot_scenario.set_cmd_vel_receiver(self._cmd_receiver)
+            carb.log_warn(
+                f"[aquasweep] ROS2 cmd_vel subscriber STARTED — /{CMD_VEL_ROBOT_NAME}/cmd_vel"
+            )
+
+        except Exception as exc:
+            carb.log_warn(f"[aquasweep] ROS2 init failed: {exc}")
+            carb.log_warn(traceback.format_exc())
+
+    def _stop_ros(self) -> None:
+        if self._ros_executor is not None:
+            self._ros_executor.shutdown(timeout_sec=1.0)
+            self._ros_executor = None
+        self._cmd_receiver = None
 
     def _setup_scene(self):
         stage = get_current_stage()
@@ -229,6 +300,8 @@ class UIBuilder:
 
         robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
         self._robot_scenario.initialize(robot, PHYSICS_DT)
+        if self._cmd_receiver is not None:
+            self._robot_scenario.set_cmd_vel_receiver(self._cmd_receiver)
 
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
