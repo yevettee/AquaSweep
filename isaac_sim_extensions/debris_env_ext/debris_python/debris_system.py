@@ -17,12 +17,17 @@ class DebrisSystem:
 
     def __init__(self, count: int = 10, radius: float = 0.015,
                  color_hex: str = "#5C3D1E", tank_range: float = 3.8,
-                 z_floor: float = 0.0):
+                 z_floor: float = 0.0,
+                 pool_centers: list[tuple[float, float]] | None = None):
+        """``count`` is per-pool. When ``pool_centers`` is None, a single pool
+        centred at the origin is used (backwards-compatible single-tank mode).
+        """
         self.count      = count
         self.radius     = radius
         self.color_hex  = color_hex
         self.tank_range = tank_range
         self.z_floor    = z_floor
+        self.pool_centers = pool_centers if pool_centers else [(0.0, 0.0)]
         self._spawned   = False
 
     def spawn(self, stage) -> bool:
@@ -51,7 +56,10 @@ class DebrisSystem:
             self._add_particles(stage)
             self._apply_material(stage)
             self._spawned = True
-            carb.log_info(f"[debris] {self.count}개 파티클 스폰 완료 (scene={scene_path})")
+            carb.log_info(
+                f"[debris] {self.count}개 × {len(self.pool_centers)}풀 = "
+                f"{self.count * len(self.pool_centers)}개 파티클 스폰 완료 (scene={scene_path})"
+            )
 
             # stop 했으면 play 재시작 (GPU dynamics가 이제 활성화된 상태로 시작)
             if was_playing:
@@ -82,8 +90,14 @@ class DebrisSystem:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    # Preferred simulationOwner scene paths, in priority order.
+    # Referenced assets (warehouse, etc.) may bring their own UsdPhysics.Scene
+    # prims with GPU dynamics OFF — we must enable GPU on every scene and pick
+    # a well-known one as the particle system's sim_owner.
+    _PREFERRED_SCENE_PATHS = ("/physicsScene", "/World/PhysicsScene")
+
     def _ensure_physics_scene(self, stage) -> str:
-        """기존 UsdPhysics.Scene을 탐색해 GPU dynamics를 활성화한다.
+        """모든 UsdPhysics.Scene에 GPU dynamics를 적용하고 sim_owner 후보를 반환한다.
 
         physx plugin은 USD prim 속성을 직접 읽으므로 CreateXxxAttr(value) 대신
         .Set(True)를 명시적으로 호출해야 기존 False 값을 덮어쓸 수 있다.
@@ -97,16 +111,34 @@ class DebrisSystem:
         except Exception:
             pass
 
-        # 기존 UsdPhysics.Scene prim 탐색해 GPU dynamics 속성 갱신
+        # Enable GPU dynamics on EVERY UsdPhysics.Scene (not just the first).
+        # Referenced assets like Simple_Warehouse may add their own scene with
+        # GPU dynamics off, and if particles attach to that one PhysX will
+        # refuse to simulate them.
+        scene_paths: list[str] = []
         for prim in stage.Traverse():
             if prim.IsA(UsdPhysics.Scene):
                 api = PhysxSchema.PhysxSceneAPI.Apply(prim)
-                api.CreateEnableGPUDynamicsAttr().Set(True)   # .Set() 필수
+                api.CreateEnableGPUDynamicsAttr().Set(True)
                 api.CreateBroadphaseTypeAttr().Set("MBP")
                 api.CreateSolverTypeAttr().Set("TGS")
-                path = str(prim.GetPath())
-                carb.log_info(f"[debris] GPU dynamics 활성화: {path}")
-                return path
+                scene_paths.append(str(prim.GetPath()))
+
+        if scene_paths:
+            # Prefer well-known paths so the particle system attaches to the
+            # scene we just configured.
+            for preferred in self._PREFERRED_SCENE_PATHS:
+                if preferred in scene_paths:
+                    carb.log_info(
+                        f"[debris] GPU dynamics 활성화: {len(scene_paths)} scene(s); "
+                        f"sim_owner={preferred}"
+                    )
+                    return preferred
+            carb.log_info(
+                f"[debris] GPU dynamics 활성화: {len(scene_paths)} scene(s); "
+                f"sim_owner={scene_paths[0]} (fallback)"
+            )
+            return scene_paths[0]
 
         # 없으면 새로 생성
         scene_path = "/World/PhysicsScene"
@@ -142,20 +174,26 @@ class DebrisSystem:
         sim_owner.SetTargets([Sdf.Path(scene_path)])
 
     def _add_particles(self, stage) -> None:
-        rng   = np.random.default_rng()
-        # 원형 수조 내부 균등 분포: sqrt 트릭으로 반경 편향 제거
-        r     = np.sqrt(rng.uniform(0.0, self.tank_range ** 2, self.count))
-        theta = rng.uniform(0.0, 2.0 * np.pi, self.count)
-        pos_x = r * np.cos(theta)
-        pos_y = r * np.sin(theta)
-        pos_z = np.full(self.count, self.z_floor + self.radius * 2.5)
+        rng = np.random.default_rng()
+        # 각 풀마다 self.count개 입자를 균등 분포로 스폰 (sqrt 트릭으로 반경 편향 제거).
+        n_per_pool = self.count
+        total = n_per_pool * len(self.pool_centers)
+
+        per_pool_xy = []
+        for cx, cy in self.pool_centers:
+            r     = np.sqrt(rng.uniform(0.0, self.tank_range ** 2, n_per_pool))
+            theta = rng.uniform(0.0, 2.0 * np.pi, n_per_pool)
+            per_pool_xy.append((cx + r * np.cos(theta), cy + r * np.sin(theta)))
+        pos_x = np.concatenate([xy[0] for xy in per_pool_xy])
+        pos_y = np.concatenate([xy[1] for xy in per_pool_xy])
+        pos_z = np.full(total, self.z_floor + self.radius * 2.5)
 
         positions  = Vt.Vec3fArray([
             Gf.Vec3f(float(pos_x[i]), float(pos_y[i]), float(pos_z[i]))
-            for i in range(self.count)
+            for i in range(total)
         ])
-        widths     = Vt.FloatArray([self.radius * 2.0] * self.count)
-        velocities = Vt.Vec3fArray([Gf.Vec3f(0.0, 0.0, 0.0)] * self.count)
+        widths     = Vt.FloatArray([self.radius * 2.0] * total)
+        velocities = Vt.Vec3fArray([Gf.Vec3f(0.0, 0.0, 0.0)] * total)
 
         # density 파라미터는 Isaac Sim 버전에 따라 지원 여부가 다르므로 분기 처리
         try:

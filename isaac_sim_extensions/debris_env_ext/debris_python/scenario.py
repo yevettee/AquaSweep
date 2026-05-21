@@ -1,8 +1,20 @@
 """이물질 파티클 시나리오 — 스폰/클리어 생명주기 관리."""
+import importlib
+
 from isaacsim.core.utils.stage import get_current_stage
 
 from .debris_system import DebrisSystem
 from . import global_variables as gv
+
+
+def _resolve_pool_centers() -> list[tuple[float, float]]:
+    """Pull POOL_CENTERS from water_tank_env_ext; fall back to single origin pool."""
+    try:
+        params = importlib.import_module("water_tank_env_python.params")
+        centers = list(getattr(params, "POOL_CENTERS", []))
+        return centers if centers else [(0.0, 0.0)]
+    except ImportError:
+        return [(0.0, 0.0)]
 
 
 class DebrisScenario:
@@ -17,6 +29,7 @@ class DebrisScenario:
             color_hex=gv.DEBRIS_COLOR_HEX,
             tank_range=gv.TANK_RANGE,
             z_floor=gv.FLOOR_Z,
+            pool_centers=_resolve_pool_centers(),
         )
         self._debris.spawn(stage)
 
