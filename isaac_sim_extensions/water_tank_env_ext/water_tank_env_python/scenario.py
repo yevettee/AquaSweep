@@ -3,6 +3,7 @@ import carb
 
 from . import oceansim_camera as _ocam
 from .physics_applier import WaterPhysicsApplier
+from .sturgeon_animator import SturgeonAnimator
 from .water_surface_animator import WaterSurfaceAnimator
 
 
@@ -11,6 +12,7 @@ class WaterTankScenario:
         self._running_scenario = False
         self._physics = WaterPhysicsApplier()
         self._surface_anim = WaterSurfaceAnimator()
+        self._sturgeon_anim = SturgeonAnimator()
         self._uw_cam = None
         self._turbidity = "medium"
 
@@ -19,6 +21,7 @@ class WaterTankScenario:
             self._physics.discover_bodies(stage)
             self._init_uw_camera(stage)
         self._surface_anim.reset()
+        self._sturgeon_anim.reset()
         self._running_scenario = True
 
     def teardown_scenario(self):
@@ -33,6 +36,7 @@ class WaterTankScenario:
             return
         self._physics.apply(step)
         self._surface_anim.step(step)
+        self._sturgeon_anim.step(step)
         if self._uw_cam is not None:
             try:
                 self._uw_cam.render()
