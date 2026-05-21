@@ -1,0 +1,29 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/dds_fastrtps/clean_floor__type_support.cpp.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/dds_fastrtps/clean_floor__type_support.cpp.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/dds_fastrtps/clean_wall__type_support.cpp.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/dds_fastrtps/clean_wall__type_support.cpp.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/robot_status__type_support.cpp.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/robot_status__type_support.cpp.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/tank_physical_variables__type_support.cpp.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/tank_physical_variables__type_support.cpp.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/tank_status__type_support.cpp.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/tank_status__type_support.cpp.o.d"
+  "libaqua_interfaces__rosidl_typesupport_fastrtps_cpp.pdb"
+  "libaqua_interfaces__rosidl_typesupport_fastrtps_cpp.so"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/clean_floor__rosidl_typesupport_fastrtps_cpp.hpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/clean_wall__rosidl_typesupport_fastrtps_cpp.hpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/dds_fastrtps/clean_floor__type_support.cpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/action/detail/dds_fastrtps/clean_wall__type_support.cpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/robot_status__type_support.cpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/tank_physical_variables__type_support.cpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/dds_fastrtps/tank_status__type_support.cpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/robot_status__rosidl_typesupport_fastrtps_cpp.hpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/tank_physical_variables__rosidl_typesupport_fastrtps_cpp.hpp"
+  "rosidl_typesupport_fastrtps_cpp/aqua_interfaces/msg/detail/tank_status__rosidl_typesupport_fastrtps_cpp.hpp"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/aqua_interfaces__rosidl_typesupport_fastrtps_cpp.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()
