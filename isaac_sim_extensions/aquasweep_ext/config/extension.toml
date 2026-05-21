@@ -12,6 +12,10 @@ writeTarget.kit = true
 "isaacsim.robot.wheeled_robots" = {}
 "omni.kit.uiapp" = {}
 "omni.physx" = {}
+# Sibling extensions — aquasweep imports their Python modules at startup.
+"water_tank_env_ext" = {}
+"debris_env_ext" = {}
+"underwater_robot_ext" = {}
 
 [[python.module]]
 name = "aquasweep_python"

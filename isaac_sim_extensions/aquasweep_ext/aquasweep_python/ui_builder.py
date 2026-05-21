@@ -20,6 +20,7 @@ import importlib
 
 _scene_builders   = importlib.import_module("water_tank_env_python.scene_builders")
 scene_builders    = _scene_builders
+sturgeon_spawner  = importlib.import_module("water_tank_env_python.sturgeon_spawner")
 WaterTankScenario = importlib.import_module("water_tank_env_python.scenario").WaterTankScenario
 
 DebrisScenario    = importlib.import_module("debris_python.scenario").DebrisScenario
@@ -38,8 +39,6 @@ tick_center_trail_debug  = _trail.tick_center_trail_debug
 _gv = importlib.import_module("underwater_robot_python.global_variables")
 DEBUG_CENTER_TRAIL_ENABLED = _gv.DEBUG_CENTER_TRAIL_ENABLED
 DINGO_USD_FILENAME         = _gv.DINGO_USD_FILENAME
-ROBOT_PRIM_PATH            = _gv.ROBOT_PRIM_PATH
-ROBOT_SCENE_NAME           = _gv.ROBOT_SCENE_NAME
 ROBOT_SPAWN_Z_M            = _gv.ROBOT_SPAWN_Z_M
 
 PHYSICS_DT = 1.0 / 60.0
@@ -47,6 +46,49 @@ _ROBOT_USD_PATH = (
     Path(__file__).resolve().parents[2]
     / "underwater_robot_ext" / "data" / DINGO_USD_FILENAME
 )
+
+# ── Multi-pool robot specs ─────────────────────────────────────────────────────
+_params = importlib.import_module("water_tank_env_python.params")
+_POOL_CENTERS: list[tuple[float, float]] = list(getattr(_params, "POOL_CENTERS", []))
+
+
+def _set_viewport_lighting_mode(mode: str) -> None:
+    """Switch the viewport lighting menu to ``mode`` (``"camera"`` or ``"stage"``).
+
+    Camera Light makes the viewport ignore USD scene lights — much safer
+    default for our brightly-lit fish-farm scene. Failures are logged but
+    swallowed so an old Isaac Sim build without the command doesn't break
+    LOAD.
+    """
+    try:
+        import omni.kit.commands
+        omni.kit.commands.execute("SetLightingMenuMode", lighting_mode=mode)
+    except Exception as e:  # noqa: BLE001
+        carb.log_warn(f"[aquasweep] couldn't set viewport lighting mode='{mode}': {e}")
+
+
+def _robot_specs() -> list[tuple[int, str, str, np.ndarray]]:
+    """Return per-pool robot (idx, scene_name, prim_path, world_position).
+
+    Index is 1-based and matches the Pool index. The primary robot (Pool_1)
+    drives FSM/suction/trail; the others spawn into their pools but currently
+    sit idle (physics-only) until the controller is generalised.
+    """
+    specs: list[tuple[int, str, str, np.ndarray]] = []
+    for i, (cx, cy) in enumerate(_POOL_CENTERS, start=1):
+        scene_name = f"dingo_{i}"
+        prim_path  = f"/World/Robots/Robot_{i}"
+        position   = np.array([cx, cy, float(ROBOT_SPAWN_Z_M)])
+        specs.append((i, scene_name, prim_path, position))
+    return specs
+
+
+# Primary robot — Pool_1's dingo drives the FSM/suction loop.
+PRIMARY_ROBOT_SCENE_NAME = "dingo_1"
+PRIMARY_ROBOT_PRIM_PATH  = "/World/Robots/Robot_1"
+# Back-compat aliases for any external code still importing the old names.
+ROBOT_SCENE_NAME = PRIMARY_ROBOT_SCENE_NAME
+ROBOT_PRIM_PATH  = PRIMARY_ROBOT_PRIM_PATH
 
 
 class UIBuilder:
@@ -158,31 +200,35 @@ class UIBuilder:
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
         scene_builders.enable_gpu_dynamics(stage)
         scene_builders.add_lighting(stage)
-        scene_builders.build_tank(stage)
-        scene_builders.build_water(stage)
-        scene_builders.build_water_surface(stage)
+        scene_builders.build_building(stage)
+        scene_builders.build_pools(stage)
+        scene_builders.build_top_cameras(stage)
+        scene_builders.build_equipment(stage)
+        sturgeon_spawner.spawn_sturgeons(stage)
 
         if not _ROBOT_USD_PATH.is_file():
             carb.log_error(f"[aquasweep] Robot USD not found: {_ROBOT_USD_PATH}")
             return
 
-        World.instance().scene.add(
-            WheeledRobot(
-                prim_path=ROBOT_PRIM_PATH,
-                name=ROBOT_SCENE_NAME,
-                wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
-                create_robot=True,
-                usd_path=str(_ROBOT_USD_PATH),
-                position=np.array([0.0, 0.0, float(ROBOT_SPAWN_Z_M)]),
+        for _idx, scene_name, prim_path, position in _robot_specs():
+            World.instance().scene.add(
+                WheeledRobot(
+                    prim_path=prim_path,
+                    name=scene_name,
+                    wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
+                    create_robot=True,
+                    usd_path=str(_ROBOT_USD_PATH),
+                    position=position,
+                )
             )
-        )
 
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())
-        prepare_dingo_usd_on_stage(ROBOT_PRIM_PATH)
-        tag_aquasweep_attrs(ROBOT_PRIM_PATH)
+        for _idx, _scene_name, prim_path, _pos in _robot_specs():
+            prepare_dingo_usd_on_stage(prim_path)
+            tag_aquasweep_attrs(prim_path)
 
-        robot = World.instance().scene.get_object(ROBOT_SCENE_NAME)
+        robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
         self._robot_scenario.initialize(robot, PHYSICS_DT)
 
         self._water_scenario.teardown_scenario()
@@ -190,6 +236,8 @@ class UIBuilder:
 
         self._suction.reset()
         reset_center_trail_debug()
+
+        _set_viewport_lighting_mode("camera")
 
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
