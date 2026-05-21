@@ -3,12 +3,14 @@ import carb
 
 from . import oceansim_camera as _ocam
 from .physics_applier import WaterPhysicsApplier
+from .water_surface_animator import WaterSurfaceAnimator
 
 
 class WaterTankScenario:
     def __init__(self):
         self._running_scenario = False
         self._physics = WaterPhysicsApplier()
+        self._surface_anim = WaterSurfaceAnimator()
         self._uw_cam = None
         self._turbidity = "medium"
 
@@ -16,6 +18,7 @@ class WaterTankScenario:
         if stage is not None:
             self._physics.discover_bodies(stage)
             self._init_uw_camera(stage)
+        self._surface_anim.reset()
         self._running_scenario = True
 
     def teardown_scenario(self):
@@ -29,6 +32,7 @@ class WaterTankScenario:
         if not self._running_scenario:
             return
         self._physics.apply(step)
+        self._surface_anim.step(step)
         if self._uw_cam is not None:
             try:
                 self._uw_cam.render()

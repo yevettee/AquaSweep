@@ -101,6 +101,7 @@ class UIBuilder:
         scene_builders.add_lighting(stage)
         scene_builders.build_tank(stage)
         scene_builders.build_water(stage)
+        scene_builders.build_water_surface(stage)
 
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())
