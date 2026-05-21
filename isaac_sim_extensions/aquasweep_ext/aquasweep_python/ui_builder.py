@@ -45,8 +45,8 @@ from underwater_robot_python.global_variables import (
 )
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
 # we redefine them below as aliases of the PRIMARY_ROBOT_* constants so the
-# multi-robot spawn (7 dingos under /World/Robots) can address the FSM-driven
-# primary robot explicitly.
+# multi-robot spawn (7 dingos, one nested under each /World/Pools/Pool_<n>)
+# can address the FSM-driven primary robot explicitly.
 
 PHYSICS_DT = 1.0 / 60.0
 _ROBOT_USD_PATH = (
@@ -84,7 +84,7 @@ def _robot_specs() -> list[tuple[int, str, str, np.ndarray]]:
     specs: list[tuple[int, str, str, np.ndarray]] = []
     for i, (cx, cy) in enumerate(_POOL_CENTERS, start=1):
         scene_name = f"dingo_{i}"
-        prim_path  = f"/World/Robots/Robot_{i}"
+        prim_path  = f"/World/Pools/Pool_{i}/Robot"
         position   = np.array([cx, cy, float(ROBOT_SPAWN_Z_M)])
         specs.append((i, scene_name, prim_path, position))
     return specs
@@ -92,7 +92,7 @@ def _robot_specs() -> list[tuple[int, str, str, np.ndarray]]:
 
 # Primary robot — Pool_1's dingo drives the FSM/suction loop.
 PRIMARY_ROBOT_SCENE_NAME = "dingo_1"
-PRIMARY_ROBOT_PRIM_PATH  = "/World/Robots/Robot_1"
+PRIMARY_ROBOT_PRIM_PATH  = "/World/Pools/Pool_1/Robot"
 # Back-compat aliases for any external code still importing the old names.
 ROBOT_SCENE_NAME = PRIMARY_ROBOT_SCENE_NAME
 ROBOT_PRIM_PATH  = PRIMARY_ROBOT_PRIM_PATH
