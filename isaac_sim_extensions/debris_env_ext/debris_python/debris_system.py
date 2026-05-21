@@ -5,39 +5,63 @@ from omni.physx.scripts import particleUtils
 
 
 class DebrisSystem:
-    """PhysX GPU 파티클 기반 수조 이물질 생성 및 관리.
+    """PhysX GPU 파티클 기반 수조 이물질 — 풀별 독립 시스템.
 
-    stage를 받아 파티클을 스폰하고, clear()로 제거합니다.
-    Extension 프레임워크(scenario.py)를 통해 호출됩니다.
+    각 풀은 자체 ParticleSystem + Particles Points 를 가진다:
+
+        /World/Pools/Pool_<n>/Debris/ParticleSystem
+        /World/Pools/Pool_<n>/Debris/Particles
+
+    Points 좌표는 Pool_<n> Xform 의 local frame (xy: 풀 중심 기준 원판,
+    z: 빌딩 바닥 위). 풀 Xform 의 translate 가 world 좌표로 보정해 준다.
     """
 
-    PARTICLE_SYS_PATH = "/World/Debris/UnifiedSystem"
-    PARTICLES_PATH    = "/World/Debris/UnifiedParticles"
-    DEBRIS_ROOT       = "/World/Debris"
+    # ── Path helpers (per-pool) ──────────────────────────────────────────────
+    @staticmethod
+    def pool_debris_root(pool_idx: int) -> str:
+        return f"/World/Pools/Pool_{pool_idx}/Debris"
+
+    @staticmethod
+    def pool_particle_system(pool_idx: int) -> str:
+        return f"{DebrisSystem.pool_debris_root(pool_idx)}/ParticleSystem"
+
+    @staticmethod
+    def pool_particles(pool_idx: int) -> str:
+        return f"{DebrisSystem.pool_debris_root(pool_idx)}/Particles"
+
+    # Preferred simulationOwner scene paths, in priority order.
+    # Referenced assets may bring their own UsdPhysics.Scene prims with GPU
+    # dynamics OFF — we enable GPU on every scene and pick a known-good one
+    # as the particle system's sim_owner.
+    _PREFERRED_SCENE_PATHS = ("/physicsScene", "/World/PhysicsScene")
+
+    # Per-particle colour is sampled uniformly between these two RGB endpoints.
+    # The "brown" end matches the original single-colour debris (#5C3D1E);
+    # the "black" end is near-black, giving the school an organic grime look.
+    _COLOR_BROWN = (0.36, 0.24, 0.12)   # #5C3D1E
+    _COLOR_BLACK = (0.04, 0.04, 0.04)
 
     def __init__(self, count: int = 10, radius: float = 0.015,
                  color_hex: str = "#5C3D1E", tank_range: float = 3.8,
                  z_floor: float = 0.0,
                  pool_centers: list[tuple[float, float]] | None = None):
-        """``count`` is per-pool. When ``pool_centers`` is None, a single pool
-        centred at the origin is used (backwards-compatible single-tank mode).
+        """``count`` is per-pool. ``pool_centers`` indexes Pool_1..Pool_N.
+
+        ``color_hex`` is kept for backwards compatibility but is no longer the
+        single colour — every particle is randomly tinted between brown and
+        black via a per-vertex ``displayColor`` primvar.
         """
-        self.count      = count
-        self.radius     = radius
-        self.color_hex  = color_hex
-        self.tank_range = tank_range
-        self.z_floor    = z_floor
+        self.count       = count
+        self.radius      = radius
+        self.color_hex   = color_hex  # retained for back-compat / logging
+        self.tank_range  = tank_range
+        self.z_floor     = z_floor
         self.pool_centers = pool_centers if pool_centers else [(0.0, 0.0)]
-        self._spawned   = False
+        self._particle_paths: list[str] = []
+        self._spawned    = False
 
     def spawn(self, stage) -> bool:
-        """stage에 이물질 파티클을 생성합니다. 이미 스폰되어 있으면 False 반환.
-
-        GPU 파티클은 반드시 시뮬레이션 시작 전에 생성해야 합니다.
-        시뮬레이션이 실행 중이면 자동으로 stop → 파티클 생성 → play 순서를 처리합니다.
-        timeline.stop()은 PhysX 컨텍스트를 재초기화하므로, 이후 play() 시
-        GPU dynamics 설정이 올바르게 적용됩니다.
-        """
+        """모든 풀에 파티클을 스폰. 이미 스폰돼 있으면 False."""
         if self._spawned:
             return False
 
@@ -46,22 +70,26 @@ class DebrisSystem:
         was_playing = _tl.is_playing()
 
         try:
-            # 실행 중이면 stop → GPU dynamics 적용 → spawn → play
             if was_playing:
                 carb.log_info("[debris] GPU particle 스폰을 위해 시뮬레이션을 재시작합니다.")
                 _tl.stop()
 
             scene_path = self._ensure_physics_scene(stage)
-            self._define_particle_system(stage, scene_path)
-            self._add_particles(stage)
-            self._apply_material(stage)
+            for idx, _center in enumerate(self.pool_centers, start=1):
+                sys_path = self.pool_particle_system(idx)
+                pts_path = self.pool_particles(idx)
+                self._define_particle_system_at(stage, scene_path, sys_path)
+                self._add_particles_at(stage, sys_path, pts_path)
+                self._apply_material_to(stage, pts_path)
+                self._particle_paths.append(pts_path)
+
             self._spawned = True
             carb.log_info(
                 f"[debris] {self.count}개 × {len(self.pool_centers)}풀 = "
-                f"{self.count * len(self.pool_centers)}개 파티클 스폰 완료 (scene={scene_path})"
+                f"{self.count * len(self.pool_centers)}개 파티클 스폰 완료 "
+                f"(scene={scene_path})"
             )
 
-            # stop 했으면 play 재시작 (GPU dynamics가 이제 활성화된 상태로 시작)
             if was_playing:
                 _tl.play()
             return True
@@ -76,33 +104,33 @@ class DebrisSystem:
             return False
 
     def clear(self, stage) -> None:
-        """stage에서 이물질 파티클을 제거합니다."""
-        root = stage.GetPrimAtPath(self.DEBRIS_ROOT)
-        if root.IsValid():
-            stage.RemovePrim(self.DEBRIS_ROOT)
+        """모든 풀의 Debris 서브트리를 제거."""
+        for idx in range(1, len(self.pool_centers) + 1):
+            root = self.pool_debris_root(idx)
+            prim = stage.GetPrimAtPath(root)
+            if prim and prim.IsValid():
+                stage.RemovePrim(root)
+        self._particle_paths.clear()
         self._spawned = False
 
     @property
     def is_spawned(self) -> bool:
         return self._spawned
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    def get_particle_paths(self) -> list[str]:
+        """Snapshot of the particle Points prim paths (one per pool)."""
+        return list(self._particle_paths)
 
-    # Preferred simulationOwner scene paths, in priority order.
-    # Referenced assets (warehouse, etc.) may bring their own UsdPhysics.Scene
-    # prims with GPU dynamics OFF — we must enable GPU on every scene and pick
-    # a well-known one as the particle system's sim_owner.
-    _PREFERRED_SCENE_PATHS = ("/physicsScene", "/World/PhysicsScene")
+    # ─────────────────────────────────────────────────────────────────────────
+    # Internal helpers
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _ensure_physics_scene(self, stage) -> str:
-        """모든 UsdPhysics.Scene에 GPU dynamics를 적용하고 sim_owner 후보를 반환한다.
+        """모든 UsdPhysics.Scene 에 GPU dynamics를 적용하고 sim_owner 후보를 반환.
 
         physx plugin은 USD prim 속성을 직접 읽으므로 CreateXxxAttr(value) 대신
         .Set(True)를 명시적으로 호출해야 기존 False 값을 덮어쓸 수 있다.
         """
-        # World API로도 갱신 (런타임 physics context)
         try:
             from isaacsim.core.api.world import World
             world = World.instance()
@@ -111,10 +139,6 @@ class DebrisSystem:
         except Exception:
             pass
 
-        # Enable GPU dynamics on EVERY UsdPhysics.Scene (not just the first).
-        # Referenced assets like Simple_Warehouse may add their own scene with
-        # GPU dynamics off, and if particles attach to that one PhysX will
-        # refuse to simulate them.
         scene_paths: list[str] = []
         for prim in stage.Traverse():
             if prim.IsA(UsdPhysics.Scene):
@@ -125,8 +149,6 @@ class DebrisSystem:
                 scene_paths.append(str(prim.GetPath()))
 
         if scene_paths:
-            # Prefer well-known paths so the particle system attaches to the
-            # scene we just configured.
             for preferred in self._PREFERRED_SCENE_PATHS:
                 if preferred in scene_paths:
                     carb.log_info(
@@ -150,60 +172,54 @@ class DebrisSystem:
         carb.log_info(f"[debris] 새 physics scene 생성: {scene_path}")
         return scene_path
 
-    def _define_particle_system(self, stage, scene_path: str) -> None:
-        """GPU 파티클 시스템 정의.
+    def _define_particle_system_at(self, stage, scene_path: str, system_path: str) -> None:
+        """단일 풀의 GPU 파티클 시스템 정의.
 
-        Isaac Sim 4.x에서는 simulationOwner를 physics scene으로 명시해야
-        GPU dynamics가 파티클 시스템을 인식한다.
-        contactOffset > solidRestOffset > restOffset 순서를 지켜야 한다.
+        Isaac Sim 4.x/5.x: simulationOwner 를 physics scene 으로 명시해야
+        GPU dynamics 가 파티클 시스템을 인식한다.
+        contactOffset > solidRestOffset > restOffset 순서를 지킬 것.
         """
-        ps = PhysxSchema.PhysxParticleSystem.Define(stage, self.PARTICLE_SYS_PATH)
+        ps = PhysxSchema.PhysxParticleSystem.Define(stage, system_path)
         ps.CreateParticleSystemEnabledAttr(True)
         ps.CreateSolverPositionIterationCountAttr(16)
 
         contact_offset    = self.radius * 1.5
-        solid_rest_offset = self.radius * 1.0   # solidRestOffset < contactOffset
-        rest_offset       = self.radius * 0.5   # restOffset < solidRestOffset
+        solid_rest_offset = self.radius * 1.0
+        rest_offset       = self.radius * 0.5
 
         ps.CreateContactOffsetAttr(contact_offset)
         ps.CreateSolidRestOffsetAttr(solid_rest_offset)
         ps.CreateRestOffsetAttr(rest_offset)
 
-        # Isaac Sim 4.x 필수: GPU particle system → physics scene 연결
         sim_owner = ps.CreateSimulationOwnerRel()
         sim_owner.SetTargets([Sdf.Path(scene_path)])
 
-    def _add_particles(self, stage) -> None:
-        rng = np.random.default_rng()
-        # 각 풀마다 self.count개 입자를 균등 분포로 스폰 (sqrt 트릭으로 반경 편향 제거).
-        n_per_pool = self.count
-        total = n_per_pool * len(self.pool_centers)
-
-        per_pool_xy = []
-        for cx, cy in self.pool_centers:
-            r     = np.sqrt(rng.uniform(0.0, self.tank_range ** 2, n_per_pool))
-            theta = rng.uniform(0.0, 2.0 * np.pi, n_per_pool)
-            per_pool_xy.append((cx + r * np.cos(theta), cy + r * np.sin(theta)))
-        pos_x = np.concatenate([xy[0] for xy in per_pool_xy])
-        pos_y = np.concatenate([xy[1] for xy in per_pool_xy])
-        pos_z = np.full(total, self.z_floor + self.radius * 2.5)
+    def _add_particles_at(self, stage, system_path: str, particles_path: str) -> None:
+        """단일 풀에 self.count 개 파티클을 풀-로컬 좌표로 스폰."""
+        rng   = np.random.default_rng()
+        n     = self.count
+        # sqrt 트릭으로 반경 균등 분포
+        r     = np.sqrt(rng.uniform(0.0, self.tank_range ** 2, n))
+        theta = rng.uniform(0.0, 2.0 * np.pi, n)
+        pos_x = r * np.cos(theta)
+        pos_y = r * np.sin(theta)
+        pos_z = np.full(n, self.z_floor + self.radius * 2.5)
 
         positions  = Vt.Vec3fArray([
             Gf.Vec3f(float(pos_x[i]), float(pos_y[i]), float(pos_z[i]))
-            for i in range(total)
+            for i in range(n)
         ])
-        widths     = Vt.FloatArray([self.radius * 2.0] * total)
-        velocities = Vt.Vec3fArray([Gf.Vec3f(0.0, 0.0, 0.0)] * total)
+        widths     = Vt.FloatArray([self.radius * 2.0] * n)
+        velocities = Vt.Vec3fArray([Gf.Vec3f(0.0, 0.0, 0.0)] * n)
 
-        # density 파라미터는 Isaac Sim 버전에 따라 지원 여부가 다르므로 분기 처리
         try:
             particleUtils.add_physx_particleset_points(
                 stage=stage,
-                path=self.PARTICLES_PATH,
+                path=particles_path,
                 positions_list=positions,
                 velocities_list=velocities,
                 widths_list=widths,
-                particle_system_path=self.PARTICLE_SYS_PATH,
+                particle_system_path=system_path,
                 self_collision=True,
                 fluid=False,
                 particle_group=0,
@@ -211,36 +227,49 @@ class DebrisSystem:
                 density=0.0,
             )
         except TypeError:
-            # 일부 Isaac Sim 4.x 버전에서 density 파라미터 미지원
             particleUtils.add_physx_particleset_points(
                 stage=stage,
-                path=self.PARTICLES_PATH,
+                path=particles_path,
                 positions_list=positions,
                 velocities_list=velocities,
                 widths_list=widths,
-                particle_system_path=self.PARTICLE_SYS_PATH,
+                particle_system_path=system_path,
                 self_collision=True,
                 fluid=False,
                 particle_group=0,
                 particle_mass=0.001,
             )
 
-    def _apply_material(self, stage) -> None:
-        pts = UsdGeom.Points.Get(stage, self.PARTICLES_PATH)
+    def _apply_material_to(self, stage, particles_path: str) -> None:
+        """Per-particle random colour via ``primvars:displayColor`` (vertex interp).
+
+        Each particle's RGB is independently lerp-sampled between
+        ``_COLOR_BROWN`` and ``_COLOR_BLACK``. Hydra renders the points using
+        the displayColor primvar directly — no UsdShade.Material binding is
+        needed, and any previous binding is left untouched (Points fall back
+        to displayColor when no surface material drives them).
+        """
+        pts = UsdGeom.Points.Get(stage, particles_path)
         if not pts:
             return
-        mat = self._make_matte_material(stage, self.PARTICLES_PATH + "_Mat", self.color_hex)
-        UsdShade.MaterialBindingAPI(pts.GetPrim()).Bind(mat)
 
-    @staticmethod
-    def _make_matte_material(stage, path: str, color_hex: str):
-        h   = color_hex.lstrip("#")
-        rgb = Gf.Vec3f(int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255)
-        mat    = UsdShade.Material.Define(stage, path)
-        shader = UsdShade.Shader.Define(stage, path + "/Shader")
-        shader.CreateIdAttr("UsdPreviewSurface")
-        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(rgb)
-        shader.CreateInput("roughness",    Sdf.ValueTypeNames.Float).Set(0.95)
-        shader.CreateInput("metallic",     Sdf.ValueTypeNames.Float).Set(0.0)
-        mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-        return mat
+        rng = np.random.default_rng()
+        brown = np.array(self._COLOR_BROWN, dtype=float)
+        black = np.array(self._COLOR_BLACK, dtype=float)
+        weights = rng.uniform(0.0, 1.0, self.count)
+        colors_np = black + weights[:, None] * (brown - black)
+
+        colors = Vt.Vec3fArray([
+            Gf.Vec3f(float(colors_np[i, 0]),
+                     float(colors_np[i, 1]),
+                     float(colors_np[i, 2]))
+            for i in range(self.count)
+        ])
+
+        primvars_api = UsdGeom.PrimvarsAPI(pts.GetPrim())
+        display_color = primvars_api.CreatePrimvar(
+            "displayColor",
+            Sdf.ValueTypeNames.Color3fArray,
+            interpolation=UsdGeom.Tokens.vertex,
+        )
+        display_color.Set(colors)

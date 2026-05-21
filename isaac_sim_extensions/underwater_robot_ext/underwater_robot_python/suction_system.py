@@ -29,7 +29,11 @@ import carb
 import numpy as np
 from pxr import Gf, UsdGeom, Vt
 
-PARTICLES_PRIM_PATH = "/World/Debris/UnifiedParticles"
+# Default particle path — back-compat for single-tank workflow. The per-pool
+# refactor (debris_system → /World/Pools/Pool_<n>/Debris/Particles) means
+# aquasweep_ext should construct SuctionSystem with an explicit path matching
+# the primary robot's pool.
+DEFAULT_PARTICLES_PRIM_PATH = "/World/Pools/Pool_1/Debris/Particles"
 _HIDDEN_Z = -100.0
 
 
@@ -53,6 +57,7 @@ class SuctionSystem:
         collection_radius: float = 0.30,
         attraction_speed: float = 8.0,
         nozzle_offset: float = 0.35,
+        particles_prim_path: str = DEFAULT_PARTICLES_PRIM_PATH,
     ):
         """
         Args:
@@ -60,11 +65,14 @@ class SuctionSystem:
             collection_radius : 이 거리 이내 파티클은 즉시 수거 (m)
             attraction_speed  : 흡입 반경 경계에서의 속도 크기 (m/s)
             nozzle_offset     : 로봇 중심에서 앞쪽 흡입구까지 오프셋 (m)
+            particles_prim_path : 흡입 대상 파티클 Points prim 경로
+                                  (per-pool refactor 이후 Pool 별로 별도 경로)
         """
         self.suction_radius    = suction_radius
         self.collection_radius = collection_radius
         self.attraction_speed  = attraction_speed
         self.nozzle_offset     = nozzle_offset
+        self.particles_prim_path = particles_prim_path
         self._collected        = 0
         self._step_count       = 0
 
@@ -83,10 +91,10 @@ class SuctionSystem:
         """
         self._step_count += 1
 
-        pts = UsdGeom.Points.Get(stage, PARTICLES_PRIM_PATH)
+        pts = UsdGeom.Points.Get(stage, self.particles_prim_path)
         if not pts:
             if self._step_count <= 5:
-                carb.log_warn(f"[suction] 파티클 prim 없음: {PARTICLES_PRIM_PATH}")
+                carb.log_warn(f"[suction] 파티클 prim 없음: {self.particles_prim_path}")
             return 0
 
         pos_attr = pts.GetPointsAttr()
