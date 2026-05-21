@@ -1,0 +1,14 @@
+# Goal
+string source_pool      # "pool_1"
+string target_pool      # "pool_2"
+int32 fish_count        # 옮길 물고기 수 (-1 = all)
+---
+# Result
+bool success
+int32 fish_moved
+string message
+---
+# Feedback
+uint8 phase             # 0=moving_to_source, 1=picking, 2=moving_to_target, 3=placing
+float32 progress        # 0.0 ~ 1.0
+int32 fish_picked_so_far

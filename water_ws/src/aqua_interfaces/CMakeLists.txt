@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TankPhysicalVariables.msg"
   "action/CleanFloor.action"
   "action/CleanWall.action"
+  "action/MoveFish.action"
 )
 
 ament_export_dependencies(rosidl_default_runtime)
