@@ -44,6 +44,7 @@ from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
 PHYSICS_DT = 1.0 / 60.0
 
 
+
 class UIBuilder:
     def __init__(self):
         # Frames are sub-windows that can contain multiple UI elements
@@ -237,6 +238,9 @@ class UIBuilder:
         robot = world.scene.get_object(ROBOT_SCENE_NAME)
         self._scenario.initialize(robot, PHYSICS_DT)
 
+        # UW_Camera는 water_tank_env_ext의 WaterTankScenario가 생성·렌더·ROS2 발행을 담당합니다.
+        # underwater_robot_ext에서 중복 생성하면 창이 2개 뜨고 렌더링 충돌이 발생합니다.
+
         # UI management
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
@@ -275,6 +279,15 @@ class UIBuilder:
     def _update_scenario(self, step: float):
         """매 physics step마다 시나리오(나선 이동)와 흡입 시스템을 함께 실행한다."""
         self._scenario.on_physics_step(step)
+
+        # 수조 카메라 실시간 렌더링 동기 연동 (부력 물리는 PhysX 자체 백그라운드 스레드가 처리하므로, 여기선 오직 카메라 렌더만 동기 수행)
+        try:
+            from water_tank_env_python.scenario import WaterTankScenario
+            tank_scenario = WaterTankScenario.get_instance()
+            if tank_scenario is not None and tank_scenario.is_loaded():
+                tank_scenario.render_camera()
+        except Exception as e:
+            carb.log_warn(f"[underwater.robot] 수조 카메라 렌더링 동기화 실패: {e}")
 
         # 흡입 시스템: 로봇 위치 기준으로 이물질 파티클에 인력 적용
         try:
