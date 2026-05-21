@@ -13,7 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+import threading
 from pathlib import Path
+
+_common = Path(__file__).resolve().parents[2] / "common"
+if str(_common) not in sys.path:
+    sys.path.insert(0, str(_common))
+
+from ros_isaac_env import (  # noqa: E402
+    AQUA_INTERFACES_INSTALL_HINT,
+    configure_isaac_ros_env,
+)
 
 import carb
 import numpy as np
@@ -54,8 +65,13 @@ class UIBuilder:
         # Get access to the timeline to control stop/pause/play programmatically
         self._timeline = omni.timeline.get_timeline_interface()
 
+        self._ros_executor = None
+        self._ros_thread = None
+        self._cmd_receiver = None
+
         # Run initialization for the provided example
         self._on_init()
+        self._start_ros()
 
     ###################################################################################
     #           The Functions Below Are Called Automatically By extension.py
@@ -117,6 +133,7 @@ class UIBuilder:
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
         reset_center_trail_debug()
+        self._stop_ros()
 
     def build_ui(self):
         """
@@ -176,6 +193,65 @@ class UIBuilder:
     def _on_init(self):
         self._scenario = UnderwaterTankJetbotFsm()
         self._suction  = SuctionSystem()
+        # Re-attach receiver if ROS is already running (called on stage reset)
+        if self._cmd_receiver is not None:
+            self._scenario.set_cmd_vel_receiver(self._cmd_receiver)
+
+    def _start_ros(self) -> None:
+        import os
+        import traceback
+
+        carb.log_warn("[underwater.robot] _start_ros() ENTER")
+
+        if not configure_isaac_ros_env():
+            carb.log_warn(
+                f"[underwater.robot] ROS env setup failed. {AQUA_INTERFACES_INSTALL_HINT}"
+            )
+            return
+
+        try:
+            import rclpy
+            from rclpy.executors import SingleThreadedExecutor
+
+            from .cmd_vel_receiver import create_cmd_vel_receiver, get_last_ros_import_error
+
+            carb.log_warn(f"[underwater.robot] rclpy imported from: {rclpy.__file__}")
+            carb.log_warn(
+                "[underwater.robot] ROS_DOMAIN_ID=%s RMW=%s"
+                % (os.environ.get("ROS_DOMAIN_ID", "0"), os.environ.get("RMW_IMPLEMENTATION", "?"))
+            )
+
+            if not rclpy.ok():
+                rclpy.init()
+
+            self._cmd_receiver = create_cmd_vel_receiver("under_robot_1")
+            if self._cmd_receiver is None:
+                carb.log_warn(
+                    "[underwater.robot] cmd_vel receiver unavailable — "
+                    f"{get_last_ros_import_error() or 'unknown import error'}"
+                )
+                return
+
+            self._ros_executor = SingleThreadedExecutor()
+            self._ros_executor.add_node(self._cmd_receiver)
+            self._ros_thread = threading.Thread(
+                target=self._ros_executor.spin,
+                daemon=True,
+                name="aquasweep_ros_spin",
+            )
+            self._ros_thread.start()
+            self._scenario.set_cmd_vel_receiver(self._cmd_receiver)
+            carb.log_warn("[underwater.robot] ROS2 cmd_vel subscriber STARTED OK")
+
+        except Exception as exc:
+            carb.log_warn(f"[underwater.robot] ROS2 init failed: {exc}")
+            carb.log_warn(traceback.format_exc())
+
+    def _stop_ros(self) -> None:
+        if self._ros_executor is not None:
+            self._ros_executor.shutdown(timeout_sec=1.0)
+            self._ros_executor = None
+        self._cmd_receiver = None
 
     def _add_light_to_stage(self):
         """
