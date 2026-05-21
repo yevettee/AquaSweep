@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import threading
 from pathlib import Path
 
 import carb
@@ -54,8 +55,13 @@ class UIBuilder:
         # Get access to the timeline to control stop/pause/play programmatically
         self._timeline = omni.timeline.get_timeline_interface()
 
+        self._ros_executor = None
+        self._ros_thread = None
+        self._cmd_receiver = None
+
         # Run initialization for the provided example
         self._on_init()
+        self._start_ros()
 
     ###################################################################################
     #           The Functions Below Are Called Automatically By extension.py
@@ -117,6 +123,7 @@ class UIBuilder:
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
         reset_center_trail_debug()
+        self._stop_ros()
 
     def build_ui(self):
         """
@@ -176,6 +183,147 @@ class UIBuilder:
     def _on_init(self):
         self._scenario = UnderwaterTankJetbotFsm()
         self._suction  = SuctionSystem()
+        # Re-attach receiver if ROS is already running (called on stage reset)
+        if self._cmd_receiver is not None:
+            self._scenario.set_cmd_vel_receiver(self._cmd_receiver)
+
+    def _start_ros(self) -> None:
+        import os
+        import sys
+        import importlib
+        import importlib.util
+        import sysconfig
+        import traceback
+
+        carb.log_warn('[underwater.robot] _start_ros() ENTER')
+
+        # Step 1: locate Isaac Sim's bundled rclpy (py3.11)
+        bundled_rclpy = None
+
+        # Strategy A: ask extension manager
+        try:
+            import omni.kit.app
+            ext_manager = omni.kit.app.get_app().get_extension_manager()
+            bridge_path = ext_manager.get_extension_path("isaacsim.ros2.bridge")
+            carb.log_warn(f'[underwater.robot] ext_manager bridge_path="{bridge_path}"')
+            if bridge_path:
+                candidate = os.path.join(bridge_path, "humble", "rclpy")
+                if os.path.isdir(candidate):
+                    bundled_rclpy = candidate
+        except Exception as exc:
+            carb.log_warn(f'[underwater.robot] ext_manager lookup failed: {exc}')
+
+        # Strategy B: walk sys.path looking for the bundled .so
+        if bundled_rclpy is None:
+            so_suffix = sysconfig.get_config_var('EXT_SUFFIX')
+            so_name = f'_rclpy_pybind11{so_suffix}'
+            for p in sys.path:
+                candidate_so = os.path.join(p, 'rclpy', so_name)
+                if os.path.exists(candidate_so) and 'isaacsim' in p:
+                    bundled_rclpy = p
+                    break
+
+        # Strategy C: fixed known prefix search
+        if bundled_rclpy is None:
+            import glob
+            patterns = [
+                '/home/rokey/dev_ws/isaac_sim/**/isaacsim.ros2.bridge/humble/rclpy',
+                os.path.expanduser('~/dev_ws/isaac_sim/**/isaacsim.ros2.bridge/humble/rclpy'),
+                '/isaac-sim/**/isaacsim.ros2.bridge/humble/rclpy',
+            ]
+            for pat in patterns:
+                matches = glob.glob(pat, recursive=True)
+                if matches:
+                    bundled_rclpy = matches[0]
+                    break
+
+        if bundled_rclpy:
+            carb.log_warn(f'[underwater.robot] bundled_rclpy found: {bundled_rclpy}')
+        else:
+            carb.log_warn('[underwater.robot] no bundled rclpy — ROS2 unavailable')
+            return
+
+        # Step 2: ensure AMENT_PREFIX_PATH includes system ROS2 (needed for type support discovery)
+        ros_humble = '/opt/ros/humble'
+        ament_cur = os.environ.get('AMENT_PREFIX_PATH', '')
+        carb.log_warn(f'[underwater.robot] AMENT_PREFIX_PATH before: "{ament_cur}"')
+        if ros_humble not in ament_cur:
+            os.environ['AMENT_PREFIX_PATH'] = (ros_humble + ':' + ament_cur).strip(':')
+            carb.log_warn(f'[underwater.robot] AMENT_PREFIX_PATH set to: {os.environ["AMENT_PREFIX_PATH"]}')
+
+        # Step 3: evict ALL ROS2 packages cached from system (py3.10) path.
+        # The bundled path has py3.11-compatible versions of ALL of these.
+        # rcl_interfaces must be reimported from bundled dir (it uses _s naming convention).
+        ros2_pkgs = (
+            'rclpy', 'rpyutils',
+            'rcl_interfaces', 'geometry_msgs', 'std_msgs', 'sensor_msgs',
+            'builtin_interfaces', 'action_msgs', 'rosgraph_msgs',
+            'lifecycle_msgs', 'composition_interfaces', 'unique_identifier_msgs',
+            'rmw_dds_common',
+            'rosidl_generator_py', 'rosidl_runtime_py', 'rosidl_parser',
+            'rosidl_typesupport_c', 'rosidl_typesupport_cpp',
+            'rosidl_typesupport_fastrtps_c', 'rosidl_typesupport_introspection_c',
+            'ament_index_python',
+        )
+        stale = [k for k in sys.modules
+                 if k in ros2_pkgs or any(k.startswith(p + '.') for p in ros2_pkgs)]
+        for k in stale:
+            del sys.modules[k]
+        carb.log_warn(f'[underwater.robot] evicted {len(stale)} stale ROS2 modules')
+
+        # Step 4: put bundled path FIRST so `import rclpy` finds py3.11 version before system py3.10
+        if bundled_rclpy in sys.path:
+            sys.path.remove(bundled_rclpy)
+        sys.path.insert(0, bundled_rclpy)
+        carb.log_warn(f'[underwater.robot] sys.path[0] = {sys.path[0]}')
+
+        # Step 5: pre-load the C extension into sys.modules so that
+        # rpyutils.import_c_library() finds it via sys.modules cache
+        # instead of searching ament paths (which point to py3.10 dirs)
+        so_suffix = sysconfig.get_config_var('EXT_SUFFIX')
+        so_path = os.path.join(bundled_rclpy, 'rclpy', f'_rclpy_pybind11{so_suffix}')
+        carb.log_warn(f'[underwater.robot] .so path exists={os.path.exists(so_path)}: {so_path}')
+        if os.path.exists(so_path):
+            try:
+                spec = importlib.util.spec_from_file_location('rclpy._rclpy_pybind11', so_path)
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules['rclpy._rclpy_pybind11'] = mod
+                spec.loader.exec_module(mod)
+                carb.log_warn('[underwater.robot] _rclpy_pybind11 pre-loaded OK')
+            except Exception as exc:
+                carb.log_warn(f'[underwater.robot] _rclpy_pybind11 pre-load failed: {exc}')
+                carb.log_warn(traceback.format_exc())
+
+        try:
+            import rclpy
+            carb.log_warn(f'[underwater.robot] rclpy imported from: {rclpy.__file__}')
+            from rclpy.executors import SingleThreadedExecutor
+            from .cmd_vel_receiver import CmdVelReceiver
+
+            if not rclpy.ok():
+                rclpy.init()
+
+            self._cmd_receiver = CmdVelReceiver('under_robot_1')
+            self._ros_executor = SingleThreadedExecutor()
+            self._ros_executor.add_node(self._cmd_receiver)
+            self._ros_thread = threading.Thread(
+                target=self._ros_executor.spin,
+                daemon=True,
+                name='aquasweep_ros_spin',
+            )
+            self._ros_thread.start()
+            self._scenario.set_cmd_vel_receiver(self._cmd_receiver)
+            carb.log_warn('[underwater.robot] ROS2 cmd_vel subscriber STARTED OK')
+
+        except Exception as exc:
+            carb.log_warn(f'[underwater.robot] ROS2 init failed: {exc}')
+            carb.log_warn(traceback.format_exc())
+
+    def _stop_ros(self) -> None:
+        if self._ros_executor is not None:
+            self._ros_executor.shutdown(timeout_sec=1.0)
+            self._ros_executor = None
+        self._cmd_receiver = None
 
     def _add_light_to_stage(self):
         """
