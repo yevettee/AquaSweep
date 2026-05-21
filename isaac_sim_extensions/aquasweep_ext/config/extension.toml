@@ -1,0 +1,17 @@
+[package]
+version = "1.0.0"
+category = "Simulation"
+title = "aquasweep"
+description = "AquaSweep 통합 실행 — 수조 + 로봇 + 이물질을 단일 LOAD/RUN으로 제어한다."
+keywords = ["AquaSweep", "Underwater", "Robot", "Tank", "Debris"]
+writeTarget.kit = true
+
+[dependencies]
+"isaacsim.core.api" = {}
+"isaacsim.gui.components" = {}
+"isaacsim.robot.wheeled_robots" = {}
+"omni.kit.uiapp" = {}
+"omni.physx" = {}
+
+[[python.module]]
+name = "aquasweep_python"
