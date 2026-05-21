@@ -32,8 +32,13 @@ def discover_camera_prims(stage) -> list:
 
 
 def create_uw_camera(prim_path: str, turbidity: str = "medium",
-                     resolution=DEFAULT_RESOLUTION):
-    """OceanSim UW_Camera를 생성·초기화하여 반환한다."""
+                     resolution=DEFAULT_RESOLUTION,
+                     ros2_topic_name: str = None):
+    """OceanSim UW_Camera를 생성·초기화하여 반환한다.
+
+    Args:
+        ros2_topic_name: ROS2 토픽명. 지정 시 탁도 이미지를 해당 토픽으로 발행한다.
+    """
     if not OCEANSIM_AVAILABLE:
         return None
     if turbidity not in YAML_BY_TURBIDITY:
@@ -45,5 +50,6 @@ def create_uw_camera(prim_path: str, turbidity: str = "medium",
     cam.initialize(
         UW_yaml_path=YAML_BY_TURBIDITY[turbidity],
         viewport=True,
+        ros2_topic_name=ros2_topic_name,
     )
     return cam

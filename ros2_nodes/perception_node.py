@@ -11,11 +11,11 @@ import numpy as np
 # 사용자 정의 ROS2 메시지 패키지 임포트 (인터페이스 명세서 준수)
 try:
     from cleaner_msgs.msg import Detection, DetectionArray
+    _CLEANER_MSGS_AVAILABLE = True
 except ImportError:
-    # 패키지 빌드 전이거나 환경에 없을 경우를 위한 임시 더미 클래스
-    # 실제 빌드 환경에서는 정상적으로 작동합니다.
     class Detection: pass
     class DetectionArray: pass
+    _CLEANER_MSGS_AVAILABLE = False
 
 
 class PerceptionNode(Node):
@@ -37,11 +37,21 @@ class PerceptionNode(Node):
         )
         
         # ROS2 인터페이스 규격에 따른 발행(Publish) 설정
-        self.publisher_detections = self.create_publisher(
-            DetectionArray,
-            '/cleaner/perception/detections',
-            10
-        )
+        self._msg_available = _CLEANER_MSGS_AVAILABLE
+        if self._msg_available:
+            try:
+                self.publisher_detections = self.create_publisher(
+                    DetectionArray,
+                    '/cleaner/perception/detections',
+                    10
+                )
+            except Exception as e:
+                self.get_logger().error(f"Failed to create publisher for detections: {e}")
+                self._msg_available = False
+        
+        if not self._msg_available:
+            self.get_logger().warn("⚠️ [Warning] cleaner_msgs 패키지가 빌드되어 있지 않거나 환경에 없습니다. 3D 좌표 결과 발행은 비활성화되며, 실시간 OpenCV 디버깅 비디오 화면 창만 활성화됩니다.")
+
         self.publisher_debug = self.create_publisher(
             Image,
             '/cleaner/perception/image_debug',
@@ -109,13 +119,14 @@ class PerceptionNode(Node):
                 self.get_logger().info("🔵 [Idle] Blue Robotics 카메라 피드 정상 수신 중... (이물질 대기)")
 
         # 3. 탐지 결과(DetectionArray) 발행
-        try:
-            det_msg = DetectionArray()
-            det_msg.header = self.latest_image.header
-            det_msg.detections = detections
-            self.publisher_detections.publish(det_msg)
-        except Exception as e:
-            self.get_logger().warn(f"Failed to publish detections (Missing msg definitions?): {e}")
+        if self._msg_available:
+            try:
+                det_msg = DetectionArray()
+                det_msg.header = self.latest_image.header
+                det_msg.detections = detections
+                self.publisher_detections.publish(det_msg)
+            except Exception as e:
+                self.get_logger().warn(f"Failed to publish detections (Missing msg definitions?): {e}")
         
         # 4. 디버그용 이미지(Bounding Box 오버레이) 발행 (구독하는 노드가 있을 경우에만)
         if debug_image is not None and self.publisher_debug.get_subscription_count() > 0:
