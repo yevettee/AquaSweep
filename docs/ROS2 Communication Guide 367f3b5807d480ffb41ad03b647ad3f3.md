@@ -1,0 +1,349 @@
+# ROS2 Communication Guide
+
+> AquaSweep ROS2 패키지, 인터페이스, 통신 Entity 통합 문서입니다. 작업하실 때 꼭 필독해주세요.
+> 
+
+---
+
+---
+
+## 1. 패키지 구조
+
+| 패키지 | 설명 | 비고 |
+| --- | --- | --- |
+| **aqua_interfaces** | 커스텀 메시지 및 액션 정의 | msg/, action/ |
+| **aqua_detection** | Isaac Cam 이미지 구독 → Detection 결과 발행 |  |
+| **aqua_controller** | 로봇 제어 (저수준 제어, 궤적/속도 계산, cmd_vel 발행) | Action Server |
+| **aqua_planner** | 고수준 제어 (작업 스케줄링, Action Client) | optional, 확장용 |
+| **aqua_dashboard** | Isaac 대시보드에 필요한 정보 수합 & 전달 |  |
+
+### 아키텍처 다이어그램
+
+![image.png](ROS2%20Communication%20Guide/image.png)
+
+---
+
+## 2. 네이밍 규칙
+
+### 2.1 Entity 네이밍
+
+| 항목 | 네이밍 패턴 | 예시 |
+| --- | --- | --- |
+| 풀 | `pool_{id}` | `pool_1`, `pool_2` |
+| 수중 로봇 | `under_robot_{id}` | `under_robot_1` |
+| 레일 로봇 | `rail_robot_{id}` | `rail_robot_1` |
+| 수중 카메라 | `under_cam_{id}` | `under_cam_1` |
+| 상단 카메라 | `top_cam_{id}` | `top_cam_1` |
+
+### 2.2 Prim Path 구조 (Isaac Sim)
+
+```
+#### 확인 필요 #####
+
+world/
+├── ground/
+├── pools/
+│   └── pool_1/
+│       ├── water/
+│       ├── under_robot_1/
+│       │   ├── base_link/
+│       │   └── under_cam_1/
+│       └── top_cam_1/
+└── rails/
+    └── rail_1/
+        └── rail_robot_1/
+```
+
+---
+
+## 3. 인터페이스 정의
+
+### 3.1 Built-in Messages
+
+### geometry_msgs/msg/Twist
+
+**Topic:** `/under_robot_1/cmd_vel`
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| linear | Vector3 | 선속도 (m/s) - x: 전진/후진, y: 좌우, z: 상하 |
+| angular | Vector3 | 각속도 (rad/s) - x: roll, y: pitch, z: **yaw (핵심)** |
+
+---
+
+### sensor_msgs/msg/JointState
+
+**Topics:** `/under_robot_1/joint_state`, `/rail_robot_1/joint_state`
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| name | string[] | joint 이름 배열 (예: `["left_wheel", "right_wheel"]`) |
+| position | float64[] | 각 joint 위치 (rad 또는 m) |
+| velocity | float64[] | 각 joint 속도 (rad/s 또는 m/s) |
+| effort | float64[] | 각 joint 토크/힘 (Nm 또는 N) — **외력·부하 측정** |
+
+---
+
+### sensor_msgs/msg/Image
+
+**Topics:**
+
+- `/pool_1/under_img_raw` - 수중 카메라 원본
+- `/pool_1/under_img_det` - 수중 카메라 Detection 결과
+- `/pool_1/top_img_raw` - 상단 카메라 원본
+- `/pool_1/top_img_det` - 상단 카메라 Detection 결과
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| height | uint32 | 이미지 높이 (px) |
+| width | uint32 | 이미지 너비 (px) |
+| encoding | string | `"rgb8"`, `"bgr8"`, `"mono8"`, `"16UC1"` 등 |
+| is_bigendian | uint8 | 0 = little endian |
+| step | uint32 | 한 row의 바이트 길이 |
+| data | uint8[] | 이미지 데이터 (1D 배열) |
+
+---
+
+### sensor_msgs/msg/Imu
+
+**Topic:** `/under_robot_1/imu`
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| orientation | Quaternion | 자세 (x, y, z, w) |
+| orientation_covariance | float64[9] | 자세 공분산 |
+| angular_velocity | Vector3 | 각속도 (rad/s) |
+| angular_velocity_covariance | float64[9] | 각속도 공분산 |
+| linear_acceleration | Vector3 | 선가속도 (m/s²) |
+| linear_acceleration_covariance | float64[9] | 선가속도 공분산 |
+
+---
+
+### nav_msgs/msg/Odometry
+
+**Topic:** `/under_robot_1/odom`
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| child_frame_id | string | `"base_link"` (로봇 본체 프레임) |
+| pose | PoseWithCovariance | 위치 + 방향 + 공분산 (**position.x, y, orientation.z** 핵심) |
+| twist | TwistWithCovariance | 현재 속도 + 공분산 (**linear.x, angular.z** 핵심) |
+
+---
+
+### nav_msgs/msg/Path
+
+**Topic:** `/under_robot_1/planned_path` *(planner 고도화 시 사용)*
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| poses | PoseStamped[] | 경로상의 waypoint 배열 |
+
+---
+
+### std_srvs/Trigger
+
+**Services:**
+
+- `/planner/start` - 대시보드 전체 시작
+- `/planner/pause` - 대시보드 전체 일시 정지
+- `/pool_1/start_clean_floor` - 대시보드 개별 under_robot 시작
+
+**Request**
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| (없음) | ㅡ | 빈 요청, 파라미터 없이 단순 트리거 |
+
+**Response**
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| success | bool | 요청 성공 여부 |
+| message | string | 결과 메시지 (성공/실패 이유) |
+
+---
+
+### 3.2 Custom Messages (aqua_interfaces/msg/)
+
+### RobotStatus
+
+**Topic:** `/under_robot_1/status`
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| state | string | `IDLE`, `RUNNING`, `PAUSED`, `DISCHARGED` 등 |
+| battery_level | float | 배터리 잔량 (0.0 ~ 1.0) |
+| collision_force | float | 충돌 힘 (N) |
+
+---
+
+### TankStatus
+
+**Topic:** `/pool_1/status`
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| pollution_level | float | 오염 수준 |
+| fish_type | string | 물고기 종류 |
+| fish_count | int32 | 물고기 수 |
+| fish_count_suspicious | int32 | 의심 물고기 수 |
+
+---
+
+### TankPhysicalVariables
+
+**Topic:** `/pool_1/physical_variables`
+
+| 필드 | 타입 | 설명 |
+| --- | --- | --- |
+| buoyancy | float | 부력 |
+| drag | float | 항력 |
+| lift | float | 양력 |
+| viscosity | float | 점성 |
+
+---
+
+### 3.3 Custom Actions (aqua_interfaces/action/)
+
+| Action | Topic | 설명 |
+| --- | --- | --- |
+| **CleanFloor** | `/pool_1/clean_floor` | 바닥 청소 |
+| **CleanWall** | `/pool_1/clean_wall` | 벽면 청소 |
+| **MoveFish** | `/pool_1/move_fish` | 물고기 이동 |
+
+---
+
+## 4. 통신 Entity 정리
+
+> **Topic**: 1:N 통신 (Publisher → Subscribers)
+> 
+> 
+> **Action**: 1:1 통신 (Client → Server)
+> 
+
+### 4.1 Topics
+
+| Topic | Publisher | Subscribers | 우선순위 |
+| --- | --- | --- | --- |
+| `/pool_1/status` | `water_tank_env/` | dashboard, planner | **1차 필수** |
+| `/pool_1/under_img_raw` | `under_cam_ext/` | detection | **1차 필수** |
+| `/pool_1/under_img_det` | detection node | planner, dashboard, controller | **1차 필수** |
+| `/pool_1/top_img_raw` | `top_cam_ext/` | detection | **1차 필수** |
+| `/pool_1/top_img_det` | detection node | planner, dashboard | **1차 필수** |
+| `/pool_1/physical_variables`  | `water_tank_env/` or `underwater_robot/`  
+**** 확인 필요 **** | controller | **1차 필수** |
+| `/under_robot_1/status` | `underwater_robot_env/` | dashboard, planner | **1차 필수** |
+| `/under_robot_1/cmd_vel` | controller node | `underwater_robot_env/` | **1차 필수** |
+| `/under_robot_1/joint_state` | `under_cam_ext/` | controller node | 확장 |
+| `/under_robot_1/planned_path` | controller node | `underwater_robot_env/` | 확장 |
+| `/under_robot_1/imu` | `underwater_robot_env/` | controller | 확장 |
+| `/under_robot_1/odom` | `underwater_robot_env/` | controller | 확장 |
+
+### 4.2 Services
+
+| Action | Client | Server | 우선 순위 |
+| --- | --- | --- | --- |
+| `/planner/start` | dashboard node | planner node | **1차 필수** |
+| `/planner/pause` | dashboard node | planner node | **1차 필수** |
+| `/pool_1/start_clean_floor` | dashboard node | planner node | **1차 필수** |
+
+### 4.3 Actions
+
+| Action | Client | Server | 구현 상태 |
+| --- | --- | --- | --- |
+| `/pool_1/clean_floor` | planner node | controller node | ✅ 실제 구현 (SpiralPlanner) |
+| `/pool_1/clean_wall` | planner node | controller node | stub |
+| `/pool_1/move_fish` | planner node | controller node | stub |
+
+---
+
+## 5. 패키지 상세 구조
+
+### 5.1 aqua_interfaces
+
+```
+aqua_interfaces/
+├── action/
+│   ├── CleanFloor.action
+│   ├── CleanWall.action
+│   └── MoveFish.action
+└── msg/
+    ├── RobotStatus.msg
+    ├── TankStatus.msg                # PoolStatus 로 변경 예정
+    └── TankPhysicalVariables.msg     # PoolPhysicalVariables 로 변경 예정
+```
+
+### 5.2 aqua_planner
+
+```
+aqua_planner/aqua_planner/
+├── planner_node.py              # 메인 노드 + 서비스
+├── task_executor.py             # Action Client 관리
+└── mockup_vision_publisher.py   # 테스트용 풀 상태 발행
+```
+
+**Services:**
+
+- `/planner/start` - CleanFloor Action Goal 전송
+- `/planner/pause` - 현재 작업 취소
+
+### 5.3 aqua_controller
+
+```
+aqua_controller/aqua_controller/
+├── controller_node.py           # 메인 노드 + Action Servers
+├── spiral_planner.py            # 나선형 경로 계획
+├── action_handlers/
+│   ├── __init__.py
+│   ├── base_handler.py          # 추상 기본 클래스
+│   ├── clean_floor_handler.py   # ✅ 실제 구현
+│   ├── clean_wall_handler.py    # stub
+│   └── move_fish_handler.py     # stub
+├── mockup_controller_server.py  # 테스트용 Action Server
+└── mockup_robot_status.py       # 테스트용 로봇 상태 발행
+```
+
+**Action Server 구현 상태:**
+
+| Handler | 상태 | 설명 |
+| --- | --- | --- |
+| CleanFloorHandler | ✅ 실제 구현 | SpiralPlanner + cmd_vel 발행 |
+| CleanWallHandler | stub | 요청 수락 → 바로 성공 반환 |
+| MoveFishHandler | stub | 요청 수락 → 바로 성공 반환 |
+
+---
+
+## 6. 빠른 참조
+
+> 아래 내용은 github version 에 따라 변할 수 있으니 가볍게만 참고
+> 
+
+### 테스트 명령어
+
+```bash
+# 빌드
+cd ~/AquaSweep/water_ws
+colcon build --packages-select aqua_interfaces aqua_planner aqua_controller
+source install/setup.bash
+
+# Mockup Controller 실행
+ros2 run aqua_controller mockup_controller_server --ros-args -p pool_id:=pool_1
+
+# 실제 Controller 실행
+ros2 run aqua_controller controller_node --ros-args \\
+    -p robot_name:=under_robot_1 \\
+    -p pool_id:=pool_1
+
+# Planner 실행
+ros2 run aqua_planner planner_node --ros-args -p pool_id:=pool_1
+
+# Action 직접 호출
+ros2 action send_goal /pool_1/clean_floor aqua_interfaces/action/CleanFloor "{}" --feedback
+
+# 상태 확인
+ros2 action list
+ros2 topic list
+ros2 service list
+ros2 topic echo /under_robot_1/cmd_vel
+```
