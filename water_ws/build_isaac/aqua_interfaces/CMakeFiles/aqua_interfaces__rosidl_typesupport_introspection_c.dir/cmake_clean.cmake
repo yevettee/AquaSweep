@@ -1,0 +1,29 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_floor__type_support.c.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_floor__type_support.c.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_wall__type_support.c.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_wall__type_support.c.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/robot_status__type_support.c.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/robot_status__type_support.c.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_physical_variables__type_support.c.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_physical_variables__type_support.c.o.d"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_status__type_support.c.o"
+  "CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_status__type_support.c.o.d"
+  "libaqua_interfaces__rosidl_typesupport_introspection_c.pdb"
+  "libaqua_interfaces__rosidl_typesupport_introspection_c.so"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_floor__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_floor__type_support.c"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_wall__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/action/detail/clean_wall__type_support.c"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/robot_status__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/robot_status__type_support.c"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_physical_variables__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_physical_variables__type_support.c"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_status__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/aqua_interfaces/msg/detail/tank_status__type_support.c"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C)
+  include(CMakeFiles/aqua_interfaces__rosidl_typesupport_introspection_c.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()
