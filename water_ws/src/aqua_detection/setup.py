@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'aqua_planner'
+package_name = 'aqua_detection'
 
 setup(
     name=package_name,
@@ -15,8 +15,8 @@ setup(
     zip_safe=True,
     maintainer='woody',
     maintainer_email='woody.myung@gmail.com',
-    description='Coverage path planning for floor/wall cleaning',
-    license='Apache-2.0',
+    description='TODO: Package description',
+    license='TODO: License declaration',
     extras_require={
         'test': [
             'pytest',
@@ -24,8 +24,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'planner_node = aqua_planner.planner_node:main',
-            'mockup_vision_publisher = aqua_planner.mockup_vision_publisher:main',
         ],
     },
 )

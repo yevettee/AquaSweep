@@ -3,19 +3,27 @@
 
 """ROS2 topic/action naming for the AquaSweep dashboard (keep in sync with aqua_dashboard/ros_topics.py)."""
 
-TANK_COUNT = 8
+POOL_COUNT = 8
 
-def tank_status_topic(tank_id: int) -> str:
-    return f"/tank_{tank_id}/status"
-
-
-def tank_robot_status_topic(tank_id: int) -> str:
-    return f"/under_robot_{tank_id}/status"
+def pool_status_topic(pool_id: int) -> str:
+    return f"/pool_{pool_id}/status"
 
 
-def tank_clean_floor_action(tank_id: int) -> str:
-    return f"/tank_{tank_id}/clean_floor"
+def pool_robot_status_topic(pool_id: int) -> str:
+    return f"/under_robot_{pool_id}/status"
 
 
-def tank_ids() -> range:
-    return range(1, TANK_COUNT + 1)
+def pool_clean_floor_action(pool_id: int) -> str:
+    return f"/pool_{pool_id}/clean_floor"
+
+
+def pool_ids() -> range:
+    return range(1, POOL_COUNT + 1)
+
+
+# Aliases for backward compatibility
+tank_status_topic = pool_status_topic
+tank_robot_status_topic = pool_robot_status_topic
+tank_clean_floor_action = pool_clean_floor_action
+tank_ids = pool_ids
+TANK_COUNT = POOL_COUNT

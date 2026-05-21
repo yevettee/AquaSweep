@@ -19,7 +19,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'aqua_controller = controller_node:main',
+            'controller_node = aqua_controller.controller_node:main',
+            'mockup_controller_server = aqua_controller.mockup_controller_server:main',
+            'mockup_robot_status = aqua_controller.mockup_robot_status:main',
         ],
     },
 )

@@ -1,95 +1,101 @@
-"""underwater_robot_controller_node
+"""AquaSweep Controller Node
 
-Publishes geometry_msgs/Twist to /<robot_name>/cmd_vel at CONTROL_HZ.
+Provides Action Servers for robot control:
+    - /{pool_id}/clean_floor (CleanFloor.action)
+    - /{pool_id}/clean_wall (CleanWall.action)
+    - /{pool_id}/move_fish (MoveFish.action)
 
-Phase 1: node start → auto-start spiral.
-Phase 2+: replace _auto_start() with an Action Server goal handler.
-
-Topic published: /<robot_name>/cmd_vel  (geometry_msgs/msg/Twist)
+Publishes:
+    - /{robot_name}/cmd_vel (geometry_msgs/Twist)
 """
 
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionServer
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import Twist
 
+from aqua_interfaces.action import CleanFloor, CleanWall, MoveFish
+
 from .spiral_planner import SpiralPlanner
+from .action_handlers import CleanFloorHandler, CleanWallHandler, MoveFishHandler
 
-CONTROL_HZ = 60.0  # must match Isaac Sim physics rate
+CONTROL_HZ = 60.0
 
 
-class UnderwaterRobotControllerNode(Node):
+class ControllerNode(Node):
+    """Main controller node with Action Servers."""
 
     def __init__(self) -> None:
-        super().__init__('underwater_robot_controller')
+        super().__init__('aqua_controller')
 
         self.declare_parameter('robot_name', 'under_robot_1')
-        robot_name = self.get_parameter('robot_name').get_parameter_value().string_value
+        self.declare_parameter('pool_id', 'pool_1')
 
-        self._topic = f'/{robot_name}/cmd_vel'
-        self._pub = self.create_publisher(Twist, self._topic, 10)
-        self._timer = self.create_timer(1.0 / CONTROL_HZ, self._control_loop)
+        robot_name = self.get_parameter('robot_name').get_parameter_value().string_value
+        pool_id = self.get_parameter('pool_id').get_parameter_value().string_value
+
+        self._cmd_vel_topic = f'/{robot_name}/cmd_vel'
+        self._cmd_vel_pub = self.create_publisher(Twist, self._cmd_vel_topic, 10)
 
         self._planner = SpiralPlanner(physics_dt=1.0 / CONTROL_HZ)
-        self._running = False
 
-        self.get_logger().info(
-            f'Controller ready | topic={self._topic} | '
-            f'segments={self._planner.total_segments}'
+        callback_group = ReentrantCallbackGroup()
+
+        self._clean_floor_handler = CleanFloorHandler(
+            self, self._planner, self._cmd_vel_pub, CONTROL_HZ
+        )
+        self._clean_wall_handler = CleanWallHandler(self)
+        self._move_fish_handler = MoveFishHandler(self)
+
+        self._clean_floor_server = ActionServer(
+            self,
+            CleanFloor,
+            f'/{pool_id}/clean_floor',
+            execute_callback=self._clean_floor_handler.execute,
+            goal_callback=self._clean_floor_handler.handle_goal,
+            cancel_callback=self._clean_floor_handler.handle_cancel,
+            callback_group=callback_group
         )
 
-        # Phase 1: auto-start. Phase 2+: remove this and use Action Server.
-        self._auto_start()
+        self._clean_wall_server = ActionServer(
+            self,
+            CleanWall,
+            f'/{pool_id}/clean_wall',
+            execute_callback=self._clean_wall_handler.execute,
+            goal_callback=self._clean_wall_handler.handle_goal,
+            cancel_callback=self._clean_wall_handler.handle_cancel,
+            callback_group=callback_group
+        )
 
-    # ------------------------------------------------------------------
-    # Public control interface (will be called by Action Server later)
-    # ------------------------------------------------------------------
+        self._move_fish_server = ActionServer(
+            self,
+            MoveFish,
+            f'/{pool_id}/move_fish',
+            execute_callback=self._move_fish_handler.execute,
+            goal_callback=self._move_fish_handler.handle_goal,
+            cancel_callback=self._move_fish_handler.handle_cancel,
+            callback_group=callback_group
+        )
 
-    def start(self) -> None:
-        self._planner.reset()
-        self._running = True
-        self.get_logger().info('Spiral started')
-
-    def stop(self) -> None:
-        self._running = False
-        self._publish_zero()
-        self.get_logger().info('Spiral stopped')
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
-
-    def _auto_start(self) -> None:
-        self.start()
-
-    def _control_loop(self) -> None:
-        if not self._running:
-            return
-
-        if self._planner.is_done:
-            self._publish_zero()
-            self._running = False
-            self.get_logger().info('Spiral complete — robot stopped')
-            return
-
-        v, omega = self._planner.next_cmd()
-        msg = Twist()
-        msg.linear.x = v
-        msg.angular.z = omega
-        self._pub.publish(msg)
-
-    def _publish_zero(self) -> None:
-        self._pub.publish(Twist())
+        self.get_logger().info(
+            f'ControllerNode ready | robot={robot_name} | pool={pool_id}\n'
+            f'  cmd_vel: {self._cmd_vel_topic}\n'
+            f'  actions: /{pool_id}/clean_floor, /{pool_id}/clean_wall, /{pool_id}/move_fish'
+        )
 
 
 def main(args=None) -> None:
     rclpy.init(args=args)
-    node = UnderwaterRobotControllerNode()
+    node = ControllerNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
-        node.stop()
         node.destroy_node()
         rclpy.shutdown()
 
