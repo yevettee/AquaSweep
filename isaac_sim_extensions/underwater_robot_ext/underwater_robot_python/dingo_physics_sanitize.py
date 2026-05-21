@@ -13,6 +13,10 @@ from pxr import Sdf, Usd, UsdPhysics
 
 VISUAL_WHEELS_PRIM_NAME = "VisualWheels"
 
+# Built-in Dingo cameras that we don't want active on stage. Our project uses
+# the custom 'camera' prim (LOW-LIGHT-HD-USB-CAMERA-R1) only.
+DEFAULT_CAMERAS_TO_DISABLE = ("realsense_left", "realsense_right")
+
 
 def _find_visual_wheels_prim(robot_root: Usd.Prim) -> Optional[Usd.Prim]:
     if not robot_root.IsValid():
@@ -45,8 +49,24 @@ def _strip_physics_prim(prim: Usd.Prim) -> None:
         pass
 
 
+def _disable_default_cameras(root: Usd.Prim) -> None:
+    """Deactivate Dingo's built-in cameras (realsense stereo pair).
+
+    USD references can't be deleted from the local layer, but ``SetActive(False)``
+    hides the whole subtree from rendering, traversal, and physics. The custom
+    'camera' prim is left alone.
+    """
+    disabled: list[str] = []
+    for prim in Usd.PrimRange(root):
+        if prim.GetName() in DEFAULT_CAMERAS_TO_DISABLE and prim.IsActive():
+            prim.SetActive(False)
+            disabled.append(str(prim.GetPath()))
+    if disabled:
+        carb.log_info(f"[dingo_usd] disabled default cameras: {', '.join(disabled)}")
+
+
 def prepare_dingo_usd_on_stage(robot_prim_path: str) -> None:
-    """Load 후 1회: VisualWheels 서브트리 조인트·강체·충돌 비활성.
+    """Load 후 1회: VisualWheels 서브트리 조인트·강체·충돌 비활성 + 기본 카메라 끄기.
 
     VisualWheels → base_link 계층은 dingo_transformed.usd 에서 직접 편집합니다.
     """
@@ -59,6 +79,8 @@ def prepare_dingo_usd_on_stage(robot_prim_path: str) -> None:
     if not root.IsValid():
         carb.log_warn(f"[dingo_usd] robot root invalid: {robot_prim_path}")
         return
+
+    _disable_default_cameras(root)
 
     visual = _find_visual_wheels_prim(root)
     if visual is None or not visual.IsValid():

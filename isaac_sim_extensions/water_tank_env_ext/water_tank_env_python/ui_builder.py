@@ -16,6 +16,7 @@ from pxr import UsdGeom
 
 from . import oceansim_camera as _ocam
 from . import scene_builders
+from . import sturgeon_spawner
 from .scenario import WaterTankScenario
 
 
@@ -99,9 +100,11 @@ class UIBuilder:
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
         scene_builders.enable_gpu_dynamics(stage)
         scene_builders.add_lighting(stage)
-        scene_builders.build_tank(stage)
-        scene_builders.build_water(stage)
-        scene_builders.build_water_surface(stage)
+        scene_builders.build_building(stage)
+        scene_builders.build_pools(stage)
+        scene_builders.build_top_cameras(stage)
+        scene_builders.build_equipment(stage)
+        sturgeon_spawner.spawn_sturgeons(stage)
 
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())

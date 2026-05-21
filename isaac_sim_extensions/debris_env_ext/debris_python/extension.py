@@ -73,7 +73,9 @@ class Extension(omni.ext.IExt):
             MenuItemDescription(name=EXTENSION_TITLE, onclick_action=(ext_id, f"CreateUIExtension:{EXTENSION_TITLE}"))
         ]
 
-        add_menu_items(self._menu_items, EXTENSION_TITLE)
+        # Top-bar menu suppressed: aquasweep is the sole UI entry point.
+        # Re-enable by uncommenting the next line for standalone testing.
+        # add_menu_items(self._menu_items, EXTENSION_TITLE)
 
         # Filled in with User Functions
         self.ui_builder = UIBuilder()
@@ -87,7 +89,8 @@ class Extension(omni.ext.IExt):
 
     def on_shutdown(self):
         self._models = {}
-        remove_menu_items(self._menu_items, EXTENSION_TITLE)
+        # Matched with the suppressed add_menu_items in on_startup.
+        # remove_menu_items(self._menu_items, EXTENSION_TITLE)
 
         action_registry = omni.kit.actions.core.get_action_registry()
         action_registry.deregister_action(self.ext_id, f"CreateUIExtension:{EXTENSION_TITLE}")
