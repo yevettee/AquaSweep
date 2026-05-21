@@ -12,8 +12,10 @@ from isaacsim.gui.components.menu import MenuItemDescription
 from omni.kit.menu.utils import add_menu_items, remove_menu_items
 from omni.usd import StageEventType
 
-from .global_variables import EXTENSION_DESCRIPTION, EXTENSION_TITLE
 from .ui_builder import UIBuilder
+
+EXTENSION_TITLE = "AquaSweep"
+EXTENSION_DESCRIPTION = "AquaSweep 통합 실행 — 수조 + 로봇 + 이물질을 단일 LOAD/RUN으로 제어한다."
 
 
 class Extension(omni.ext.IExt):
@@ -35,8 +37,10 @@ class Extension(omni.ext.IExt):
             description=f"Add {EXTENSION_TITLE} Extension to UI toolbar",
         )
         self._menu_items = [
-            MenuItemDescription(name=EXTENSION_TITLE,
-                                onclick_action=(ext_id, f"CreateUIExtension:{EXTENSION_TITLE}"))
+            MenuItemDescription(
+                name=EXTENSION_TITLE,
+                onclick_action=(ext_id, f"CreateUIExtension:{EXTENSION_TITLE}"),
+            )
         ]
         add_menu_items(self._menu_items, EXTENSION_TITLE)
 
@@ -67,7 +71,6 @@ class Extension(omni.ext.IExt):
             self._stage_event_sub = events.create_subscription_to_pop(self._on_stage_event)
             stream = self._timeline.get_timeline_event_stream()
             self._timeline_event_sub = stream.create_subscription_to_pop(self._on_timeline_event)
-
             self._build_ui()
         else:
             self._usd_context = None
@@ -102,10 +105,11 @@ class Extension(omni.ext.IExt):
     def _on_timeline_event(self, event):
         if event.type == int(omni.timeline.TimelineEventType.PLAY):
             if not self._physx_subscription:
-                self._physx_subscription = self._physxIFace.subscribe_physics_step_events(self._on_physics_step)
+                self._physx_subscription = self._physxIFace.subscribe_physics_step_events(
+                    self._on_physics_step
+                )
         elif event.type == int(omni.timeline.TimelineEventType.STOP):
             self._physx_subscription = None
-
         self.ui_builder.on_timeline_event(event)
 
     def _on_physics_step(self, step):
@@ -115,7 +119,6 @@ class Extension(omni.ext.IExt):
         if event.type == int(StageEventType.OPENED) or event.type == int(StageEventType.CLOSED):
             self._physx_subscription = None
             self.ui_builder.cleanup()
-
         self.ui_builder.on_stage_event(event)
 
     def _build_extension_ui(self):
