@@ -26,32 +26,37 @@ from . import params
 from .scene_builders import POOLS_ROOT
 
 # ── Motion bounds for ALIVE sturgeons ─────────────────────────────────────────
-_Z_MIN_ALIVE = 0.30
-_Z_MAX_ALIVE = 0.80                  # stay deeper in the water
+_Z_MIN_ALIVE = 0.30                  # 최소 수심 (m), 바닥에서 30cm
+_Z_MAX_ALIVE = 0.80                  # 최대 수심 (m), 바닥에서 80cm
 _Z_MID_ALIVE = (_Z_MIN_ALIVE + _Z_MAX_ALIVE) / 2.0
 _Z_AMP_ALIVE = (_Z_MAX_ALIVE - _Z_MIN_ALIVE) / 2.0
 
-_OMEGA_MIN_ALIVE = 0.16              # rad/s ≈ 9.2 °/s (2x faster)
-_OMEGA_MAX_ALIVE = 0.44              # rad/s ≈ 25 °/s (2x faster)
+_OMEGA_MIN_ALIVE = 0.3               # rad/s ≈ 17°/s, 한 바퀴 ~21초
+_OMEGA_MAX_ALIVE = 0.7               # rad/s ≈ 40°/s, 한 바퀴 ~9초
 
-# Body roll for alive fish (side-to-side swimming motion)
-_ROLL_AMP_DEG = 35.0                 # ±35 degrees (exaggerated swim)
-_ROLL_FREQ_MIN = 3                 # faster roll for swimming feel
-_ROLL_FREQ_MAX = 5
+# Body roll: 좌우 흔들림 (수영 모션)
+_ROLL_AMP_DEG = 10                   # ±10° 좌우 흔들림 진폭
+_ROLL_FREQ_MIN = 3                   # 최소 흔들림 주파수 (Hz)
+_ROLL_FREQ_MAX = 5                   # 최대 흔들림 주파수 (Hz)
 
 # ── Motion bounds for FLIPPED (dead/sick) sturgeons ───────────────────────────
-_Z_MIN_FLIPPED = params.WATER_LEVEL - 0.15   # 1.05 m (near surface)
-_Z_MAX_FLIPPED = params.WATER_LEVEL - 0.05   # 1.15 m (nearly at surface)
+_Z_MIN_FLIPPED = params.WATER_LEVEL - 0.15   # 수면 아래 15cm
+_Z_MAX_FLIPPED = params.WATER_LEVEL - 0.05   # 수면 아래 5cm (거의 떠있음)
 _Z_MID_FLIPPED = (_Z_MIN_FLIPPED + _Z_MAX_FLIPPED) / 2.0
-_Z_AMP_FLIPPED = 0.03                # minimal bobbing
+_Z_AMP_FLIPPED = 0.03                # ±3cm 출렁임
 
-_OMEGA_MIN_FLIPPED = 0.05           # very slow drift
-_OMEGA_MAX_FLIPPED = 0.1
+_OMEGA_MIN_FLIPPED = 0.05            # rad/s ≈ 3°/s, 한 바퀴 ~2분 (느린 표류)
+_OMEGA_MAX_FLIPPED = 0.1             # rad/s ≈ 6°/s, 한 바퀴 ~1분
 
 # ── Shared radius bounds ──────────────────────────────────────────────────────
-_RADIUS_MIN = 0.6
-_RADIUS_MAX = 3.0
-_RADIUS_AMP = 0.25
+_RADIUS_MIN = 0.6                    # 수조 중심에서 최소 거리 (m)
+_RADIUS_MAX = 3.0                    # 수조 중심에서 최대 거리 (m), 벽에서 ~1m 여유
+_RADIUS_AMP = 0.25                   # ±25cm 반경 변동 (나선형 효과)
+
+# ── Model orientation offset ──────────────────────────────────────────────────
+# 물고기 머리가 이동 방향(접선)을 향하도록 yaw 보정
+# 모델: 머리 = -X, 꼬리 = +X
+_MODEL_YAW_OFFSET = math.pi / 2.0    # 90° 보정
 
 
 class _SturgeonCache:
@@ -90,7 +95,12 @@ def _params_from_path(prim_path_str: str, is_flipped: bool) -> dict:
         u = chunk / max_val if max_val else 0.0
         return low + u * (high - low)
 
-    direction = 1.0 if (digest[0] & 0x01) else -1.0
+    # Alive fish: all swim in same direction (CCW) for vortex effect
+    # Flipped fish: random direction for passive drift
+    if is_flipped:
+        direction = 1.0 if (digest[0] & 0x01) else -1.0
+    else:
+        direction = 1.0  # CCW vortex
 
     if is_flipped:
         omega_min, omega_max = _OMEGA_MIN_FLIPPED, _OMEGA_MAX_FLIPPED
@@ -155,7 +165,8 @@ class SturgeonAnimator:
 
             # Yaw aligned with the orbit tangent — sign comes from omega so
             # CCW and CW swimmers both face forward.
-            yaw_rad = angle + math.copysign(math.pi / 2.0, p["omega"])
+            tangent_rad = angle + math.copysign(math.pi / 2.0, p["omega"])
+            yaw_rad = tangent_rad + _MODEL_YAW_OFFSET
             yaw_deg = math.degrees(yaw_rad) % 360.0
 
             s.translate_op.Set(Gf.Vec3d(x, y, z))
