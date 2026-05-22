@@ -4,7 +4,7 @@ This node provides a headless interface for monitoring pool status and triggerin
 cleaning operations. It can serve as a backend for a web UI or CLI testing.
 
 Subscriptions:
-    /{pool_id}/status         - Pool status (TankStatus)
+    /{pool_id}/status         - Pool status (PoolStatus)
     /under_robot_{id}/status  - Robot status (RobotStatus)
 
 Service Clients:
@@ -20,7 +20,7 @@ import rclpy
 from rclpy.node import Node
 from std_srvs.srv import Trigger
 
-from aqua_interfaces.msg import RobotStatus, TankStatus
+from aqua_interfaces.msg import RobotStatus, PoolStatus
 
 from .ros_topics import (
     planner_pause_service,
@@ -45,7 +45,7 @@ class DashboardNode(Node):
     def __init__(self) -> None:
         super().__init__('aqua_dashboard')
 
-        self._pool_status: Dict[int, Optional[TankStatus]] = {}
+        self._pool_status: Dict[int, Optional[PoolStatus]] = {}
         self._robot_status: Dict[int, Optional[RobotStatus]] = {}
         self._pool_start_clients: Dict[int, object] = {}
 
@@ -54,7 +54,7 @@ class DashboardNode(Node):
             self._robot_status[pool_id] = None
 
             self.create_subscription(
-                TankStatus,
+                PoolStatus,
                 pool_status_topic(pool_id),
                 partial(self._on_pool_status, pool_id),
                 10
@@ -88,7 +88,7 @@ class DashboardNode(Node):
             f'  Clients: /planner/start, /planner/pause, /pool_<id>/start_clean_floor'
         )
 
-    def _on_pool_status(self, pool_id: int, msg: TankStatus) -> None:
+    def _on_pool_status(self, pool_id: int, msg: PoolStatus) -> None:
         """Handle incoming pool status."""
         self._pool_status[pool_id] = msg
 
@@ -189,7 +189,7 @@ class DashboardNode(Node):
         except Exception as exc:
             self.get_logger().error(f'Pause error: {exc}')
 
-    def get_pool_status(self, pool_id: int) -> Optional[TankStatus]:
+    def get_pool_status(self, pool_id: int) -> Optional[PoolStatus]:
         """Get the latest status for a pool."""
         return self._pool_status.get(pool_id)
 

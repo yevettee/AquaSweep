@@ -24,10 +24,10 @@ function _colcon_prefix_chain_powershell_source_script {
 
 # source chained prefixes
 _colcon_prefix_chain_powershell_source_script "/opt/ros/humble/local_setup.ps1"
-_colcon_prefix_chain_powershell_source_script "/home/woody/AquaSweep_2/water_ws/install/local_setup.ps1"
-_colcon_prefix_chain_powershell_source_script "/home/woody/dev_ws/isaac_sim/install/local_setup.ps1"
+_colcon_prefix_chain_powershell_source_script "/home/woody/AquaSweep/water_ws/install/local_setup.ps1"
 _colcon_prefix_chain_powershell_source_script "/home/woody/dev_ws/isaac_sim/IsaacSim-ros_workspaces/humble_ws/install/local_setup.ps1"
 _colcon_prefix_chain_powershell_source_script "/home/woody/water_ws/install/local_setup.ps1"
+_colcon_prefix_chain_powershell_source_script "/home/woody/dev_ws/isaac_sim/install/local_setup.ps1"
 
 # source this prefix
 $env:COLCON_CURRENT_PREFIX=(Split-Path $PSCommandPath -Parent)

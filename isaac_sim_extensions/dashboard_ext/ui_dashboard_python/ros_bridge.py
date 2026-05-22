@@ -13,9 +13,9 @@ from typing import Any, Dict, Optional, Type
 
 from .ros_config import (
     planner_start_service,
+    pool_clean_floor_action,
     pool_ids,
     pool_robot_status_topic,
-    pool_start_clean_floor_service,
     pool_status_topic,
     pool_top_cam_det_topic,
     pool_under_cam_det_topic,
@@ -34,6 +34,7 @@ from ros_isaac_env import (  # noqa: E402
 rclpy = None  # type: ignore
 RobotStatus = None  # type: ignore
 PoolStatus = None  # type: ignore
+CleanFloor = None  # type: ignore
 Image = None  # type: ignore
 Trigger = None  # type: ignore
 _DashboardRosNode: Optional[Type[object]] = None
@@ -66,7 +67,7 @@ TankSnapshot = PoolSnapshot
 
 
 def _ensure_ros_imports() -> bool:
-    global rclpy, RobotStatus, PoolStatus, Image, Trigger, _DashboardRosNode, _ROS_IMPORT_ERROR
+    global rclpy, RobotStatus, PoolStatus, CleanFloor, Image, Trigger, _DashboardRosNode, _ROS_IMPORT_ERROR
 
     if rclpy is not None and _DashboardRosNode is not None:
         return True
@@ -79,7 +80,9 @@ def _ensure_ros_imports() -> bool:
 
     try:
         import rclpy as _rclpy
+        from aqua_interfaces.action import CleanFloor as _CleanFloor
         from aqua_interfaces.msg import RobotStatus as _RobotStatus, PoolStatus as _PoolStatus
+        from rclpy.action import ActionClient as _ActionClient
         from rclpy.node import Node
         from sensor_msgs.msg import Image as _Image
         from std_srvs.srv import Trigger as _Trigger
@@ -119,14 +122,15 @@ def _ensure_ros_imports() -> bool:
                         10,
                     )
 
-                    client = self.create_client(
-                        _Trigger, pool_start_clean_floor_service(pool_id)
+                    action_client = _ActionClient(
+                        self, _CleanFloor, pool_clean_floor_action(pool_id)
                     )
-                    self._bridge._pool_start_clients[pool_id] = client
+                    self._bridge._pool_action_clients[pool_id] = action_client
 
         rclpy = _rclpy
         RobotStatus = _RobotStatus
         PoolStatus = _PoolStatus
+        CleanFloor = _CleanFloor
         Image = _Image
         Trigger = _Trigger
         _DashboardRosNode = DashboardRosNode
@@ -137,6 +141,7 @@ def _ensure_ros_imports() -> bool:
         rclpy = None
         RobotStatus = None
         PoolStatus = None
+        CleanFloor = None
         Image = None
         Trigger = None
         _DashboardRosNode = None
@@ -147,7 +152,7 @@ class RosBridge:
     def __init__(self):
         self._lock = threading.Lock()
         self._snapshots: Dict[int, PoolSnapshot] = {pid: PoolSnapshot() for pid in pool_ids()}
-        self._pool_start_clients: Dict[int, Any] = {}
+        self._pool_action_clients: Dict[int, Any] = {}
         self._node: Optional[Any] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -206,7 +211,7 @@ class RosBridge:
             except Exception:
                 pass
             self._node = None
-        self._pool_start_clients.clear()
+        self._pool_action_clients.clear()
 
     def _spin_loop(self):
         while self._running and self._node is not None and rclpy.ok():
@@ -251,7 +256,7 @@ class RosBridge:
         return ""
 
     def call_pool_start(self, pool_id: int) -> str:
-        """Call /{pool_id}/start_clean_floor service to start cleaning a specific pool."""
+        """Send CleanFloor action directly to Controller (bypasses Planner, no fish_count check)."""
         if not self.available:
             return self.unavailable_reason or "ROS2 bridge not available"
 
@@ -262,18 +267,23 @@ class RosBridge:
             if self._global_task_active:
                 return "Global task in progress"
 
-        client = self._pool_start_clients.get(pool_id)
-        if client is None:
-            return f"No service client for pool {pool_id}"
+        action_client = self._pool_action_clients.get(pool_id)
+        if action_client is None:
+            return f"No action client for pool {pool_id}"
 
-        if not client.wait_for_service(timeout_sec=0.5):
-            msg = f"Start service not available: {pool_start_clean_floor_service(pool_id)}"
+        if not action_client.wait_for_server(timeout_sec=0.5):
+            msg = f"CleanFloor action server not available: {pool_clean_floor_action(pool_id)}"
             self._set_error(pool_id, msg)
             return msg
 
-        request = Trigger.Request()
-        future = client.call_async(request)
-        future.add_done_callback(lambda fut, pid=pool_id: self._on_pool_start_response(pid, fut))
+        goal_msg = CleanFloor.Goal()
+        send_goal_future = action_client.send_goal_async(
+            goal_msg,
+            feedback_callback=lambda fb, pid=pool_id: self._on_action_feedback(pid, fb)
+        )
+        send_goal_future.add_done_callback(
+            lambda fut, pid=pool_id: self._on_goal_response(pid, fut)
+        )
 
         with self._lock:
             snap = self._snapshots.get(pool_id)
@@ -293,13 +303,41 @@ class RosBridge:
             with self._lock:
                 self._global_task_active = False
 
-    def _on_pool_start_response(self, pool_id: int, future):
+    def _on_goal_response(self, pool_id: int, future):
+        """Handle goal acceptance/rejection from Controller."""
         try:
-            response = future.result()
-            if not response.success:
-                self._set_error(pool_id, response.message)
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self._set_error(pool_id, "Goal rejected by controller")
+                return
+            result_future = goal_handle.get_result_async()
+            result_future.add_done_callback(
+                lambda fut, pid=pool_id: self._on_action_result(pid, fut)
+            )
         except Exception as exc:
-            self._set_error(pool_id, f"Service call failed: {exc}")
+            self._set_error(pool_id, f"Goal send failed: {exc}")
+
+    def _on_action_feedback(self, pool_id: int, feedback_msg):
+        """Handle CleanFloor action feedback (progress updates)."""
+        with self._lock:
+            snap = self._snapshots.get(pool_id)
+            if snap:
+                snap.clean_progress = feedback_msg.feedback.progress
+
+    def _on_action_result(self, pool_id: int, future):
+        """Handle CleanFloor action result (completion)."""
+        try:
+            result = future.result().result
+            with self._lock:
+                snap = self._snapshots.get(pool_id)
+                if snap:
+                    snap.clean_running = False
+                    snap.clean_progress = 1.0 if result.success else snap.clean_progress
+                    if not result.success:
+                        snap.last_error = "CleanFloor action failed"
+                self._check_task_completion()
+        except Exception as exc:
+            self._set_error(pool_id, f"Action result failed: {exc}")
 
     def _on_pool_status(self, pool_id: int, msg):
         with self._lock:
