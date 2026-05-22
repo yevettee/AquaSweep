@@ -1,8 +1,9 @@
-"""AquaSweep 통합 UI — 수조·로봇·이물질을 단일 LOAD/RUN으로 제어한다."""
+"""AquaSweep 통합 UI — 수조·로봇·이물질을 단일 LOAD/RUN으로 제어한다.
+
+cmd_vel 제어는 ActionGraph를 통해 처리됨 (rclpy import 불필요).
+"""
 
 import importlib
-import sys
-import threading
 from pathlib import Path
 
 import carb
@@ -18,12 +19,6 @@ from isaacsim.robot.wheeled_robots.robots import WheeledRobot
 from omni.usd import StageEventType
 from pxr import UsdGeom
 
-_common = Path(__file__).resolve().parents[2] / "common"
-if str(_common) not in sys.path:
-    sys.path.insert(0, str(_common))
-
-from ros_isaac_env import AQUA_INTERFACES_INSTALL_HINT, configure_isaac_ros_env  # noqa: E402
-
 # ── 각 서브시스템 임포트 ─────────────────────────────────────────────────────
 from water_tank_env_python import scene_builders
 from water_tank_env_python.scenario import WaterTankScenario
@@ -37,12 +32,18 @@ from underwater_robot_python.dingo_physics_sanitize import (
     prepare_dingo_usd_on_stage,
     tag_aquasweep_attrs,
 )
-from underwater_robot_python.scenario import UnderwaterTankJetbotFsm
+from underwater_robot_python.actiongraph_setup import (
+    create_cmd_vel_graph,
+    remove_cmd_vel_graph,
+    graph_exists,
+)
 from underwater_robot_python.suction_system import SuctionSystem
 from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_center_trail_debug
 from underwater_robot_python.global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
     DINGO_USD_FILENAME,
+    DINGO_WHEEL_BASE_M,
+    DINGO_WHEEL_RADIUS_M,
     ROBOT_SPAWN_Z_M,
 )
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
@@ -95,15 +96,10 @@ class UIBuilder:
         self.wrapped_ui_elements = []
         self._timeline = omni.timeline.get_timeline_interface()
 
-        self._ros_executor = None
-        self._ros_thread = None
-        # Per-robot lists — index 0 == robot_1
-        self._cmd_receivers: list = []
-        self._robot_scenarios: list[UnderwaterTankJetbotFsm] = []
+        # Per-robot suction systems — index 0 == robot_1
         self._suctions: list[SuctionSystem] = []
 
         self._on_init()
-        self._start_ros()
 
     # ── extension 콜백 ────────────────────────────────────────────────────────
 
@@ -132,7 +128,9 @@ class UIBuilder:
             ui_elem.cleanup()
         self._water_scenario.teardown_scenario()
         reset_center_trail_debug()
-        self._stop_ros()
+        # Remove ActionGraphs for all robots
+        for i in range(_NUM_ROBOTS):
+            remove_cmd_vel_graph(f"under_robot_{i + 1}")
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
@@ -204,86 +202,13 @@ class UIBuilder:
     def _on_init(self):
         self._water_scenario = WaterTankScenario()
         self._debris_scenario = DebrisScenario()
-
-        self._robot_scenarios = [UnderwaterTankJetbotFsm() for _ in range(_NUM_ROBOTS)]
-        self._suctions = [SuctionSystem() for _ in range(_NUM_ROBOTS)]
-
-        # 이미 ROS가 실행 중이면(stage 리셋 시) 수신기를 재연결
-        for i, receiver in enumerate(self._cmd_receivers):
-            if receiver is not None:
-                self._robot_scenarios[i].set_cmd_vel_receiver(receiver)
-
-    def _start_ros(self) -> None:
-        import traceback
-
-        try:
-            import rclpy as _probe
-            _already_ok = _probe.ok()
-        except ImportError:
-            _already_ok = False
-
-        if not _already_ok:
-            if not configure_isaac_ros_env():
-                carb.log_warn(
-                    f"[aquasweep] ROS env setup failed. {AQUA_INTERFACES_INSTALL_HINT}"
-                )
-                return
-
-        try:
-            import rclpy
-            from rclpy.executors import SingleThreadedExecutor
-            from underwater_robot_python.cmd_vel_receiver import (
-                create_cmd_vel_receiver,
-                get_last_ros_import_error,
-            )
-
-            if not rclpy.ok():
-                rclpy.init()
-
-            self._ros_executor = SingleThreadedExecutor()
-
-        except Exception as exc:
-            carb.log_warn(f"[aquasweep] ROS2 executor init failed: {exc}")
-            carb.log_warn(traceback.format_exc())
-            return
-
-        from underwater_robot_python.cmd_vel_receiver import (
-            create_cmd_vel_receiver,
-            get_last_ros_import_error,
-        )
-
-        self._cmd_receivers = [None] * _NUM_ROBOTS
-        for i in range(_NUM_ROBOTS):
-            robot_name = f"under_robot_{i + 1}"
-            try:
-                receiver = create_cmd_vel_receiver(robot_name)
-                if receiver is not None:
-                    self._ros_executor.add_node(receiver)
-                    self._robot_scenarios[i].set_cmd_vel_receiver(receiver)
-                    self._cmd_receivers[i] = receiver
-                    carb.log_warn(
-                        f"[aquasweep] robot_{i+1} cmd_vel subscriber STARTED — /{robot_name}/cmd_vel"
-                    )
-                else:
-                    carb.log_warn(
-                        f"[aquasweep] robot_{i+1} receiver None — {get_last_ros_import_error()}"
-                    )
-            except Exception as exc:
-                carb.log_warn(f"[aquasweep] robot_{i+1} receiver FAILED: {exc}")
-                carb.log_warn(traceback.format_exc())
-
-        self._ros_thread = threading.Thread(
-            target=self._ros_executor.spin,
-            daemon=True,
-            name="aquasweep_ros_spin",
-        )
-        self._ros_thread.start()
-
-    def _stop_ros(self) -> None:
-        if self._ros_executor is not None:
-            self._ros_executor.shutdown(timeout_sec=1.0)
-            self._ros_executor = None
-        self._cmd_receivers = [None] * _NUM_ROBOTS
+        # Each pool has its own debris particles path
+        self._suctions = [
+            SuctionSystem(particles_prim_path=f"/World/Pools/Pool_{i+1}/Debris/Particles")
+            for i in range(_NUM_ROBOTS)
+        ]
+        # ActionGraph creation is deferred to _on_run() to avoid timing issues
+        self._graphs_created = False
 
     def _setup_scene(self):
         stage = get_current_stage()
@@ -318,13 +243,8 @@ class UIBuilder:
             prepare_dingo_usd_on_stage(prim_path)
             tag_aquasweep_attrs(prim_path)
 
-        for i, (_idx, scene_name, _prim_path, _pos) in enumerate(_robot_specs()):
-            robot = World.instance().scene.get_object(scene_name)
-            if robot is not None:
-                cx, cy = _POOL_CENTERS[i]
-                self._robot_scenarios[i].initialize(robot, PHYSICS_DT, pool_center=(cx, cy))
-                if self._cmd_receivers[i] is not None:
-                    self._robot_scenarios[i].set_cmd_vel_receiver(self._cmd_receivers[i])
+        # ActionGraph creation is deferred to _on_run() to ensure all OmniGraph
+        # node types are fully registered (avoids timing issues during extension load)
 
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
@@ -353,18 +273,21 @@ class UIBuilder:
             suction.reset()
         if hasattr(self, "_suction_label"):
             self._suction_label.text = "0 개"
-        for i, (_idx, scene_name, _prim_path, _pos) in enumerate(_robot_specs()):
-            robot = World.instance().scene.get_object(scene_name)
-            self._robot_scenarios[i].sync_after_world_reset(robot, PHYSICS_DT)
         reset_center_trail_debug()
+        # Reset graph flag so they can be recreated on next RUN if needed
+        self._graphs_created = False
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
 
     def _update_scenario(self, step: float):
+        """매 physics step마다 수조 물리와 흡입 시스템을 실행.
+        
+        cmd_vel 제어는 ActionGraph가 자동으로 처리하므로,
+        여기서는 수조 물리와 debris 흡입만 담당한다.
+        """
         self._water_scenario.update_scenario(step)
 
         for i, (_idx, scene_name, _prim_path, _pos) in enumerate(_robot_specs()):
-            self._robot_scenarios[i].on_physics_step(step)
             try:
                 robot = World.instance().scene.get_object(scene_name)
                 if robot is not None:
@@ -393,7 +316,36 @@ class UIBuilder:
         self._debris_scenario.teardown_scenario()
 
     def _on_run(self):
+        # Create ActionGraphs on first RUN (deferred from _setup_scenario to avoid timing issues)
+        if not self._graphs_created:
+            self._create_action_graphs()
         self._timeline.play()
+
+    def _create_action_graphs(self):
+        """Create ActionGraph for each robot's cmd_vel control."""
+        success_count = 0
+        for idx, _scene_name, prim_path, _pos in _robot_specs():
+            robot_name = f"under_robot_{idx}"
+            # Skip if graph already exists
+            if graph_exists(robot_name):
+                carb.log_info(f"[aquasweep] ActionGraph already exists for {robot_name}")
+                success_count += 1
+                continue
+            graph_path = create_cmd_vel_graph(
+                robot_prim_path=prim_path,
+                robot_name=robot_name,
+                wheel_radius=DINGO_WHEEL_RADIUS_M,
+                wheel_base=DINGO_WHEEL_BASE_M,
+            )
+            if graph_path:
+                carb.log_info(f"[aquasweep] ActionGraph created: {graph_path} for {robot_name}")
+                success_count += 1
+            else:
+                carb.log_warn(f"[aquasweep] Failed to create ActionGraph for {robot_name}")
+        
+        if success_count == _NUM_ROBOTS:
+            self._graphs_created = True
+            carb.log_info(f"[aquasweep] All {_NUM_ROBOTS} ActionGraphs created successfully")
 
     def _on_stop(self):
         self._timeline.pause()
