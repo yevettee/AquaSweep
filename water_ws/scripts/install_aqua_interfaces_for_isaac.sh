@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build aqua_interfaces for Isaac Sim Python 3.11 and install into isaacsim.ros2.bridge.
-set -euo pipefail
+set -eo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WS="$ROOT/water_ws"

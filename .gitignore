@@ -33,7 +33,10 @@ venv/
 env/
 
 # ROS 2 / colcon
+build/
+build_isaac/
 install/
+install_isaac/
 log/
 .colcon/
 
