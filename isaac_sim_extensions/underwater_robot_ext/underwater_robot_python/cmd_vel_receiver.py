@@ -35,6 +35,13 @@ def _ensure_receiver_class() -> bool:
         from geometry_msgs.msg import Twist
         from rclpy.node import Node
 
+        from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
+        _cmdvel_qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+
         class CmdVelReceiver(Node):
             """Subscribes to /<robot_name>/cmd_vel and stores the latest Twist."""
 
@@ -45,7 +52,7 @@ def _ensure_receiver_class() -> bool:
                 self._angular_z = 0.0
 
                 topic = f"/{robot_name}/cmd_vel"
-                self.create_subscription(Twist, topic, self._callback, 10)
+                self.create_subscription(Twist, topic, self._callback, _cmdvel_qos)
                 self.get_logger().info(f"Subscribed to {topic}")
 
             def _callback(self, msg: Twist) -> None:

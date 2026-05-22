@@ -115,6 +115,10 @@ class SpiralPlanner:
     def total_segments(self) -> int:
         return len(self._segments)
 
+    @property
+    def current_segment(self) -> int:
+        return self._seg_idx
+
     def next_cmd(self) -> Tuple[float, float]:
         """Return (v m/s, omega rad/s) for the current step and advance."""
         if self.is_done:
