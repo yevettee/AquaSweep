@@ -7,6 +7,8 @@ Layout rules (drawn fresh from ``random.Random()`` each call):
     the pool.
   * Each sturgeon picks a random shade from a dark-grey palette so the school
     isn't uniformly coloured.
+  * Some sturgeons are spawned "flipped" (belly-up) near the water surface,
+    simulating dead/sick fish floating.
 
 Prim layout:
     /World/Pools/Pool_<n>/Sturgeon_<m>   (m = 1..N for that pool)
@@ -48,7 +50,14 @@ _RADIUS_MAX = params.TANK_RADIUS - 1.0  # ≈ 3.0 m, well clear of the wall
 
 # Z spawn range — full water column from 0.30 m up to water surface.
 _SPAWN_Z_MIN = 0.30
-_SPAWN_Z_MAX = params.WATER_LEVEL    # 1.20 m
+_SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
+
+# ── Flipped (belly-up) sturgeon settings ──────────────────────────────────────
+_FLIP_PROBABILITY = 0.5             # 25% chance each fish is flipped
+_FLIPPED_Z_MIN = params.WATER_LEVEL - 0.07  # slightly below surface
+_FLIPPED_Z_MAX = params.WATER_LEVEL - 0.05  # nearly at surface (floating)
+_FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
+_FLIP_Z_OFFSET = 0.13                # compensate for pivot offset when flipped
 
 # ── Colour palette (dark → near-current) ─────────────────────────────────────
 _COLOR_DARK    = (0.02, 0.02, 0.03)  # near-black
@@ -222,6 +231,7 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             continue
 
         n_fish = rng.randint(_FISH_PER_POOL_MIN, _FISH_PER_POOL_MAX)
+        n_flipped_in_pool = 0
         for fish_id in range(1, n_fish + 1):
             sturgeon_path = f"{pool_path}/Sturgeon_{fish_id:02d}"
             if stage.GetPrimAtPath(sturgeon_path).IsValid():
@@ -232,8 +242,18 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             radius = rng.uniform(_RADIUS_MIN, _RADIUS_MAX)
             local_x = radius * math.cos(angle)
             local_y = radius * math.sin(angle)
-            spawn_z = rng.uniform(_SPAWN_Z_MIN, _SPAWN_Z_MAX)
             yaw_deg = rng.uniform(0.0, 360.0)
+
+            # Determine if this fish is flipped (belly-up, floating near surface).
+            is_flipped = rng.random() < _FLIP_PROBABILITY
+            if is_flipped:
+                # Add Z offset to compensate for pivot point shift after RotateX(180)
+                spawn_z = rng.uniform(_FLIPPED_Z_MIN, _FLIPPED_Z_MAX) + _FLIP_Z_OFFSET
+                roll_deg = _FLIP_ROLL_DEG
+                n_flipped_in_pool += 1
+            else:
+                spawn_z = rng.uniform(_SPAWN_Z_MIN, _SPAWN_Z_MAX)
+                roll_deg = 0.0
 
             sturgeon_xform = UsdGeom.Xform.Define(stage, Sdf.Path(sturgeon_path))
             sturgeon_xform.GetPrim().GetReferences().AddReference(asset_url)
@@ -254,12 +274,28 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             # Force-override the referenced asset's xformOpOrder with an
             # explicit empty array, then add suffixed ops so the asset's
             # animated xformOp:translate timeSamples can't override our values.
+            # Order: Translate → Yaw → Flip → Roll → Scale
+            # (Roll applied in local coords after flip, for body sway animation)
             xf.GetXformOpOrderAttr().Set([])
             xf.AddTranslateOp(opSuffix="anim").Set(Gf.Vec3d(local_x, local_y, spawn_z))
-            xf.AddRotateZOp(opSuffix="anim").Set(yaw_deg)
+            xf.AddRotateZOp(opSuffix="yaw").Set(yaw_deg)
+            xf.AddRotateXOp(opSuffix="flip").Set(roll_deg)  # flip belly-up if non-zero
+            xf.AddRotateZOp(opSuffix="roll").Set(0.0)  # body roll for alive fish (local Z)
             xf.AddScaleOp(opSuffix="anim").Set(
                 Gf.Vec3f(scale_factor, scale_factor, scale_factor)
             )
+
+            # Store flipped state as custom attribute for animator to read
+            prim = sturgeon_xform.GetPrim()
+            prim.CreateAttribute(
+                "aquasweep:isFlipped", Sdf.ValueTypeNames.Bool
+            ).Set(is_flipped)
+
+            # Add semantic label for vision model training (segmentation masks)
+            semantic_class = "sturgeon_dead" if is_flipped else "sturgeon_alive"
+            prim.CreateAttribute(
+                "aquasweep:semanticClass", Sdf.ValueTypeNames.String
+            ).Set(semantic_class)
 
             _bind_random_palette_material(
                 stage, sturgeon_xform.GetPrim(), palette, rng
@@ -267,7 +303,8 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             total_placed += 1
 
         carb.log_info(
-            f"[sturgeon_spawner] Pool_{pool_idx + 1}: spawned {n_fish} sturgeons"
+            f"[sturgeon_spawner] Pool_{pool_idx + 1}: spawned {n_fish} sturgeons "
+            f"({n_flipped_in_pool} flipped)"
         )
 
     return total_placed

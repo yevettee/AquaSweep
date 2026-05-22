@@ -25,39 +25,62 @@ from pxr import Gf, UsdGeom
 from . import params
 from .scene_builders import POOLS_ROOT
 
-# ── Motion bounds ────────────────────────────────────────────────────────────
-_Z_MIN = 0.30
-_Z_MAX = params.WATER_LEVEL          # 1.20 m
-_Z_MID = (_Z_MIN + _Z_MAX) / 2.0     # 0.75
-_Z_AMP = (_Z_MAX - _Z_MIN) / 2.0     # 0.45 → sin oscillates exactly [0.30, 1.20]
+# ── Motion bounds for ALIVE sturgeons ─────────────────────────────────────────
+_Z_MIN_ALIVE = 0.30
+_Z_MAX_ALIVE = 0.80                  # stay deeper in the water
+_Z_MID_ALIVE = (_Z_MIN_ALIVE + _Z_MAX_ALIVE) / 2.0
+_Z_AMP_ALIVE = (_Z_MAX_ALIVE - _Z_MIN_ALIVE) / 2.0
 
-# Per-fish radius is sampled inside [_RADIUS_MIN, _RADIUS_MAX] then breathes by
-# ±_RADIUS_AMP. Pool radius is 4 m, fish length ≈ 0.9 m, so we stay clear of
-# the wall.
+_OMEGA_MIN_ALIVE = 0.16              # rad/s ≈ 9.2 °/s (2x faster)
+_OMEGA_MAX_ALIVE = 0.44              # rad/s ≈ 25 °/s (2x faster)
+
+# Body roll for alive fish (side-to-side swimming motion)
+_ROLL_AMP_DEG = 35.0                 # ±35 degrees (exaggerated swim)
+_ROLL_FREQ_MIN = 3                 # faster roll for swimming feel
+_ROLL_FREQ_MAX = 5
+
+# ── Motion bounds for FLIPPED (dead/sick) sturgeons ───────────────────────────
+_Z_MIN_FLIPPED = params.WATER_LEVEL - 0.15   # 1.05 m (near surface)
+_Z_MAX_FLIPPED = params.WATER_LEVEL - 0.05   # 1.15 m (nearly at surface)
+_Z_MID_FLIPPED = (_Z_MIN_FLIPPED + _Z_MAX_FLIPPED) / 2.0
+_Z_AMP_FLIPPED = 0.03                # minimal bobbing
+
+_OMEGA_MIN_FLIPPED = 0.05           # very slow drift
+_OMEGA_MAX_FLIPPED = 0.1
+
+# ── Shared radius bounds ──────────────────────────────────────────────────────
 _RADIUS_MIN = 0.6
 _RADIUS_MAX = 3.0
 _RADIUS_AMP = 0.25
 
-# Slow swim speed envelope. Both signs are used (some CCW, some CW).
-_OMEGA_MIN = 0.08      # rad/s ≈ 4.6 °/s
-_OMEGA_MAX = 0.22      # rad/s ≈ 12.6 °/s
-
 
 class _SturgeonCache:
-    __slots__ = ("translate_op", "rotate_op", "prim", "params")
+    __slots__ = ("translate_op", "rotate_op", "roll_op", "prim", "params", "is_flipped")
 
-    def __init__(self, translate_op, rotate_op, prim, motion_params: dict):
+    def __init__(
+        self,
+        translate_op,
+        rotate_op,
+        roll_op,
+        prim,
+        motion_params: dict,
+        is_flipped: bool,
+    ):
         self.translate_op = translate_op
         self.rotate_op = rotate_op
+        self.roll_op = roll_op
         self.prim = prim
         self.params = motion_params
+        self.is_flipped = is_flipped
 
 
-def _params_from_path(prim_path_str: str) -> dict:
+def _params_from_path(prim_path_str: str, is_flipped: bool) -> dict:
     """Deterministic per-fish motion params keyed off the prim path.
 
     MD5 is used (not Python's ``hash``) because the built-in hash is salted
     per process and would give different results across Isaac Sim launches.
+
+    Parameters differ for flipped (dead/sick) vs alive fish.
     """
     digest = hashlib.md5(prim_path_str.encode("utf-8")).digest()
 
@@ -68,15 +91,27 @@ def _params_from_path(prim_path_str: str) -> dict:
         return low + u * (high - low)
 
     direction = 1.0 if (digest[0] & 0x01) else -1.0
+
+    if is_flipped:
+        omega_min, omega_max = _OMEGA_MIN_FLIPPED, _OMEGA_MAX_FLIPPED
+        z_mid, z_amp = _Z_MID_FLIPPED, _Z_AMP_FLIPPED
+    else:
+        omega_min, omega_max = _OMEGA_MIN_ALIVE, _OMEGA_MAX_ALIVE
+        z_mid, z_amp = _Z_MID_ALIVE, _Z_AMP_ALIVE
+
     return {
         "angle0":      uniform(1, 3, 0.0, 2.0 * math.pi),
-        "omega":       direction * uniform(3, 5, _OMEGA_MIN, _OMEGA_MAX),
+        "omega":       direction * uniform(3, 5, omega_min, omega_max),
         "radius_base": uniform(5, 7, _RADIUS_MIN, _RADIUS_MAX),
         "radius_amp":  uniform(7, 8, 0.0, _RADIUS_AMP),
         "r_freq":      uniform(8, 10, 0.15, 0.45),
         "r_phase":     uniform(10, 12, 0.0, 2.0 * math.pi),
         "z_freq":      uniform(12, 14, 0.08, 0.25),
         "z_phase":     uniform(14, 16, 0.0, 2.0 * math.pi),
+        "z_mid":       z_mid,
+        "z_amp":       z_amp,
+        "roll_freq":   uniform(0, 2, _ROLL_FREQ_MIN, _ROLL_FREQ_MAX),
+        "roll_phase":  uniform(2, 4, 0.0, 2.0 * math.pi),
     }
 
 
@@ -116,7 +151,7 @@ class SturgeonAnimator:
             )
             x = radius * math.cos(angle)
             y = radius * math.sin(angle)
-            z = _Z_MID + _Z_AMP * math.sin(t * p["z_freq"] + p["z_phase"])
+            z = p["z_mid"] + p["z_amp"] * math.sin(t * p["z_freq"] + p["z_phase"])
 
             # Yaw aligned with the orbit tangent — sign comes from omega so
             # CCW and CW swimmers both face forward.
@@ -125,6 +160,11 @@ class SturgeonAnimator:
 
             s.translate_op.Set(Gf.Vec3d(x, y, z))
             s.rotate_op.Set(yaw_deg)
+
+            # Body roll for alive fish only (side-to-side swimming motion)
+            if s.roll_op is not None and not s.is_flipped:
+                roll_deg = _ROLL_AMP_DEG * math.sin(t * p["roll_freq"] + p["roll_phase"])
+                s.roll_op.Set(roll_deg)
 
     # ── private ──────────────────────────────────────────────────────────────
     @staticmethod
@@ -151,18 +191,35 @@ class SturgeonAnimator:
     def _cache_for_prim(prim) -> _SturgeonCache | None:
         xform = UsdGeom.Xformable(prim)
         translate_op = None
-        rotate_op = None
+        yaw_op = None
+        roll_op = None
         for op in xform.GetOrderedXformOps():
             op_type = op.GetOpType()
+            op_name = op.GetName()
             if op_type == UsdGeom.XformOp.TypeTranslate and translate_op is None:
                 translate_op = op
-            elif op_type == UsdGeom.XformOp.TypeRotateZ and rotate_op is None:
-                rotate_op = op
-        if translate_op is None or rotate_op is None:
+            elif op_type == UsdGeom.XformOp.TypeRotateZ:
+                # Distinguish yaw vs roll by opSuffix in the name
+                if "yaw" in op_name and yaw_op is None:
+                    yaw_op = op
+                elif "roll" in op_name and roll_op is None:
+                    roll_op = op
+                elif yaw_op is None:
+                    # Fallback for legacy prims without suffix
+                    yaw_op = op
+        if translate_op is None or yaw_op is None:
             return None
+
+        is_flipped = False
+        flipped_attr = prim.GetAttribute("aquasweep:isFlipped")
+        if flipped_attr and flipped_attr.IsValid():
+            is_flipped = bool(flipped_attr.Get())
+
         return _SturgeonCache(
             translate_op=translate_op,
-            rotate_op=rotate_op,
+            rotate_op=yaw_op,
+            roll_op=roll_op,
             prim=prim,
-            motion_params=_params_from_path(str(prim.GetPath())),
+            motion_params=_params_from_path(str(prim.GetPath()), is_flipped),
+            is_flipped=is_flipped,
         )

@@ -1,5 +1,6 @@
 """AquaSweep 통합 UI — 수조·로봇·이물질을 단일 LOAD/RUN으로 제어한다."""
 
+import importlib
 import sys
 import threading
 from pathlib import Path
@@ -28,6 +29,7 @@ from water_tank_env_python import scene_builders
 from water_tank_env_python.scenario import WaterTankScenario
 
 from water_tank_env_python import sturgeon_spawner
+importlib.reload(sturgeon_spawner)  # hot-reload support
 
 from debris_python.scenario import DebrisScenario
 

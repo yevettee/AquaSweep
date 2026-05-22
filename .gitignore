@@ -33,12 +33,19 @@ venv/
 env/
 
 # ROS 2 / colcon
+<<<<<<< HEAD
 build/
 build_isaac/
 install/
 install_isaac/
 log/
 .colcon/
+=======
+install/
+log/
+.colcon/
+COLCON_IGNORE
+>>>>>>> 35beff877a6eea95162173ae159a3fd7c2562eb0
 
 # OS
 Thumbs.db
@@ -46,3 +53,7 @@ Thumbs.db
 # Logs / temp
 *.log
 *.tmp
+<<<<<<< HEAD
+=======
+*.bak
+>>>>>>> 35beff877a6eea95162173ae159a3fd7c2562eb0
