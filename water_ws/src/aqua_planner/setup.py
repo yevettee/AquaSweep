@@ -25,7 +25,6 @@ setup(
     entry_points={
         'console_scripts': [
             'planner_node = aqua_planner.planner_node:main',
-            'mockup_vision_publisher = aqua_planner.mockup_vision_publisher:main',
         ],
     },
 )

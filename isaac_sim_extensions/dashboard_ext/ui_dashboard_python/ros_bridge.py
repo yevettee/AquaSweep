@@ -33,7 +33,7 @@ from ros_isaac_env import (  # noqa: E402
 
 rclpy = None  # type: ignore
 RobotStatus = None  # type: ignore
-TankStatus = None  # type: ignore
+PoolStatus = None  # type: ignore
 Image = None  # type: ignore
 Trigger = None  # type: ignore
 _DashboardRosNode: Optional[Type[object]] = None
@@ -66,7 +66,7 @@ TankSnapshot = PoolSnapshot
 
 
 def _ensure_ros_imports() -> bool:
-    global rclpy, RobotStatus, TankStatus, Image, Trigger, _DashboardRosNode, _ROS_IMPORT_ERROR
+    global rclpy, RobotStatus, PoolStatus, Image, Trigger, _DashboardRosNode, _ROS_IMPORT_ERROR
 
     if rclpy is not None and _DashboardRosNode is not None:
         return True
@@ -79,7 +79,7 @@ def _ensure_ros_imports() -> bool:
 
     try:
         import rclpy as _rclpy
-        from aqua_interfaces.msg import RobotStatus as _RobotStatus, TankStatus as _TankStatus
+        from aqua_interfaces.msg import RobotStatus as _RobotStatus, PoolStatus as _PoolStatus
         from rclpy.node import Node
         from sensor_msgs.msg import Image as _Image
         from std_srvs.srv import Trigger as _Trigger
@@ -95,7 +95,7 @@ def _ensure_ros_imports() -> bool:
 
                 for pool_id in pool_ids():
                     self.create_subscription(
-                        _TankStatus,
+                        _PoolStatus,
                         pool_status_topic(pool_id),
                         lambda msg, pid=pool_id: self._bridge._on_pool_status(pid, msg),
                         10,
@@ -126,7 +126,7 @@ def _ensure_ros_imports() -> bool:
 
         rclpy = _rclpy
         RobotStatus = _RobotStatus
-        TankStatus = _TankStatus
+        PoolStatus = _PoolStatus
         Image = _Image
         Trigger = _Trigger
         _DashboardRosNode = DashboardRosNode
@@ -136,7 +136,7 @@ def _ensure_ros_imports() -> bool:
         _ROS_IMPORT_ERROR = str(exc)
         rclpy = None
         RobotStatus = None
-        TankStatus = None
+        PoolStatus = None
         Image = None
         Trigger = None
         _DashboardRosNode = None

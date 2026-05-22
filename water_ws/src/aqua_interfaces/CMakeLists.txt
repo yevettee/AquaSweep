@@ -15,8 +15,8 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotStatus.msg"
-  "msg/TankStatus.msg"
-  "msg/TankPhysicalVariables.msg"
+  "msg/PoolStatus.msg"
+  "msg/PoolPhysicalVariables.msg"
   "action/CleanFloor.action"
   "action/CleanWall.action"
   "action/MoveFish.action"
