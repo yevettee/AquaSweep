@@ -1,6 +1,0 @@
-/home/woody/AquaSweep/water_ws/build_isaac/aqua_interfaces/rosidl_adapter/aqua_interfaces:msg/RobotStatus.idl
-/home/woody/AquaSweep/water_ws/build_isaac/aqua_interfaces/rosidl_adapter/aqua_interfaces:msg/PoolStatus.idl
-/home/woody/AquaSweep/water_ws/build_isaac/aqua_interfaces/rosidl_adapter/aqua_interfaces:msg/PoolPhysicalVariables.idl
-/home/woody/AquaSweep/water_ws/build_isaac/aqua_interfaces/rosidl_adapter/aqua_interfaces:action/CleanFloor.idl
-/home/woody/AquaSweep/water_ws/build_isaac/aqua_interfaces/rosidl_adapter/aqua_interfaces:action/CleanWall.idl
-/home/woody/AquaSweep/water_ws/build_isaac/aqua_interfaces/rosidl_adapter/aqua_interfaces:action/MoveFish.idl

@@ -1,7 +1,0 @@
-# Goal (trigger — no fields)
----
-# Result
-bool success
----
-# Feedback
-float32 progress
