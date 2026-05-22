@@ -35,29 +35,33 @@ class DebrisSystem:
     # as the particle system's sim_owner.
     _PREFERRED_SCENE_PATHS = ("/physicsScene", "/World/PhysicsScene")
 
-    # Per-particle colour is sampled uniformly between these two RGB endpoints.
-    # The "brown" end matches the original single-colour debris (#5C3D1E);
-    # the "black" end is near-black, giving the school an organic grime look.
-    _COLOR_BROWN = (0.36, 0.24, 0.12)   # #5C3D1E
-    _COLOR_BLACK = (0.04, 0.04, 0.04)
+    # Single near-black dark-brown debris colour (#221911).
+    _COLOR_RGB = (0.13, 0.10, 0.06)
 
-    def __init__(self, count: int = 10, radius: float = 0.015,
-                 color_hex: str = "#5C3D1E", tank_range: float = 3.8,
+    def __init__(self, count_range: tuple[int, int] = (30, 70),
+                 radius: float = 0.05,
+                 color_hex: str = "#221911", tank_range: float = 3.8,
                  z_floor: float = 0.0,
                  pool_centers: list[tuple[float, float]] | None = None):
-        """``count`` is per-pool. ``pool_centers`` indexes Pool_1..Pool_N.
+        """``count_range`` is the inclusive (min, max) of debris per pool;
+        each pool draws its own random count. ``pool_centers`` indexes
+        Pool_1..Pool_N.
 
-        ``color_hex`` is kept for backwards compatibility but is no longer the
-        single colour — every particle is randomly tinted between brown and
-        black via a per-vertex ``displayColor`` primvar.
+        ``color_hex`` is kept for backwards compatibility / logging — every
+        particle is rendered with a single ``displayColor`` primvar set to
+        ``_COLOR_RGB``.
         """
-        self.count       = count
+        lo, hi = count_range
+        if lo > hi:
+            lo, hi = hi, lo
+        self.count_range = (max(1, int(lo)), max(1, int(hi)))
         self.radius      = radius
         self.color_hex   = color_hex  # retained for back-compat / logging
         self.tank_range  = tank_range
         self.z_floor     = z_floor
         self.pool_centers = pool_centers if pool_centers else [(0.0, 0.0)]
         self._particle_paths: list[str] = []
+        self._pool_counts: list[int] = []
         self._spawned    = False
 
     def spawn(self, stage) -> bool:
@@ -75,18 +79,24 @@ class DebrisSystem:
                 _tl.stop()
 
             scene_path = self._ensure_physics_scene(stage)
+            rng = np.random.default_rng()
+            lo, hi = self.count_range
+            self._pool_counts = []
             for idx, _center in enumerate(self.pool_centers, start=1):
+                pool_count = int(rng.integers(lo, hi + 1))
+                self._pool_counts.append(pool_count)
                 sys_path = self.pool_particle_system(idx)
                 pts_path = self.pool_particles(idx)
                 self._define_particle_system_at(stage, scene_path, sys_path)
-                self._add_particles_at(stage, sys_path, pts_path)
+                self._add_particles_at(stage, sys_path, pts_path, pool_count)
                 self._apply_material_to(stage, pts_path)
                 self._particle_paths.append(pts_path)
 
             self._spawned = True
+            total = sum(self._pool_counts)
             carb.log_info(
-                f"[debris] {self.count}개 × {len(self.pool_centers)}풀 = "
-                f"{self.count * len(self.pool_centers)}개 파티클 스폰 완료 "
+                f"[debris] {self._pool_counts} (per-pool, range "
+                f"{lo}~{hi}) = total {total} 파티클 스폰 완료 "
                 f"(scene={scene_path})"
             )
 
@@ -111,6 +121,7 @@ class DebrisSystem:
             if prim and prim.IsValid():
                 stage.RemovePrim(root)
         self._particle_paths.clear()
+        self._pool_counts.clear()
         self._spawned = False
 
     @property
@@ -194,10 +205,10 @@ class DebrisSystem:
         sim_owner = ps.CreateSimulationOwnerRel()
         sim_owner.SetTargets([Sdf.Path(scene_path)])
 
-    def _add_particles_at(self, stage, system_path: str, particles_path: str) -> None:
-        """단일 풀에 self.count 개 파티클을 풀-로컬 좌표로 스폰."""
+    def _add_particles_at(self, stage, system_path: str, particles_path: str, count: int) -> None:
+        """단일 풀에 ``count`` 개 파티클을 풀-로컬 좌표로 스폰."""
         rng   = np.random.default_rng()
-        n     = self.count
+        n     = count
         # sqrt 트릭으로 반경 균등 분포
         r     = np.sqrt(rng.uniform(0.0, self.tank_range ** 2, n))
         theta = rng.uniform(0.0, 2.0 * np.pi, n)
@@ -241,35 +252,24 @@ class DebrisSystem:
             )
 
     def _apply_material_to(self, stage, particles_path: str) -> None:
-        """Per-particle random colour via ``primvars:displayColor`` (vertex interp).
-
-        Each particle's RGB is independently lerp-sampled between
-        ``_COLOR_BROWN`` and ``_COLOR_BLACK``. Hydra renders the points using
-        the displayColor primvar directly — no UsdShade.Material binding is
-        needed, and any previous binding is left untouched (Points fall back
-        to displayColor when no surface material drives them).
+        """Single near-black dark-brown colour via ``primvars:displayColor``
+        (constant interp). Hydra renders the Points using the primvar
+        directly — no UsdShade.Material binding is needed.
         """
         pts = UsdGeom.Points.Get(stage, particles_path)
         if not pts:
             return
 
-        rng = np.random.default_rng()
-        brown = np.array(self._COLOR_BROWN, dtype=float)
-        black = np.array(self._COLOR_BLACK, dtype=float)
-        weights = rng.uniform(0.0, 1.0, self.count)
-        colors_np = black + weights[:, None] * (brown - black)
-
-        colors = Vt.Vec3fArray([
-            Gf.Vec3f(float(colors_np[i, 0]),
-                     float(colors_np[i, 1]),
-                     float(colors_np[i, 2]))
-            for i in range(self.count)
+        single_color = Vt.Vec3fArray([
+            Gf.Vec3f(float(self._COLOR_RGB[0]),
+                     float(self._COLOR_RGB[1]),
+                     float(self._COLOR_RGB[2]))
         ])
 
         primvars_api = UsdGeom.PrimvarsAPI(pts.GetPrim())
         display_color = primvars_api.CreatePrimvar(
             "displayColor",
             Sdf.ValueTypeNames.Color3fArray,
-            interpolation=UsdGeom.Tokens.vertex,
+            interpolation=UsdGeom.Tokens.constant,
         )
-        display_color.Set(colors)
+        display_color.Set(single_color)

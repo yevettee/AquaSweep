@@ -1,5 +1,5 @@
 [package]
-version = "0.4.2"
+version = "0.4.4"
 category = "Simulation"
 title = "water.tank.env"
 description = "Cylindrical water tank scene + per-step buoyancy/drag applier for the AquaSweep cleaning-robot project."

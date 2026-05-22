@@ -17,7 +17,8 @@ class UIBuilder:
         self.frames = []
         self.wrapped_ui_elements = []
         self._scenario = DebrisScenario()
-        self._count_model: ui.SimpleIntModel | None = None
+        self._count_min_model: ui.SimpleIntModel | None = None
+        self._count_max_model: ui.SimpleIntModel | None = None
         self._radius_model: ui.SimpleFloatModel | None = None
 
     def on_menu_callback(self):
@@ -42,9 +43,14 @@ class UIBuilder:
         with config_frame:
             with ui.VStack(style=get_style(), spacing=5, height=0):
                 with ui.HStack(height=24):
-                    ui.Label("Count", width=80)
-                    self._count_model = ui.SimpleIntModel(gv.DEBRIS_COUNT)
-                    ui.IntDrag(model=self._count_model, min=1, max=500)
+                    ui.Label("Count Min", width=80)
+                    self._count_min_model = ui.SimpleIntModel(gv.DEBRIS_COUNT_MIN)
+                    ui.IntDrag(model=self._count_min_model, min=1, max=500)
+
+                with ui.HStack(height=24):
+                    ui.Label("Count Max", width=80)
+                    self._count_max_model = ui.SimpleIntModel(gv.DEBRIS_COUNT_MAX)
+                    ui.IntDrag(model=self._count_max_model, min=1, max=500)
 
                 with ui.HStack(height=24):
                     ui.Label("Radius (m)", width=80)
@@ -71,9 +77,12 @@ class UIBuilder:
     def _on_spawn(self):
         if self._scenario.is_spawned():
             return
-        count = self._count_model.get_value_as_int() if self._count_model else gv.DEBRIS_COUNT
+        lo = (self._count_min_model.get_value_as_int()
+              if self._count_min_model else gv.DEBRIS_COUNT_MIN)
+        hi = (self._count_max_model.get_value_as_int()
+              if self._count_max_model else gv.DEBRIS_COUNT_MAX)
         radius = self._radius_model.get_value_as_float() if self._radius_model else gv.DEBRIS_RADIUS
-        self._scenario.setup_scenario(count=count, radius=radius)
+        self._scenario.setup_scenario(count_range=(lo, hi), radius=radius)
         self._refresh_button_states()
 
     def _on_clear(self):
