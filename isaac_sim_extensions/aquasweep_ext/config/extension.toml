@@ -10,6 +10,7 @@ writeTarget.kit = true
 "isaacsim.core.api" = {}
 "isaacsim.gui.components" = {}
 "isaacsim.robot.wheeled_robots" = {}
+"isaacsim.core.nodes" = {}
 "omni.kit.uiapp" = {}
 "omni.physx" = {}
 "isaacsim.ros2.bridge" = {}

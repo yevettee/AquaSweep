@@ -30,5 +30,5 @@
 - controller node 쪽 로직은 절대 수정하지마. 다른 개발자가 작업중이라 충돌 생김. 연결이 애매하면 일단 명시만 해두어도 OK. 
 
 
-# Ros2 통신 entity 및 네이밍 참고
+# Ros2 통신 entity 및 네이밍 참고. 반드시 룰을 따를 것. 참고로 TankStatus  기준으로 해도 됨. 
 /home/woody/AquaSweep/docs/ROS2 Communication Guide 367f3b5807d480ffb41ad03b647ad3f3.md

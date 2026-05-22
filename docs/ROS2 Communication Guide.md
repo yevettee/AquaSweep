@@ -178,7 +178,7 @@ world/
 
 ---
 
-### TankStatus
+### PoolStatus
 
 **Topic:** `/pool_1/status`
 
@@ -191,7 +191,7 @@ world/
 
 ---
 
-### TankPhysicalVariables
+### PoolPhysicalVariables
 
 **Topic:** `/pool_1/physical_variables`
 
@@ -226,16 +226,15 @@ world/
 
 | Topic | Publisher | Subscribers | 우선순위 |
 | --- | --- | --- | --- |
-| `/pool_1/status` | `water_tank_env/` | dashboard, planner | **1차 필수** |
+| `/pool_1/status` | detection node  | dashboard, planner | **1차 필수** |
 | `/pool_1/under_img_raw` | `under_cam_ext/` | detection | **1차 필수** |
-| `/pool_1/under_img_det` | detection node | planner, dashboard, controller | **1차 필수** |
+| `/pool_1/under_img_det` | detection node | dashboard | **1차 필수** |
 | `/pool_1/top_img_raw` | `top_cam_ext/` | detection | **1차 필수** |
-| `/pool_1/top_img_det` | detection node | planner, dashboard | **1차 필수** |
 | `/pool_1/physical_variables`  | `water_tank_env/` or `underwater_robot/`  
 **** 확인 필요 **** | controller | **1차 필수** |
 | `/under_robot_1/status` | `underwater_robot_env/` | dashboard, planner | **1차 필수** |
 | `/under_robot_1/cmd_vel` | controller node | `underwater_robot_env/` | **1차 필수** |
-| `/under_robot_1/joint_state` | `under_cam_ext/` | controller node | 확장 |
+| `/under_robot_1/joint_state` | `underwater_robot_ext/` | controller node | 확장 |
 | `/under_robot_1/planned_path` | controller node | `underwater_robot_env/` | 확장 |
 | `/under_robot_1/imu` | `underwater_robot_env/` | controller | 확장 |
 | `/under_robot_1/odom` | `underwater_robot_env/` | controller | 확장 |

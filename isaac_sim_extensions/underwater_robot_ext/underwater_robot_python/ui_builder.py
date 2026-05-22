@@ -13,18 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-import threading
 from pathlib import Path
-
-_common = Path(__file__).resolve().parents[2] / "common"
-if str(_common) not in sys.path:
-    sys.path.insert(0, str(_common))
-
-from ros_isaac_env import (  # noqa: E402
-    AQUA_INTERFACES_INSTALL_HINT,
-    configure_isaac_ros_env,
-)
 
 import carb
 import numpy as np
@@ -43,12 +32,14 @@ from pxr import Sdf, UsdLux
 from .global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
     DINGO_USD_FILENAME,
+    DINGO_WHEEL_BASE_M,
+    DINGO_WHEEL_RADIUS_M,
     ROBOT_PRIM_PATH,
     ROBOT_SCENE_NAME,
     ROBOT_SPAWN_Z_M,
 )
 from .dingo_physics_sanitize import prepare_dingo_usd_on_stage, tag_aquasweep_attrs
-from .scenario import UnderwaterTankJetbotFsm
+from .actiongraph_setup import create_cmd_vel_graph, remove_cmd_vel_graph
 from .suction_system import SuctionSystem
 from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
 
@@ -65,13 +56,8 @@ class UIBuilder:
         # Get access to the timeline to control stop/pause/play programmatically
         self._timeline = omni.timeline.get_timeline_interface()
 
-        self._ros_executor = None
-        self._ros_thread = None
-        self._cmd_receiver = None
-
         # Run initialization for the provided example
         self._on_init()
-        self._start_ros()
 
     ###################################################################################
     #           The Functions Below Are Called Automatically By extension.py
@@ -133,7 +119,8 @@ class UIBuilder:
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
         reset_center_trail_debug()
-        self._stop_ros()
+        # ActionGraph is automatically cleaned up when stage is closed
+        remove_cmd_vel_graph("under_robot_1")
 
     def build_ui(self):
         """
@@ -191,67 +178,7 @@ class UIBuilder:
     ######################################################################################
 
     def _on_init(self):
-        self._scenario = UnderwaterTankJetbotFsm()
-        self._suction  = SuctionSystem()
-        # Re-attach receiver if ROS is already running (called on stage reset)
-        if self._cmd_receiver is not None:
-            self._scenario.set_cmd_vel_receiver(self._cmd_receiver)
-
-    def _start_ros(self) -> None:
-        import os
-        import traceback
-
-        carb.log_warn("[underwater.robot] _start_ros() ENTER")
-
-        if not configure_isaac_ros_env():
-            carb.log_warn(
-                f"[underwater.robot] ROS env setup failed. {AQUA_INTERFACES_INSTALL_HINT}"
-            )
-            return
-
-        try:
-            import rclpy
-            from rclpy.executors import SingleThreadedExecutor
-
-            from .cmd_vel_receiver import create_cmd_vel_receiver, get_last_ros_import_error
-
-            carb.log_warn(f"[underwater.robot] rclpy imported from: {rclpy.__file__}")
-            carb.log_warn(
-                "[underwater.robot] ROS_DOMAIN_ID=%s RMW=%s"
-                % (os.environ.get("ROS_DOMAIN_ID", "0"), os.environ.get("RMW_IMPLEMENTATION", "?"))
-            )
-
-            if not rclpy.ok():
-                rclpy.init()
-
-            self._cmd_receiver = create_cmd_vel_receiver("under_robot_1")
-            if self._cmd_receiver is None:
-                carb.log_warn(
-                    "[underwater.robot] cmd_vel receiver unavailable — "
-                    f"{get_last_ros_import_error() or 'unknown import error'}"
-                )
-                return
-
-            self._ros_executor = SingleThreadedExecutor()
-            self._ros_executor.add_node(self._cmd_receiver)
-            self._ros_thread = threading.Thread(
-                target=self._ros_executor.spin,
-                daemon=True,
-                name="aquasweep_ros_spin",
-            )
-            self._ros_thread.start()
-            self._scenario.set_cmd_vel_receiver(self._cmd_receiver)
-            carb.log_warn("[underwater.robot] ROS2 cmd_vel subscriber STARTED OK")
-
-        except Exception as exc:
-            carb.log_warn(f"[underwater.robot] ROS2 init failed: {exc}")
-            carb.log_warn(traceback.format_exc())
-
-    def _stop_ros(self) -> None:
-        if self._ros_executor is not None:
-            self._ros_executor.shutdown(timeout_sec=1.0)
-            self._ros_executor = None
-        self._cmd_receiver = None
+        self._suction = SuctionSystem()
 
     def _add_light_to_stage(self):
         """
@@ -304,14 +231,24 @@ class UIBuilder:
         The user may assume that their assets have been loaded by their setup_scene_fn callback, that
         their objects are properly initialized, and that the timeline is paused on timestep 0.
 
-        Tank-cleaning FSM for Dingo differential drive (data/dingo_transformed.usd).
+        Sets up ActionGraph for ROS2 cmd_vel control of the Dingo differential drive robot.
         """
-        world = World.instance()
         reset_center_trail_debug()
         prepare_dingo_usd_on_stage(ROBOT_PRIM_PATH)
         tag_aquasweep_attrs(ROBOT_PRIM_PATH)
-        robot = world.scene.get_object(ROBOT_SCENE_NAME)
-        self._scenario.initialize(robot, PHYSICS_DT)
+
+        # Create ActionGraph for ROS2 cmd_vel subscription
+        # This replaces the previous rclpy-based approach with Isaac Sim's native ROS2 bridge
+        graph_path = create_cmd_vel_graph(
+            robot_prim_path=ROBOT_PRIM_PATH,
+            robot_name="under_robot_1",
+            wheel_radius=DINGO_WHEEL_RADIUS_M,
+            wheel_base=DINGO_WHEEL_BASE_M,
+        )
+        if graph_path:
+            carb.log_info(f"[underwater.robot] ActionGraph created: {graph_path}")
+        else:
+            carb.log_warn("[underwater.robot] Failed to create ActionGraph for cmd_vel")
 
         # UI management
         self._scenario_state_btn.reset()
@@ -323,9 +260,6 @@ class UIBuilder:
         self._suction.reset()
         if hasattr(self, "_suction_label"):
             self._suction_label.text = "0 개"
-        world = World.instance()
-        robot = world.scene.get_object(ROBOT_SCENE_NAME)
-        self._scenario.sync_after_world_reset(robot, PHYSICS_DT)
 
     def _on_pre_reset_btn(self) -> None:
         """world.reset_async 전 타임라인 STOP·시나리오 물리 콜백 해제(extension physx_subscription 포함)."""
@@ -349,16 +283,17 @@ class UIBuilder:
         self._scenario_state_btn.enabled = True
 
     def _update_scenario(self, step: float):
-        """매 physics step마다 시나리오(나선 이동)와 흡입 시스템을 함께 실행한다."""
-        self._scenario.on_physics_step(step)
-
-        # 흡입 시스템: 로봇 위치 기준으로 이물질 파티클에 인력 적용
+        """매 physics step마다 흡입 시스템을 실행한다.
+        
+        cmd_vel 제어는 ActionGraph가 자동으로 처리하므로,
+        여기서는 debris 흡입만 담당한다.
+        """
         try:
             world = World.instance()
             robot = world.scene.get_object(ROBOT_SCENE_NAME)
             if robot is not None:
                 pos, orient = robot.get_world_pose()
-                newly  = self._suction.step(
+                newly = self._suction.step(
                     get_current_stage(), np.asarray(pos, dtype=float),
                     np.asarray(orient, dtype=float), step
                 )
