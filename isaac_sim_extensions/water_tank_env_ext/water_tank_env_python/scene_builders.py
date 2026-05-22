@@ -109,7 +109,14 @@ def _build_solid_cylinder_mesh(stage, path, center, height, radius,
                                 color, opacity=1.0, n_segments=WALL_SEGMENTS,
                                 collision=False, roughness=0.4, clearcoat=0.0,
                                 clearcoat_roughness=0.1, ior=1.5,
-                                emissive=(0.0, 0.0, 0.0)):
+                                emissive=(0.0, 0.0, 0.0),
+                                skip_bottom_cap=False):
+    """Solid cylinder mesh, optionally open at the bottom.
+
+    ``skip_bottom_cap=True`` omits the disc at z=-half_h. We use this for the
+    pool's translucent WaterBody so the robot's onboard camera, looking down,
+    doesn't see sturgeons ghost-reflected off the water/floor interface mesh.
+    """
     mesh = UsdGeom.Mesh.Define(stage, path)
 
     points = []
@@ -127,7 +134,8 @@ def _build_solid_cylinder_mesh(stage, path, center, height, radius,
     for i in range(n_segments):
         j = (i + 1) % n_segments
         fvc.append(4); fvi.extend([i, j, n_segments + j, n_segments + i])
-        fvc.append(3); fvi.extend([bottom_center_idx, j, i])
+        if not skip_bottom_cap:
+            fvc.append(3); fvi.extend([bottom_center_idx, j, i])
         fvc.append(3); fvi.extend([top_center_idx, n_segments + i, n_segments + j])
 
     mesh.CreatePointsAttr().Set(points)
@@ -263,6 +271,11 @@ def _build_water_body(stage, pool_path: str) -> None:
     body_height = params.WATER_LEVEL
     body_center_z = params.TANK_FLOOR_Z + body_height / 2
 
+    # WaterBody — water-like material but cylinder is open at the bottom.
+    # The omitted bottom cap (skip_bottom_cap=True) is what previously caused
+    # sturgeons to appear ghost-reflected on the building floor when viewed
+    # from the robot's onboard camera (the bottom face acted as an internal
+    # mirror coincident with the floor at z=0).
     _build_solid_cylinder_mesh(stage, f"{pool_path}/WaterBody",
                                center=(0, 0, body_center_z),
                                height=body_height, radius=r,
@@ -272,7 +285,8 @@ def _build_water_body(stage, pool_path: str) -> None:
                                roughness=0.55,
                                clearcoat=0.05,
                                clearcoat_roughness=0.4,
-                               ior=1.33)
+                               ior=1.33,
+                               skip_bottom_cap=True)
 
 
 def _build_water_surface(stage, pool_path: str) -> None:
