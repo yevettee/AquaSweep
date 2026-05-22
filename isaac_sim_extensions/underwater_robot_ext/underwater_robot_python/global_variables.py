@@ -46,9 +46,10 @@ ROBOT_HALF_HEIGHT_M = 0.115   # m   부분 잠김 보간용 반높이
 
 # 물리 스텝 기본 유체 근사 (타임라인 Play 중 전역 적용)
 DEFAULT_FLUID_FORCES_ENABLED = False
-BUOYANCY_WEIGHT_FRACTION = 0.75
-DRAG_LINEAR_XY = 0.5
-DRAG_LINEAR_Z = 1.0
+BUOYANCY_WEIGHT_FRACTION = 0.92   # 강한 부력 — 로봇이 물에 거의 떠있는 느낌
+DRAG_LINEAR_XY = 3.0              # 수평 항력 (원래 0.5) — 움직임이 뭉툭하게 감쇠
+DRAG_LINEAR_Z  = 3.0              # 수직 항력 (원래 1.0) — 상하 진동 빠르게 감쇠
+DRAG_ANGULAR   = 2.0              # 회전 항력 (원래 0.5) — 회전이 물속처럼 부드럽게 제동
 GRAVITY_MPS2 = 9.81
 
 # 루트 중심 궤적 시각화 (Physics step 샘플, 메인 로직과 무관)

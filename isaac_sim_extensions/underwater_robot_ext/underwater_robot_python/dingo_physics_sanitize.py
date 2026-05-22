@@ -118,7 +118,10 @@ def tag_aquasweep_attrs(robot_prim_path: str) -> None:
     prepare_dingo_usd_on_stage() 호출 이후에 실행해야 VisualWheels가 이미
     RigidBodyAPI를 잃은 상태에서 base_link를 올바르게 선택한다.
     """
-    from .global_variables import ROBOT_HALF_HEIGHT_M, ROBOT_VOLUME_M3
+    from .global_variables import (
+        ROBOT_HALF_HEIGHT_M, ROBOT_VOLUME_M3,
+        DRAG_LINEAR_XY, DRAG_LINEAR_Z, DRAG_ANGULAR,
+    )
 
     stage = get_current_stage()
     if not stage:
@@ -145,6 +148,8 @@ def tag_aquasweep_attrs(robot_prim_path: str) -> None:
     for attr_name, value in (
         ("aquasweep:volume",      ROBOT_VOLUME_M3),
         ("aquasweep:half_height", ROBOT_HALF_HEIGHT_M),
+        ("aquasweep:cd_linear",   DRAG_LINEAR_XY),
+        ("aquasweep:cd_angular",  DRAG_ANGULAR),
     ):
         attr = target.GetAttribute(attr_name)
         if not (attr and attr.IsValid()):
