@@ -1,9 +1,9 @@
-name: Slack Notify - Main Push
+name: Slack Notify - Main Push & Merge
 
 on:
   push:
     branches:
-      - main   # main 브랜치 push만 감지
+      - main
 
 jobs:
   notify:
@@ -16,13 +16,27 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":github: *${{ github.repository }}* - main 브랜치에 새로운 푸시!",
+              "text": ":github: *${{ github.repository }}* main 업데이트",
               "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Main 브랜치 업데이트"
+                  }
+                },
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*🚀 main 브랜치에 푸시되었습니다*\n\n*<${{ github.event.head_commit.url }}|${{ github.event.head_commit.message }}>*\nby *${{ github.event.head_commit.author.name }}*"
+                    "text": "*${{ github.event.head_commit.message }}*\nby *${{ github.event.head_commit.author.name }}*"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "• *커밋*: <${{ github.event.head_commit.url }}|${{ github.sha }}>\n• *PR*: ${{ github.event.head_commit.message == 'Merge pull request' && format('<{0}|PR #{1}>', github.event.pull_request.html_url, github.event.pull_request.number) || '직접 Push' }}"
                   }
                 },
                 {
@@ -30,7 +44,7 @@ jobs:
                   "elements": [
                     {
                       "type": "mrkdwn",
-                      "text": "Repository: *${{ github.repository }}* | Commit: `${{ github.sha }}`"
+                      "text": "Repository: *${{ github.repository }}*"
                     }
                   ]
                 }
