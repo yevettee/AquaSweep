@@ -33,8 +33,8 @@ importlib.reload(sturgeon_spawner)  # hot-reload support
 
 from debris_python.scenario import DebrisScenario
 
-from underwater_robot_python.dingo_physics_sanitize import (
-    prepare_dingo_usd_on_stage,
+from underwater_robot_python.hippo_physics_sanitize import (
+    prepare_hippo_usd_on_stage,
     tag_aquasweep_attrs,
 )
 from underwater_robot_python.scenario import UnderwaterTankJetbotFsm
@@ -42,18 +42,18 @@ from underwater_robot_python.suction_system import SuctionSystem
 from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_center_trail_debug
 from underwater_robot_python.global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
-    DINGO_USD_FILENAME,
+    HIPPO_USD_FILENAME,
     ROBOT_SPAWN_Z_M,
 )
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
 # we redefine them below as aliases of the PRIMARY_ROBOT_* constants so the
-# multi-robot spawn (7 dingos, one nested under each /World/Pools/Pool_<n>)
+# multi-robot spawn (7 hippos, one nested under each /World/Pools/Pool_<n>)
 # can address the FSM-driven primary robot explicitly.
 
 PHYSICS_DT = 1.0 / 60.0
 _ROBOT_USD_PATH = (
     Path(__file__).resolve().parents[2]
-    / "underwater_robot_ext" / "data" / DINGO_USD_FILENAME
+    / "underwater_robot_ext" / "data" / HIPPO_USD_FILENAME
 )
 
 # ── Multi-pool robot specs ─────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ def _robot_specs() -> list[tuple[int, str, str, np.ndarray]]:
     """Return per-pool robot (idx, scene_name, prim_path, world_position). Index is 1-based."""
     specs: list[tuple[int, str, str, np.ndarray]] = []
     for i, (cx, cy) in enumerate(_POOL_CENTERS, start=1):
-        scene_name = f"dingo_{i}"
+        scene_name = f"hippo_{i}"
         prim_path  = f"/World/Pools/Pool_{i}/Robot"
         position   = np.array([cx, cy, float(ROBOT_SPAWN_Z_M)])
         specs.append((i, scene_name, prim_path, position))
@@ -82,7 +82,7 @@ def _robot_specs() -> list[tuple[int, str, str, np.ndarray]]:
 
 
 # Back-compat alias for any external code referencing the primary robot.
-PRIMARY_ROBOT_SCENE_NAME = "dingo_1"
+PRIMARY_ROBOT_SCENE_NAME = "hippo_1"
 PRIMARY_ROBOT_PRIM_PATH  = "/World/Pools/Pool_1/Robot"
 # Back-compat aliases for any external code still importing the old names.
 ROBOT_SCENE_NAME = PRIMARY_ROBOT_SCENE_NAME
@@ -315,7 +315,7 @@ class UIBuilder:
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())
         for _idx, _scene_name, prim_path, _pos in _robot_specs():
-            prepare_dingo_usd_on_stage(prim_path)
+            prepare_hippo_usd_on_stage(prim_path)
             tag_aquasweep_attrs(prim_path)
 
         for i, (_idx, scene_name, _prim_path, _pos) in enumerate(_robot_specs()):

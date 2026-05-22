@@ -32,7 +32,8 @@ EXCLUDE_TOKENS = (
     "realsense",
     "stereo",
     "omniversekit",
-    "/dingo/",        # dingo's onboard cameras live here
+    "/dingo/",        # legacy dingo USD's onboard cameras
+    "/hippo/",        # hippo USD's onboard under_cam (under_cam_ext takes those)
 )
 
 POOL_ID_REGEX = r"[Pp]ool[_-]?(\d+)"
