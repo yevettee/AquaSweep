@@ -1,0 +1,38 @@
+name: Slack Notify - Main Push
+
+on:
+  push:
+    branches:
+      - main   # main 브랜치 push만 감지
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send notification to Slack
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":github: *${{ github.repository }}* - main 브랜치에 새로운 푸시!",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🚀 main 브랜치에 푸시되었습니다*\n\n*<${{ github.event.head_commit.url }}|${{ github.event.head_commit.message }}>*\nby *${{ github.event.head_commit.author.name }}*"
+                  }
+                },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "Repository: *${{ github.repository }}* | Commit: `${{ github.sha }}`"
+                    }
+                  ]
+                }
+              ]
+            }
