@@ -23,6 +23,14 @@ class Extension(omni.ext.IExt):
         self.ext_id = ext_id
         self._usd_context = omni.usd.get_context()
 
+        # top_cam_ext 익스텐션을 자동으로 로드 및 강제 활성화하여 원클릭 연동 보장
+        try:
+            ext_manager = omni.kit.app.get_app().get_extension_manager()
+            ext_manager.set_extension_enabled_immediate("top_cam_ext", True)
+            print("[aquasweep] 🟢 [AUTO-ENABLE] top_cam_ext 익스텐션 강제 로드/활성화 성공!")
+        except Exception as e:
+            print(f"[aquasweep] 🔴 [AUTO-ENABLE] top_cam_ext 익스텐션 활성화 실패: {e}")
+
         self._window = ScrollingWindow(
             title=EXTENSION_TITLE, width=600, height=500, visible=False,
             dockPreference=ui.DockPreference.LEFT_BOTTOM,

@@ -131,6 +131,7 @@ class UIBuilder:
         self._water_scenario.teardown_scenario()
         reset_center_trail_debug()
         self._stop_ros()
+        self._stop_top_detection_node()
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
@@ -390,11 +391,65 @@ class UIBuilder:
     def _on_clear_debris(self):
         self._debris_scenario.teardown_scenario()
 
+    def _start_top_detection_node(self):
+        import subprocess
+        import os
+        import signal
+
+        # 기존 실행 중인 백그라운드 노드 프로세스가 있다면 정리
+        self._stop_top_detection_node()
+
+        try:
+            repo_root = os.path.expanduser("~/AquaSweep")
+            water_ws = os.path.join(repo_root, "water_ws")
+            setup_bash = os.path.join(water_ws, "install/setup.bash")
+            
+            # ROS2 및 워크스페이스 빌드 setup 소싱을 조합한 실행 명령
+            cmd = f"source /opt/ros/humble/setup.bash && "
+            if os.path.exists(setup_bash):
+                cmd += f"source {setup_bash} && "
+            cmd += "export ROS_DOMAIN_ID=152 && ros2 run aqua_detection top_detection_node"
+            
+            carb.log_warn(f"[aquasweep] 🟢 [AUTO-RUN] 백그라운드에서 디텍션 노드 실행 시도: {cmd}")
+            
+            # preexec_fn=os.setsid를 사용하여 프로세스 그룹을 묶음 (자식 쉘 프로세스까지 일괄 정리용)
+            self._top_detection_proc = subprocess.Popen(
+                cmd,
+                shell=True,
+                executable="/bin/bash",
+                preexec_fn=os.setsid,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            carb.log_warn("[aquasweep] 🟢 [AUTO-RUN] top_detection_node 백그라운드 프로세스 자동 구동 성공!")
+        except Exception as e:
+            carb.log_error(f"[aquasweep] 🔴 [AUTO-RUN] top_detection_node 백그라운드 구동 실패: {e}")
+
+    def _stop_top_detection_node(self):
+        import os
+        import signal
+        proc = getattr(self, "_top_detection_proc", None)
+        if proc is not None:
+            try:
+                # 프로세스 그룹 전체에 시그널을 전달하여 ROS2 run 하위 프로세스까지 완전히 소거
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGTERM)
+                proc.wait(timeout=1.0)
+                carb.log_warn(f"[aquasweep] 🟢 [AUTO-RUN] top_detection_node 백그라운드 프로세스 그룹(PGID: {pgid}) 일괄 정리 완료.")
+            except Exception:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+            self._top_detection_proc = None
+
     def _on_run(self):
         self._timeline.play()
+        self._start_top_detection_node()
 
     def _on_stop(self):
         self._timeline.pause()
+        self._stop_top_detection_node()
 
     def _reset_extension(self):
         self._on_init()

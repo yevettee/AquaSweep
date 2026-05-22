@@ -16,6 +16,7 @@
 import numpy as np
 import omni.timeline
 import omni.ui as ui
+import carb
 from isaacsim.core.api.objects.cuboid import FixedCuboid
 from isaacsim.core.api.world import World
 from isaacsim.core.prims import SingleArticulation, XFormPrim
@@ -29,6 +30,8 @@ from omni.usd import StageEventType
 from pxr import Sdf, UsdLux
 
 from .scenario import ExampleScenario
+from .ros_bridge import RosBridge
+
 
 
 class UIBuilder:
@@ -60,13 +63,30 @@ class UIBuilder:
         Args:
             event (omni.timeline.TimelineEventType): Event Type
         """
-        if event.type == int(omni.timeline.TimelineEventType.STOP):
-            # When the user hits the stop button through the UI, they will inevitably discover edge cases where things break
-            # For complete robustness, the user should resolve those edge cases here
-            # In general, for extensions based off this template, there is no value to having the user click the play/stop
-            # button instead of using the Load/Reset/Run buttons provided.
+        if event.type == int(omni.timeline.TimelineEventType.PLAY):
+            world = World.instance()
+            if world is not None:
+                try:
+                    world.add_physics_callback("top_cam_auto_step", self._auto_physics_step)
+                    print("[top_cam_ext] Auto physics callback registered on PLAY.")
+                except Exception as e:
+                    pass
+        elif event.type == int(omni.timeline.TimelineEventType.STOP):
             self._scenario_state_btn.reset()
             self._scenario_state_btn.enabled = False
+            world = World.instance()
+            if world is not None:
+                try:
+                    world.remove_physics_callback("top_cam_auto_step")
+                except Exception:
+                    pass
+        elif event.type == int(omni.timeline.TimelineEventType.PAUSE):
+            world = World.instance()
+            if world is not None:
+                try:
+                    world.remove_physics_callback("top_cam_auto_step")
+                except Exception:
+                    pass
 
     def on_physics_step(self, step: float):
         """Callback for Physics Step.
@@ -95,6 +115,14 @@ class UIBuilder:
         """
         for ui_elem in self.wrapped_ui_elements:
             ui_elem.cleanup()
+        world = World.instance()
+        if world is not None:
+            try:
+                world.remove_physics_callback("top_cam_auto_step")
+            except Exception:
+                pass
+        if hasattr(self, "_bridge") and self._bridge:
+            self._bridge.stop()
 
     def build_ui(self):
         """
@@ -137,9 +165,83 @@ class UIBuilder:
     ######################################################################################
 
     def _on_init(self):
+        from .ros_bridge import bootstrap_ros_environment
+        bootstrap_ros_environment()
+        
         self._articulation = None
         self._cuboid = None
         self._scenario = ExampleScenario()
+        self._bridge = RosBridge()
+        self._camera = None
+        self._camera_prim_path = None
+        self._last_ui_capture_time = 0.0
+        # 카메라 초기화 시도 회수 제한 (매 프레임 재시도 없애기)
+        self._camera_init_attempted = False
+        self._camera_init_retry_frame = 0
+
+    def _try_auto_init_camera(self) -> bool:
+        """Dynamically traverses stage to locate the top camera and initialize it hands-free."""
+        stage = get_current_stage()
+        if not stage:
+            return False
+
+        target_path = None
+        for p in stage.Traverse():
+            if p.GetTypeName() == "Camera" and ("topcamera" in p.GetName().lower() or "top_cam" in p.GetName().lower()):
+                target_path = str(p.GetPath())
+                break
+
+        if target_path:
+            prim = stage.GetPrimAtPath(target_path)
+            if prim.IsValid():
+                from pxr import UsdGeom, Gf
+                from omni.isaac.sensor import Camera
+                
+                xf = UsdGeom.Xformable(prim)
+                translate_op = None
+                for op in xf.GetOrderedXformOps():
+                    if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
+                        translate_op = op
+                        break
+                if translate_op is None:
+                    translate_op = xf.AddTranslateOp()
+                
+                translate_op.Set(Gf.Vec3d(0.0, 0.0, 12.0))
+                self._camera_prim_path = target_path
+                
+                self._camera = Camera(
+                    prim_path=target_path,
+                    resolution=(1280, 720),
+                )
+                self._camera.initialize()
+                if hasattr(self, "_bridge") and self._bridge:
+                    self._bridge.start()
+                carb.log_warn(f"[top_cam_ext] AUTO-INIT: Top camera Z-axis set to 12.0. Camera initialized at: {target_path}")
+                return True
+        return False
+
+    def _auto_physics_step(self, step: float):
+        """Global background physics callback: captures frames and pushes to detection pipeline."""
+        if self._camera is None:
+            # 300프레임(~5초)마다 한 번씨 재시도 (매 프레임 반복 없애 콘솔 도배 방지)
+            self._camera_init_retry_frame += 1
+            if self._camera_init_retry_frame < 300:
+                return
+            self._camera_init_retry_frame = 0
+            self._try_auto_init_camera()
+
+        if self._camera is not None and hasattr(self, "_bridge") and self._bridge and self._bridge.available:
+            import time
+            current_time = time.time()
+            if current_time - self._last_ui_capture_time < 0.2:
+                return
+            try:
+                rgba = self._camera.get_rgba()
+                if rgba is not None:
+                    self._bridge.publish_frame(rgba)
+                    self._last_ui_capture_time = current_time
+            except Exception as e:
+                pass
 
     def _add_light_to_stage(self):
         """
@@ -199,6 +301,7 @@ class UIBuilder:
         provided prim in a circle around the robot.
         """
         self._reset_scenario()
+        self._try_auto_init_camera()
 
         # UI management
         self._scenario_state_btn.reset()
@@ -233,6 +336,15 @@ class UIBuilder:
             step (float): The dt of the current physics step
         """
         self._scenario.update_scenario(step)
+        if self._camera is not None and self._bridge.available:
+            import time
+            current_time = time.time()
+            if current_time - self._last_ui_capture_time < 0.2:
+                return
+            rgba = self._camera.get_rgba()
+            if rgba is not None:
+                self._bridge.publish_frame(rgba)
+                self._last_ui_capture_time = current_time
 
     def _on_run_scenario_a_text(self):
         """

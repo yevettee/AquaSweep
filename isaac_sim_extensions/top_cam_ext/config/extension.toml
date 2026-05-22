@@ -1,4 +1,5 @@
 [package]
+name = "top_cam_ext"
 version = "1.0.1"
 category = "Simulation"
 title = "top.camera"

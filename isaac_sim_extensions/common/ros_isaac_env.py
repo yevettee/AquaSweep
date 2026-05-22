@@ -154,6 +154,13 @@ def find_aqua_interfaces_py311_root() -> Optional[str]:
     if os.path.isdir(os.path.join(fallback_site, "aqua_interfaces")):
         return fallback_site
 
+    # Fallback to standard 3.10 install site (dist-packages) from colcon build if 3.11 build is missing
+    fallback_310 = repo_root_from_here(
+        "water_ws/install/aqua_interfaces/local/lib/python3.10/dist-packages"
+    )
+    if os.path.isdir(os.path.join(fallback_310, "aqua_interfaces")):
+        return fallback_310
+
     return None
 
 
@@ -209,6 +216,74 @@ def preload_rclpy_pybind11(rclpy_root: str) -> bool:
 
 def configure_isaac_ros_env() -> bool:
     """Prepare env vars + sys.path for Isaac bundled rclpy (py3.11) and aqua_interfaces."""
+    # Preemptively bootstrap ROS 2 and workspace paths dynamically 
+    # to eliminate the need for manual setup.bash sourcing before launching Isaac Sim.
+    try:
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        water_ws = os.path.join(repo_root, "water_ws")
+        install_dir = os.path.join(water_ws, "install")
+        
+        ros_distro = "humble"
+        ros_root = f"/opt/ros/{ros_distro}"
+        
+        # 1. Inject PYTHONPATH / sys.path additions
+        # We strictly avoid adding /opt/ros/ python paths directly to sys.path 
+        # to prevent ABI mismatch conflicts with Isaac's bundled py3.11 rclpy.
+        python_paths = []
+        if os.path.isdir(install_dir):
+            for pkg in os.listdir(install_dir):
+                # Check site-packages
+                pkg_site = os.path.join(install_dir, pkg, "lib/python3.10/site-packages")
+                if os.path.isdir(pkg_site):
+                    python_paths.append(pkg_site)
+                pkg_site_311 = os.path.join(install_dir, pkg, "lib/python3.11/site-packages")
+                if os.path.isdir(pkg_site_311):
+                    python_paths.append(pkg_site_311)
+                # Check dist-packages (custom message generators typically output here)
+                pkg_dist = os.path.join(install_dir, pkg, "local/lib/python3.10/dist-packages")
+                if os.path.isdir(pkg_dist):
+                    python_paths.append(pkg_dist)
+                    
+        for path in python_paths:
+            if os.path.isdir(path) and path not in sys.path:
+                sys.path.append(path)
+                
+        # 2. Inject LD_LIBRARY_PATH additions
+        ld_paths = [os.path.join(ros_root, "lib")]
+        if os.path.isdir(install_dir):
+            for pkg in os.listdir(install_dir):
+                pkg_lib = os.path.join(install_dir, pkg, "lib")
+                if os.path.isdir(pkg_lib):
+                    ld_paths.append(pkg_lib)
+                    
+        existing_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        ld_parts = [p for p in existing_ld.split(":") if p]
+        for path in ld_paths:
+            if os.path.isdir(path) and path not in ld_parts:
+                ld_parts.insert(0, path)
+        os.environ["LD_LIBRARY_PATH"] = ":".join(ld_parts)
+        
+        # 3. Inject AMENT_PREFIX_PATH additions
+        ament_paths = [ros_root]
+        if os.path.isdir(install_dir):
+            for pkg in os.listdir(install_dir):
+                pkg_prefix = os.path.join(install_dir, pkg)
+                if os.path.isdir(pkg_prefix):
+                    ament_paths.append(pkg_prefix)
+                    
+        existing_ament = os.environ.get("AMENT_PREFIX_PATH", "")
+        ament_parts = [p for p in existing_ament.split(":") if p]
+        for path in ament_paths:
+            if os.path.isdir(path) and path not in ament_parts:
+                ament_parts.insert(0, path)
+        os.environ["AMENT_PREFIX_PATH"] = ":".join(ament_parts)
+        
+        # 4. generic ROS env defaults
+        os.environ.setdefault("ROS_DISTRO", ros_distro)
+        os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+    except Exception as e:
+        print(f"[ros_isaac_env] Dynamic bootstrapping failed: {e}", file=sys.stderr)
+
     rclpy_root = find_bundled_rclpy_root()
     if rclpy_root is None:
         return False
