@@ -1,18 +1,38 @@
-# SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-# http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""Constants and tunable defaults for top_cam_ext.
+
+Mirrors `under_cam_ext.global_variables` but targets the per-pool
+TopCamera (looking straight down) instead of the under-water robot
+camera. Kept as a separate file rather than imported from sibling ext
+because Isaac Sim extensions are loaded independently.
+"""
 
 EXTENSION_TITLE = "top.camera"
+EXTENSION_DESCRIPTION = (
+    "Publishes every pool's top-down camera as raw sensor_msgs/Image "
+    "via a single OmniGraph fanning out to one ROS2CameraHelper per pool."
+)
 
-EXTENSION_DESCRIPTION = ""
+GRAPH_PATH = "/top_cam_graph"
+
+TOPIC_TEMPLATE = "/pool_{pool_id}/top_img_raw"
+FRAME_ID_TEMPLATE = "pool_{pool_id}_top_cam_{pool_id}"
+DEFAULT_RESOLUTION = (1280, 720)
+
+# Selection — opposite polarity from under_cam_ext: we *require* a "top"
+# token in the path and reject anything that looks like an under-water
+# robot camera, realsense, stereo helper, or viewport gizmo.
+INCLUDE_TOKENS = (
+    "topcamera",
+    "top_cam",
+    "top_camera",
+)
+EXCLUDE_TOKENS = (
+    "under_cam",
+    "undercam",
+    "realsense",
+    "stereo",
+    "omniversekit",
+    "/dingo/",        # dingo's onboard cameras live here
+)
+
+POOL_ID_REGEX = r"[Pp]ool[_-]?(\d+)"
