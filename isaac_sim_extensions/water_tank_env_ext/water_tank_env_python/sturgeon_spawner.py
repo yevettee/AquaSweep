@@ -57,7 +57,7 @@ _FLIP_PROBABILITY = 0.5             # 25% chance each fish is flipped
 _FLIPPED_Z_MIN = params.WATER_LEVEL - 0.07  # slightly below surface
 _FLIPPED_Z_MAX = params.WATER_LEVEL - 0.05  # nearly at surface (floating)
 _FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
-_FLIP_Z_OFFSET = 0.13                # compensate for pivot offset when flipped
+_FLIP_Z_OFFSET = 0.15                # compensate for pivot offset when flipped
 
 # ── Colour palette (dark → near-current) ─────────────────────────────────────
 _COLOR_DARK    = (0.02, 0.02, 0.03)  # near-black
