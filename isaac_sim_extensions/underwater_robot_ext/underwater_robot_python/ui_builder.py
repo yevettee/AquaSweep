@@ -42,12 +42,12 @@ from pxr import Sdf, UsdLux
 
 from .global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
-    DINGO_USD_FILENAME,
+    HIPPO_USD_FILENAME,
     ROBOT_PRIM_PATH,
     ROBOT_SCENE_NAME,
     ROBOT_SPAWN_Z_M,
 )
-from .dingo_physics_sanitize import prepare_dingo_usd_on_stage, tag_aquasweep_attrs
+from .hippo_physics_sanitize import prepare_hippo_usd_on_stage, tag_aquasweep_attrs
 from .scenario import UnderwaterTankJetbotFsm
 from .suction_system import SuctionSystem
 from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
@@ -274,9 +274,9 @@ class UIBuilder:
         and avoid loading anything if they are.  In this case, the user would still need to add
         their assets to the World (which has low overhead).  See commented code section in this function.
         """
-        dingo_usd_path = Path(__file__).resolve().parents[1] / "data" / DINGO_USD_FILENAME
-        if not dingo_usd_path.is_file():
-            carb.log_error(f"[underwater.robot] Dingo USD not found: {dingo_usd_path}")
+        hippo_usd_path = Path(__file__).resolve().parents[1] / "data" / HIPPO_USD_FILENAME
+        if not hippo_usd_path.is_file():
+            carb.log_error(f"[underwater.robot] Hippo USD not found: {hippo_usd_path}")
             return
 
         # water_tank_env_ext와 함께 실행할 때 새 stage를 만들면 수조/GPU dynamics 설정이 날아감.
@@ -292,11 +292,11 @@ class UIBuilder:
                 name=ROBOT_SCENE_NAME,
                 wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
                 create_robot=True,
-                usd_path=str(dingo_usd_path),
+                usd_path=str(hippo_usd_path),
                 position=np.array([0.0, 0.0, float(ROBOT_SPAWN_Z_M)]),
             )
         )
-        carb.log_info(f"[underwater.robot] Loaded Dingo from {dingo_usd_path}")
+        carb.log_info(f"[underwater.robot] Loaded Hippo from {hippo_usd_path}")
 
     def _setup_scenario(self):
         """
@@ -304,11 +304,11 @@ class UIBuilder:
         The user may assume that their assets have been loaded by their setup_scene_fn callback, that
         their objects are properly initialized, and that the timeline is paused on timestep 0.
 
-        Tank-cleaning FSM for Dingo differential drive (data/dingo_transformed.usd).
+        Tank-cleaning FSM for Hippo differential drive (data/hippo_v1.usd).
         """
         world = World.instance()
         reset_center_trail_debug()
-        prepare_dingo_usd_on_stage(ROBOT_PRIM_PATH)
+        prepare_hippo_usd_on_stage(ROBOT_PRIM_PATH)
         tag_aquasweep_attrs(ROBOT_PRIM_PATH)
         robot = world.scene.get_object(ROBOT_SCENE_NAME)
         self._scenario.initialize(robot, PHYSICS_DT)

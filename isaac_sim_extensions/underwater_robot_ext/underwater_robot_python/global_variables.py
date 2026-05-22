@@ -20,18 +20,27 @@ EXTENSION_DESCRIPTION = ""
 # World.scene에 등록하는 WheeledRobot의 scene 이름 (다른 확장과 충돌 방지)
 ROBOT_SCENE_NAME = "underwater_robot_v1"
 
-# Stage 상 로봇 루트 (data/dingo_transformed.usd reference)
-ROBOT_PRIM_PATH = "/World/Dingo"
+# Stage 상 로봇 루트 (hippo USD reference). 단일 로봇 시절의 기본값이며
+# 멀티풀에서는 /World/Pools/Pool_<n>/Robot 으로 spawn 됨.
+ROBOT_PRIM_PATH = "/World/Hippo"
 
-# extension/data/dingo_transformed.usd — /Root/dingo, VisualWheels 는 base_link 자식으로 편집
-DINGO_USD_FILENAME = "underwater_robot_camera_v1.usd"
+# extension/data/hippo_v1.usd — /Root/hippo, VisualWheels 는 base_link 자식.
+# 우리가 직접 개조한 underwater 청소 로봇 (Clearpath Dingo-D 플랫폼 기반).
+HIPPO_USD_FILENAME = "hippo_v1.usd"
 
-# data/dingo_transformed.usd 측정값 (usd-core BBoxCache / wheel_link transforms)
+# 후방 호환: 기존 import 코드가 즉시 깨지지 않도록 별칭 유지.
+DINGO_USD_FILENAME = HIPPO_USD_FILENAME
+
+# data/hippo_v1.usd 측정값 (Dingo-D 플랫폼 wheel_link transforms)
 # - left_wheel_link/collisions Cylinder radius
 # - |left_wheel_link − right_wheel_link| in world XY
 # - base_link world bbox max(X,Y)
-DINGO_WHEEL_RADIUS_M = 0.049
-DINGO_WHEEL_BASE_M = 0.4523
+HIPPO_WHEEL_RADIUS_M = 0.049
+HIPPO_WHEEL_BASE_M = 0.4523
+# 후방 호환
+DINGO_WHEEL_RADIUS_M = HIPPO_WHEEL_RADIUS_M
+DINGO_WHEEL_BASE_M = HIPPO_WHEEL_BASE_M
+
 ROBOT_FOOTPRINT_M = 0.686
 
 # Clearpath Dingo-D 플랫폼 질량 (USD collision mass 합 ~1.2 kg 은 플레이스홀더)
@@ -41,7 +50,7 @@ ROBOT_MASS_KG = 9.1
 ROBOT_SPAWN_Z_M = 0.05
 
 # water_tank_env WaterPhysicsApplier용 aquasweep:* 속성값 — LOAD 시 base_link에 설정됨
-ROBOT_VOLUME_M3 = 0.025       # m³  Dingo-D 근사 부피 (부력 계산)
+ROBOT_VOLUME_M3 = 0.025       # m³  hippo (Dingo-D 기반) 근사 부피 (부력 계산)
 ROBOT_HALF_HEIGHT_M = 0.115   # m   부분 잠김 보간용 반높이
 
 # 물리 스텝 기본 유체 근사 (타임라인 Play 중 전역 적용)
@@ -55,7 +64,7 @@ GRAVITY_MPS2 = 9.81
 # 루트 중심 궤적 시각화 (Physics step 샘플, 메인 로직과 무관)
 DEBUG_CENTER_TRAIL_ENABLED = True
 DEBUG_TRAIL_MAX_POINTS = 40000
-DEBUG_TRAIL_CURVE_PRIM_PATH = "/World/Debug/DingoCenterTrail"
+DEBUG_TRAIL_CURVE_PRIM_PATH = "/World/Debug/HippoCenterTrail"
 DEBUG_TRAIL_LINE_WIDTH_WORLD = 0.02
 
 # Deprecated aliases (JetBot era)
