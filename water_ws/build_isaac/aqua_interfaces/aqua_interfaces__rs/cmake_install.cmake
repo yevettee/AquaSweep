@@ -1,8 +1,8 @@
-# Install script for directory: /home/woody/AquaSweep_2/water_ws/build_isaac/aqua_interfaces/aqua_interfaces__rs
+# Install script for directory: /home/woody/AquaSweep/water_ws/build_isaac/aqua_interfaces/aqua_interfaces__rs
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
-  set(CMAKE_INSTALL_PREFIX "/home/woody/AquaSweep_2/water_ws/install_isaac/aqua_interfaces")
+  set(CMAKE_INSTALL_PREFIX "/home/woody/AquaSweep/water_ws/install_isaac/aqua_interfaces")
 endif()
 string(REGEX REPLACE "/$" "" CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 

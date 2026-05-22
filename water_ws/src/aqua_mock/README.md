@@ -6,7 +6,7 @@ This package provides mock ROS2 publishers and services to test the AquaSweep da
 
 ## Purpose
 
-- Publishes simulated `TankStatus` and `RobotStatus` messages
+- Publishes simulated `PoolStatus` and `RobotStatus` messages
 - Publishes placeholder camera detection images (`sensor_msgs/Image`)
 - Provides mock `CleanFloor` action servers that simulate cleaning progress
 - Allows testing the full dashboard UI and planner logic offline
@@ -29,7 +29,7 @@ For each pool (pool_1, pool_2):
 
 | Topic | Type | Description |
 |-------|------|-------------|
-| `/pool_{id}/status` | `aqua_interfaces/TankStatus` | Pool status with varying fish_count |
+| `/pool_{id}/status` | `aqua_interfaces/PoolStatus` | Pool status with varying fish_count |
 | `/under_robot_{id}/status` | `aqua_interfaces/RobotStatus` | Robot status |
 | `/pool_{id}/top_img_det` | `sensor_msgs/Image` | Placeholder top camera image |
 | `/pool_{id}/under_img_det` | `sensor_msgs/Image` | Placeholder underwater camera image |

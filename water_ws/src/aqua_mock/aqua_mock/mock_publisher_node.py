@@ -1,7 +1,7 @@
 """Mock publisher node for AquaSweep testing.
 
 Publishes simulated data for dashboard and planner development:
-- TankStatus for each pool (with cycling fish_count including 0 for testing)
+- PoolStatus for each pool (with cycling fish_count including 0 for testing)
 - RobotStatus for each robot
 - Placeholder camera detection images
 - CleanFloor action servers that simulate cleaning progress
@@ -19,7 +19,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 
 from aqua_interfaces.action import CleanFloor
-from aqua_interfaces.msg import RobotStatus, TankStatus
+from aqua_interfaces.msg import RobotStatus, PoolStatus
 
 POOL_COUNT = 7
 
@@ -45,7 +45,7 @@ class MockPublisherNode(Node):
 
         for pool_id in pool_ids():
             self._pool_pubs[pool_id] = self.create_publisher(
-                TankStatus,
+                PoolStatus,
                 f"/pool_{pool_id}/status",
                 10,
             )
@@ -114,12 +114,12 @@ class MockPublisherNode(Node):
         return execute_callback
 
     def _publish_telemetry(self):
-        """Publish TankStatus and RobotStatus for all pools."""
+        """Publish PoolStatus and RobotStatus for all pools."""
         self._tick += 1
         phase = self._tick * 0.5
 
         for pool_id in pool_ids():
-            pool_msg = TankStatus()
+            pool_msg = PoolStatus()
             pool_msg.pollution_level = 0.5 + 0.4 * math.sin(phase + pool_id)
             pool_msg.fish_type = f"species_{pool_id}"
             pool_msg.fish_count = (self._tick + pool_id) % 5

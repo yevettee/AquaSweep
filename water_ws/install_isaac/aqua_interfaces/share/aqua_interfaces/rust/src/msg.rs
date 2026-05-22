@@ -86,14 +86,14 @@ impl rosidl_runtime_rs::Message for RobotStatus {
 }
 
 
-// Corresponds to aqua_interfaces__msg__TankStatus
+// Corresponds to aqua_interfaces__msg__PoolStatus
 
 // This struct is not documented.
 #[allow(missing_docs)]
 
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct TankStatus {
+pub struct PoolStatus {
 
     // This member is not documented.
     #[allow(missing_docs)]
@@ -118,14 +118,14 @@ pub struct TankStatus {
 
 
 
-impl Default for TankStatus {
+impl Default for PoolStatus {
   fn default() -> Self {
-    <Self as rosidl_runtime_rs::Message>::from_rmw_message(super::msg::rmw::TankStatus::default())
+    <Self as rosidl_runtime_rs::Message>::from_rmw_message(super::msg::rmw::PoolStatus::default())
   }
 }
 
-impl rosidl_runtime_rs::Message for TankStatus {
-  type RmwMsg = super::msg::rmw::TankStatus;
+impl rosidl_runtime_rs::Message for PoolStatus {
+  type RmwMsg = super::msg::rmw::PoolStatus;
 
   fn into_rmw_message(msg_cow: std::borrow::Cow<'_, Self>) -> std::borrow::Cow<'_, Self::RmwMsg> {
     match msg_cow {
@@ -155,14 +155,14 @@ impl rosidl_runtime_rs::Message for TankStatus {
 }
 
 
-// Corresponds to aqua_interfaces__msg__TankPhysicalVariables
+// Corresponds to aqua_interfaces__msg__PoolPhysicalVariables
 
 // This struct is not documented.
 #[allow(missing_docs)]
 
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct TankPhysicalVariables {
+pub struct PoolPhysicalVariables {
 
     // This member is not documented.
     #[allow(missing_docs)]
@@ -187,14 +187,14 @@ pub struct TankPhysicalVariables {
 
 
 
-impl Default for TankPhysicalVariables {
+impl Default for PoolPhysicalVariables {
   fn default() -> Self {
-    <Self as rosidl_runtime_rs::Message>::from_rmw_message(super::msg::rmw::TankPhysicalVariables::default())
+    <Self as rosidl_runtime_rs::Message>::from_rmw_message(super::msg::rmw::PoolPhysicalVariables::default())
   }
 }
 
-impl rosidl_runtime_rs::Message for TankPhysicalVariables {
-  type RmwMsg = super::msg::rmw::TankPhysicalVariables;
+impl rosidl_runtime_rs::Message for PoolPhysicalVariables {
+  type RmwMsg = super::msg::rmw::PoolPhysicalVariables;
 
   fn into_rmw_message(msg_cow: std::borrow::Cow<'_, Self>) -> std::borrow::Cow<'_, Self::RmwMsg> {
     match msg_cow {

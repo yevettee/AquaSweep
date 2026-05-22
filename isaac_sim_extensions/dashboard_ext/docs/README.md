@@ -1,12 +1,12 @@
 # AquaSweep Dashboard (`dashboard_ext`)
 
-Isaac Sim UI extension that subscribes to per-tank `TankStatus` / `RobotStatus` topics and sends `CleanFloor` action goals. Eight tank panels are shown in a 2×4 grid.
+Isaac Sim UI extension that subscribes to per-tank `PoolStatus` / `RobotStatus` topics and sends `CleanFloor` action goals. Eight tank panels are shown in a 2×4 grid.
 
 ## ROS2 topic / action naming
 
 | Resource | Name pattern |
 |----------|----------------|
-| Tank status | `/aqua/tank_{id}/status` (`aqua_interfaces/TankStatus`) |
+| Tank status | `/aqua/tank_{id}/status` (`aqua_interfaces/PoolStatus`) |
 | Robot status | `/aqua/tank_{id}/robot_status` (`aqua_interfaces/RobotStatus`) |
 | Clean floor | `/aqua/tank_{id}/clean_floor` (`aqua_interfaces/CleanFloor`) |
 
