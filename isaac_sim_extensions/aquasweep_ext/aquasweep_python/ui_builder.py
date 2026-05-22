@@ -45,8 +45,8 @@ from underwater_robot_python.global_variables import (
 )
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
 # we redefine them below as aliases of the PRIMARY_ROBOT_* constants so the
-# multi-robot spawn (7 dingos under /World/Robots) can address the FSM-driven
-# primary robot explicitly.
+# multi-robot spawn (7 dingos, one nested under each /World/Pools/Pool_<n>)
+# can address the FSM-driven primary robot explicitly.
 
 PHYSICS_DT = 1.0 / 60.0
 _ROBOT_USD_PATH = (
@@ -57,16 +57,10 @@ _ROBOT_USD_PATH = (
 # ── Multi-pool robot specs ─────────────────────────────────────────────────────
 from water_tank_env_python import params as _params  # noqa: E402
 _POOL_CENTERS: list[tuple[float, float]] = list(getattr(_params, "POOL_CENTERS", []))
+_NUM_ROBOTS = len(_POOL_CENTERS)
 
 
 def _set_viewport_lighting_mode(mode: str) -> None:
-    """Switch the viewport lighting menu to ``mode`` (``"camera"`` or ``"stage"``).
-
-    Camera Light makes the viewport ignore USD scene lights — much safer
-    default for our brightly-lit fish-farm scene. Failures are logged but
-    swallowed so an old Isaac Sim build without the command doesn't break
-    LOAD.
-    """
     try:
         import omni.kit.commands
         omni.kit.commands.execute("SetLightingMenuMode", lighting_mode=mode)
@@ -75,30 +69,22 @@ def _set_viewport_lighting_mode(mode: str) -> None:
 
 
 def _robot_specs() -> list[tuple[int, str, str, np.ndarray]]:
-    """Return per-pool robot (idx, scene_name, prim_path, world_position).
-
-    Index is 1-based and matches the Pool index. The primary robot (Pool_1)
-    drives FSM/suction/trail; the others spawn into their pools but currently
-    sit idle (physics-only) until the controller is generalised.
-    """
+    """Return per-pool robot (idx, scene_name, prim_path, world_position). Index is 1-based."""
     specs: list[tuple[int, str, str, np.ndarray]] = []
     for i, (cx, cy) in enumerate(_POOL_CENTERS, start=1):
         scene_name = f"dingo_{i}"
-        prim_path  = f"/World/Robots/Robot_{i}"
+        prim_path  = f"/World/Pools/Pool_{i}/Robot"
         position   = np.array([cx, cy, float(ROBOT_SPAWN_Z_M)])
         specs.append((i, scene_name, prim_path, position))
     return specs
 
 
-# Primary robot — Pool_1's dingo drives the FSM/suction loop.
+# Back-compat alias for any external code referencing the primary robot.
 PRIMARY_ROBOT_SCENE_NAME = "dingo_1"
-PRIMARY_ROBOT_PRIM_PATH  = "/World/Robots/Robot_1"
+PRIMARY_ROBOT_PRIM_PATH  = "/World/Pools/Pool_1/Robot"
 # Back-compat aliases for any external code still importing the old names.
 ROBOT_SCENE_NAME = PRIMARY_ROBOT_SCENE_NAME
 ROBOT_PRIM_PATH  = PRIMARY_ROBOT_PRIM_PATH
-
-
-CMD_VEL_ROBOT_NAME = "under_robot_1"  # 컨트롤러 노드 기본값과 일치
 
 
 class UIBuilder:
@@ -109,7 +95,10 @@ class UIBuilder:
 
         self._ros_executor = None
         self._ros_thread = None
-        self._cmd_receiver = None
+        # Per-robot lists — index 0 == robot_1
+        self._cmd_receivers: list = []
+        self._robot_scenarios: list[UnderwaterTankJetbotFsm] = []
+        self._suctions: list[SuctionSystem] = []
 
         self._on_init()
         self._start_ros()
@@ -126,7 +115,7 @@ class UIBuilder:
 
     def on_physics_step(self, step: float):
         try:
-            robot = World.instance().scene.get_object(ROBOT_SCENE_NAME)
+            robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
         except Exception:
             return
         if robot is not None and DEBUG_CENTER_TRAIL_ENABLED:
@@ -208,20 +197,31 @@ class UIBuilder:
 
     def _on_init(self):
         self._water_scenario = WaterTankScenario()
-        self._robot_scenario = UnderwaterTankJetbotFsm()
         self._debris_scenario = DebrisScenario()
-        self._suction = SuctionSystem()
-        if self._cmd_receiver is not None:
-            self._robot_scenario.set_cmd_vel_receiver(self._cmd_receiver)
+
+        self._robot_scenarios = [UnderwaterTankJetbotFsm() for _ in range(_NUM_ROBOTS)]
+        self._suctions = [SuctionSystem() for _ in range(_NUM_ROBOTS)]
+
+        # 이미 ROS가 실행 중이면(stage 리셋 시) 수신기를 재연결
+        for i, receiver in enumerate(self._cmd_receivers):
+            if receiver is not None:
+                self._robot_scenarios[i].set_cmd_vel_receiver(receiver)
 
     def _start_ros(self) -> None:
         import traceback
 
-        if not configure_isaac_ros_env():
-            carb.log_warn(
-                f"[aquasweep] ROS env setup failed. {AQUA_INTERFACES_INSTALL_HINT}"
-            )
-            return
+        try:
+            import rclpy as _probe
+            _already_ok = _probe.ok()
+        except ImportError:
+            _already_ok = False
+
+        if not _already_ok:
+            if not configure_isaac_ros_env():
+                carb.log_warn(
+                    f"[aquasweep] ROS env setup failed. {AQUA_INTERFACES_INSTALL_HINT}"
+                )
+                return
 
         try:
             import rclpy
@@ -234,36 +234,50 @@ class UIBuilder:
             if not rclpy.ok():
                 rclpy.init()
 
-            self._cmd_receiver = create_cmd_vel_receiver(CMD_VEL_ROBOT_NAME)
-            if self._cmd_receiver is None:
-                carb.log_warn(
-                    f"[aquasweep] cmd_vel receiver unavailable — "
-                    f"{get_last_ros_import_error() or 'unknown import error'}"
-                )
-                return
-
             self._ros_executor = SingleThreadedExecutor()
-            self._ros_executor.add_node(self._cmd_receiver)
-            self._ros_thread = threading.Thread(
-                target=self._ros_executor.spin,
-                daemon=True,
-                name="aquasweep_ros_spin",
-            )
-            self._ros_thread.start()
-            self._robot_scenario.set_cmd_vel_receiver(self._cmd_receiver)
-            carb.log_warn(
-                f"[aquasweep] ROS2 cmd_vel subscriber STARTED — /{CMD_VEL_ROBOT_NAME}/cmd_vel"
-            )
 
         except Exception as exc:
-            carb.log_warn(f"[aquasweep] ROS2 init failed: {exc}")
+            carb.log_warn(f"[aquasweep] ROS2 executor init failed: {exc}")
             carb.log_warn(traceback.format_exc())
+            return
+
+        from underwater_robot_python.cmd_vel_receiver import (
+            create_cmd_vel_receiver,
+            get_last_ros_import_error,
+        )
+
+        self._cmd_receivers = [None] * _NUM_ROBOTS
+        for i in range(_NUM_ROBOTS):
+            robot_name = f"under_robot_{i + 1}"
+            try:
+                receiver = create_cmd_vel_receiver(robot_name)
+                if receiver is not None:
+                    self._ros_executor.add_node(receiver)
+                    self._robot_scenarios[i].set_cmd_vel_receiver(receiver)
+                    self._cmd_receivers[i] = receiver
+                    carb.log_warn(
+                        f"[aquasweep] robot_{i+1} cmd_vel subscriber STARTED — /{robot_name}/cmd_vel"
+                    )
+                else:
+                    carb.log_warn(
+                        f"[aquasweep] robot_{i+1} receiver None — {get_last_ros_import_error()}"
+                    )
+            except Exception as exc:
+                carb.log_warn(f"[aquasweep] robot_{i+1} receiver FAILED: {exc}")
+                carb.log_warn(traceback.format_exc())
+
+        self._ros_thread = threading.Thread(
+            target=self._ros_executor.spin,
+            daemon=True,
+            name="aquasweep_ros_spin",
+        )
+        self._ros_thread.start()
 
     def _stop_ros(self) -> None:
         if self._ros_executor is not None:
             self._ros_executor.shutdown(timeout_sec=1.0)
             self._ros_executor = None
-        self._cmd_receiver = None
+        self._cmd_receivers = [None] * _NUM_ROBOTS
 
     def _setup_scene(self):
         stage = get_current_stage()
@@ -298,15 +312,19 @@ class UIBuilder:
             prepare_dingo_usd_on_stage(prim_path)
             tag_aquasweep_attrs(prim_path)
 
-        robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
-        self._robot_scenario.initialize(robot, PHYSICS_DT)
-        if self._cmd_receiver is not None:
-            self._robot_scenario.set_cmd_vel_receiver(self._cmd_receiver)
+        for i, (_idx, scene_name, _prim_path, _pos) in enumerate(_robot_specs()):
+            robot = World.instance().scene.get_object(scene_name)
+            if robot is not None:
+                cx, cy = _POOL_CENTERS[i]
+                self._robot_scenarios[i].initialize(robot, PHYSICS_DT, pool_center=(cx, cy))
+                if self._cmd_receivers[i] is not None:
+                    self._robot_scenarios[i].set_cmd_vel_receiver(self._cmd_receivers[i])
 
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
 
-        self._suction.reset()
+        for suction in self._suctions:
+            suction.reset()
         reset_center_trail_debug()
 
         _set_viewport_lighting_mode("camera")
@@ -325,35 +343,37 @@ class UIBuilder:
     def _on_post_reset(self):
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
-        self._suction.reset()
+        for suction in self._suctions:
+            suction.reset()
         if hasattr(self, "_suction_label"):
             self._suction_label.text = "0 개"
-        robot = World.instance().scene.get_object(ROBOT_SCENE_NAME)
-        self._robot_scenario.sync_after_world_reset(robot, PHYSICS_DT)
+        for i, (_idx, scene_name, _prim_path, _pos) in enumerate(_robot_specs()):
+            robot = World.instance().scene.get_object(scene_name)
+            self._robot_scenarios[i].sync_after_world_reset(robot, PHYSICS_DT)
         reset_center_trail_debug()
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
 
     def _update_scenario(self, step: float):
-        # 수조 물리 (부력·항력·수면 애니메이션)
         self._water_scenario.update_scenario(step)
-        # 로봇 나선 이동
-        self._robot_scenario.on_physics_step(step)
-        # 흡입 시스템
-        try:
-            robot = World.instance().scene.get_object(ROBOT_SCENE_NAME)
-            if robot is not None:
-                pos, orient = robot.get_world_pose()
-                newly = self._suction.step(
-                    get_current_stage(),
-                    np.asarray(pos, dtype=float),
-                    np.asarray(orient, dtype=float),
-                    step,
-                )
-                if newly > 0:
-                    self._suction_label.text = f"{self._suction.collected_count} 개"
-        except Exception:
-            pass
+
+        for i, (_idx, scene_name, _prim_path, _pos) in enumerate(_robot_specs()):
+            self._robot_scenarios[i].on_physics_step(step)
+            try:
+                robot = World.instance().scene.get_object(scene_name)
+                if robot is not None:
+                    pos, orient = robot.get_world_pose()
+                    newly = self._suctions[i].step(
+                        get_current_stage(),
+                        np.asarray(pos, dtype=float),
+                        np.asarray(orient, dtype=float),
+                        step,
+                    )
+                    if newly > 0:
+                        total = sum(s.collected_count for s in self._suctions)
+                        self._suction_label.text = f"{total} 개"
+            except Exception:
+                pass
 
     def _on_spawn_debris(self):
         if self._debris_scenario.is_spawned():
