@@ -1,9 +1,9 @@
 [package]
-version = "1.0.1"
+version = "1.1.0"
 category = "Simulation"
 title = "under.camera"
-description = ""
-keywords = []
+description = "Publishes every pool's underwater camera as raw sensor_msgs/Image via a single OmniGraph."
+keywords = ["ros2", "camera", "underwater"]
 changelog = "docs/CHANGELOG.md"
 readme = "docs/README.md"
 preview_image = "data/preview.png"
@@ -12,9 +12,12 @@ writeTarget.kit = true
 
 [dependencies]
 "isaacsim.core.api" = {}
+"isaacsim.core.nodes" = {}
 "isaacsim.gui.components" = {}
-"omni.kit.uiapp" = {}
 "isaacsim.ros2.bridge" = {}
+"omni.graph.action" = {}
+"omni.graph.core" = {}
+"omni.kit.uiapp" = {}
 
 [[python.module]]
 name = "under_camera_python"
