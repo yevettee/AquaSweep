@@ -170,12 +170,16 @@ class UIBuilder:
         with debris_frame:
             with ui.VStack(style=get_style(), spacing=5, height=0):
                 with ui.HStack(height=24):
-                    ui.Label("Count", width=80)
-                    self._debris_count_model = ui.SimpleIntModel(10)
-                    ui.IntDrag(model=self._debris_count_model, min=1, max=500)
+                    ui.Label("Count Min", width=80)
+                    self._debris_count_min_model = ui.SimpleIntModel(30)
+                    ui.IntDrag(model=self._debris_count_min_model, min=1, max=500)
+                with ui.HStack(height=24):
+                    ui.Label("Count Max", width=80)
+                    self._debris_count_max_model = ui.SimpleIntModel(70)
+                    ui.IntDrag(model=self._debris_count_max_model, min=1, max=500)
                 with ui.HStack(height=24):
                     ui.Label("Radius (m)", width=80)
-                    self._debris_radius_model = ui.SimpleFloatModel(0.015)
+                    self._debris_radius_model = ui.SimpleFloatModel(0.05)
                     ui.FloatDrag(model=self._debris_radius_model, min=0.001, max=0.2, step=0.001)
                 self._spawn_btn = ui.Button(
                     "SPAWN", height=36, clicked_fn=self._on_spawn_debris,
@@ -378,9 +382,10 @@ class UIBuilder:
     def _on_spawn_debris(self):
         if self._debris_scenario.is_spawned():
             return
-        count = self._debris_count_model.get_value_as_int()
+        lo = self._debris_count_min_model.get_value_as_int()
+        hi = self._debris_count_max_model.get_value_as_int()
         radius = self._debris_radius_model.get_value_as_float()
-        self._debris_scenario.setup_scenario(count=count, radius=radius)
+        self._debris_scenario.setup_scenario(count_range=(lo, hi), radius=radius)
 
     def _on_clear_debris(self):
         self._debris_scenario.teardown_scenario()

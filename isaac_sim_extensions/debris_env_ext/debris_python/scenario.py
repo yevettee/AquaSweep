@@ -21,10 +21,15 @@ class DebrisScenario:
     def __init__(self):
         self._debris: DebrisSystem | None = None
 
-    def setup_scenario(self, count: int | None = None, radius: float | None = None) -> None:
+    def setup_scenario(
+        self,
+        count_range: tuple[int, int] | None = None,
+        radius: float | None = None,
+    ) -> None:
         stage = get_current_stage()
         self._debris = DebrisSystem(
-            count=count if count is not None else gv.DEBRIS_COUNT,
+            count_range=count_range if count_range is not None
+                       else (gv.DEBRIS_COUNT_MIN, gv.DEBRIS_COUNT_MAX),
             radius=radius if radius is not None else gv.DEBRIS_RADIUS,
             color_hex=gv.DEBRIS_COLOR_HEX,
             tank_range=gv.TANK_RANGE,
