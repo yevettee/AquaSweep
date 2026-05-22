@@ -110,18 +110,18 @@ impl rosidl_runtime_rs::RmwMessage for RobotStatus where Self: Sized {
 
 #[link(name = "aqua_interfaces__rosidl_typesupport_c")]
 extern "C" {
-    fn rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__TankStatus() -> *const std::ffi::c_void;
+    fn rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__PoolStatus() -> *const std::ffi::c_void;
 }
 
 #[link(name = "aqua_interfaces__rosidl_generator_c")]
 extern "C" {
-    fn aqua_interfaces__msg__TankStatus__init(msg: *mut TankStatus) -> bool;
-    fn aqua_interfaces__msg__TankStatus__Sequence__init(seq: *mut rosidl_runtime_rs::Sequence<TankStatus>, size: usize) -> bool;
-    fn aqua_interfaces__msg__TankStatus__Sequence__fini(seq: *mut rosidl_runtime_rs::Sequence<TankStatus>);
-    fn aqua_interfaces__msg__TankStatus__Sequence__copy(in_seq: &rosidl_runtime_rs::Sequence<TankStatus>, out_seq: *mut rosidl_runtime_rs::Sequence<TankStatus>) -> bool;
+    fn aqua_interfaces__msg__PoolStatus__init(msg: *mut PoolStatus) -> bool;
+    fn aqua_interfaces__msg__PoolStatus__Sequence__init(seq: *mut rosidl_runtime_rs::Sequence<PoolStatus>, size: usize) -> bool;
+    fn aqua_interfaces__msg__PoolStatus__Sequence__fini(seq: *mut rosidl_runtime_rs::Sequence<PoolStatus>);
+    fn aqua_interfaces__msg__PoolStatus__Sequence__copy(in_seq: &rosidl_runtime_rs::Sequence<PoolStatus>, out_seq: *mut rosidl_runtime_rs::Sequence<PoolStatus>) -> bool;
 }
 
-// Corresponds to aqua_interfaces__msg__TankStatus
+// Corresponds to aqua_interfaces__msg__PoolStatus
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 
 
@@ -130,7 +130,7 @@ extern "C" {
 
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct TankStatus {
+pub struct PoolStatus {
 
     // This member is not documented.
     #[allow(missing_docs)]
@@ -155,62 +155,62 @@ pub struct TankStatus {
 
 
 
-impl Default for TankStatus {
+impl Default for PoolStatus {
   fn default() -> Self {
     unsafe {
       let mut msg = std::mem::zeroed();
-      if !aqua_interfaces__msg__TankStatus__init(&mut msg as *mut _) {
-        panic!("Call to aqua_interfaces__msg__TankStatus__init() failed");
+      if !aqua_interfaces__msg__PoolStatus__init(&mut msg as *mut _) {
+        panic!("Call to aqua_interfaces__msg__PoolStatus__init() failed");
       }
       msg
     }
   }
 }
 
-impl rosidl_runtime_rs::SequenceAlloc for TankStatus {
+impl rosidl_runtime_rs::SequenceAlloc for PoolStatus {
   fn sequence_init(seq: &mut rosidl_runtime_rs::Sequence<Self>, size: usize) -> bool {
     // SAFETY: This is safe since the pointer is guaranteed to be valid/initialized.
-    unsafe { aqua_interfaces__msg__TankStatus__Sequence__init(seq as *mut _, size) }
+    unsafe { aqua_interfaces__msg__PoolStatus__Sequence__init(seq as *mut _, size) }
   }
   fn sequence_fini(seq: &mut rosidl_runtime_rs::Sequence<Self>) {
     // SAFETY: This is safe since the pointer is guaranteed to be valid/initialized.
-    unsafe { aqua_interfaces__msg__TankStatus__Sequence__fini(seq as *mut _) }
+    unsafe { aqua_interfaces__msg__PoolStatus__Sequence__fini(seq as *mut _) }
   }
   fn sequence_copy(in_seq: &rosidl_runtime_rs::Sequence<Self>, out_seq: &mut rosidl_runtime_rs::Sequence<Self>) -> bool {
     // SAFETY: This is safe since the pointer is guaranteed to be valid/initialized.
-    unsafe { aqua_interfaces__msg__TankStatus__Sequence__copy(in_seq, out_seq as *mut _) }
+    unsafe { aqua_interfaces__msg__PoolStatus__Sequence__copy(in_seq, out_seq as *mut _) }
   }
 }
 
-impl rosidl_runtime_rs::Message for TankStatus {
+impl rosidl_runtime_rs::Message for PoolStatus {
   type RmwMsg = Self;
   fn into_rmw_message(msg_cow: std::borrow::Cow<'_, Self>) -> std::borrow::Cow<'_, Self::RmwMsg> { msg_cow }
   fn from_rmw_message(msg: Self::RmwMsg) -> Self { msg }
 }
 
-impl rosidl_runtime_rs::RmwMessage for TankStatus where Self: Sized {
-  const TYPE_NAME: &'static str = "aqua_interfaces/msg/TankStatus";
+impl rosidl_runtime_rs::RmwMessage for PoolStatus where Self: Sized {
+  const TYPE_NAME: &'static str = "aqua_interfaces/msg/PoolStatus";
   fn get_type_support() -> *const std::ffi::c_void {
     // SAFETY: No preconditions for this function.
-    unsafe { rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__TankStatus() }
+    unsafe { rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__PoolStatus() }
   }
 }
 
 
 #[link(name = "aqua_interfaces__rosidl_typesupport_c")]
 extern "C" {
-    fn rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__TankPhysicalVariables() -> *const std::ffi::c_void;
+    fn rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__PoolPhysicalVariables() -> *const std::ffi::c_void;
 }
 
 #[link(name = "aqua_interfaces__rosidl_generator_c")]
 extern "C" {
-    fn aqua_interfaces__msg__TankPhysicalVariables__init(msg: *mut TankPhysicalVariables) -> bool;
-    fn aqua_interfaces__msg__TankPhysicalVariables__Sequence__init(seq: *mut rosidl_runtime_rs::Sequence<TankPhysicalVariables>, size: usize) -> bool;
-    fn aqua_interfaces__msg__TankPhysicalVariables__Sequence__fini(seq: *mut rosidl_runtime_rs::Sequence<TankPhysicalVariables>);
-    fn aqua_interfaces__msg__TankPhysicalVariables__Sequence__copy(in_seq: &rosidl_runtime_rs::Sequence<TankPhysicalVariables>, out_seq: *mut rosidl_runtime_rs::Sequence<TankPhysicalVariables>) -> bool;
+    fn aqua_interfaces__msg__PoolPhysicalVariables__init(msg: *mut PoolPhysicalVariables) -> bool;
+    fn aqua_interfaces__msg__PoolPhysicalVariables__Sequence__init(seq: *mut rosidl_runtime_rs::Sequence<PoolPhysicalVariables>, size: usize) -> bool;
+    fn aqua_interfaces__msg__PoolPhysicalVariables__Sequence__fini(seq: *mut rosidl_runtime_rs::Sequence<PoolPhysicalVariables>);
+    fn aqua_interfaces__msg__PoolPhysicalVariables__Sequence__copy(in_seq: &rosidl_runtime_rs::Sequence<PoolPhysicalVariables>, out_seq: *mut rosidl_runtime_rs::Sequence<PoolPhysicalVariables>) -> bool;
 }
 
-// Corresponds to aqua_interfaces__msg__TankPhysicalVariables
+// Corresponds to aqua_interfaces__msg__PoolPhysicalVariables
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
 
 
@@ -219,7 +219,7 @@ extern "C" {
 
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct TankPhysicalVariables {
+pub struct PoolPhysicalVariables {
 
     // This member is not documented.
     #[allow(missing_docs)]
@@ -244,44 +244,44 @@ pub struct TankPhysicalVariables {
 
 
 
-impl Default for TankPhysicalVariables {
+impl Default for PoolPhysicalVariables {
   fn default() -> Self {
     unsafe {
       let mut msg = std::mem::zeroed();
-      if !aqua_interfaces__msg__TankPhysicalVariables__init(&mut msg as *mut _) {
-        panic!("Call to aqua_interfaces__msg__TankPhysicalVariables__init() failed");
+      if !aqua_interfaces__msg__PoolPhysicalVariables__init(&mut msg as *mut _) {
+        panic!("Call to aqua_interfaces__msg__PoolPhysicalVariables__init() failed");
       }
       msg
     }
   }
 }
 
-impl rosidl_runtime_rs::SequenceAlloc for TankPhysicalVariables {
+impl rosidl_runtime_rs::SequenceAlloc for PoolPhysicalVariables {
   fn sequence_init(seq: &mut rosidl_runtime_rs::Sequence<Self>, size: usize) -> bool {
     // SAFETY: This is safe since the pointer is guaranteed to be valid/initialized.
-    unsafe { aqua_interfaces__msg__TankPhysicalVariables__Sequence__init(seq as *mut _, size) }
+    unsafe { aqua_interfaces__msg__PoolPhysicalVariables__Sequence__init(seq as *mut _, size) }
   }
   fn sequence_fini(seq: &mut rosidl_runtime_rs::Sequence<Self>) {
     // SAFETY: This is safe since the pointer is guaranteed to be valid/initialized.
-    unsafe { aqua_interfaces__msg__TankPhysicalVariables__Sequence__fini(seq as *mut _) }
+    unsafe { aqua_interfaces__msg__PoolPhysicalVariables__Sequence__fini(seq as *mut _) }
   }
   fn sequence_copy(in_seq: &rosidl_runtime_rs::Sequence<Self>, out_seq: &mut rosidl_runtime_rs::Sequence<Self>) -> bool {
     // SAFETY: This is safe since the pointer is guaranteed to be valid/initialized.
-    unsafe { aqua_interfaces__msg__TankPhysicalVariables__Sequence__copy(in_seq, out_seq as *mut _) }
+    unsafe { aqua_interfaces__msg__PoolPhysicalVariables__Sequence__copy(in_seq, out_seq as *mut _) }
   }
 }
 
-impl rosidl_runtime_rs::Message for TankPhysicalVariables {
+impl rosidl_runtime_rs::Message for PoolPhysicalVariables {
   type RmwMsg = Self;
   fn into_rmw_message(msg_cow: std::borrow::Cow<'_, Self>) -> std::borrow::Cow<'_, Self::RmwMsg> { msg_cow }
   fn from_rmw_message(msg: Self::RmwMsg) -> Self { msg }
 }
 
-impl rosidl_runtime_rs::RmwMessage for TankPhysicalVariables where Self: Sized {
-  const TYPE_NAME: &'static str = "aqua_interfaces/msg/TankPhysicalVariables";
+impl rosidl_runtime_rs::RmwMessage for PoolPhysicalVariables where Self: Sized {
+  const TYPE_NAME: &'static str = "aqua_interfaces/msg/PoolPhysicalVariables";
   fn get_type_support() -> *const std::ffi::c_void {
     // SAFETY: No preconditions for this function.
-    unsafe { rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__TankPhysicalVariables() }
+    unsafe { rosidl_typesupport_c__get_message_type_support_handle__aqua_interfaces__msg__PoolPhysicalVariables() }
   }
 }
 
