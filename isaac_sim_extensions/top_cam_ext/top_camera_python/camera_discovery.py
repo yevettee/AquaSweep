@@ -2,7 +2,7 @@
 
 Same shape as under_cam_ext's discovery, with two differences:
 - a positive INCLUDE filter (must contain a "top*camera" token)
-- a slightly different EXCLUDE list (drops dingo's onboard cameras)
+- a slightly different EXCLUDE list (drops hippo's onboard cameras)
 """
 
 from __future__ import annotations
