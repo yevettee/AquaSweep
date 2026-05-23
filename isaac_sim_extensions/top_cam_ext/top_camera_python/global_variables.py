@@ -32,7 +32,7 @@ EXCLUDE_TOKENS = (
     "realsense",
     "stereo",
     "omniversekit",
-    "/dingo/",        # legacy dingo USD's onboard cameras
+    "/hippo/",        # hippo USD's onboard cameras (legacy dingo excluded)
     "/hippo/",        # hippo USD's onboard under_cam (under_cam_ext takes those)
 )
 

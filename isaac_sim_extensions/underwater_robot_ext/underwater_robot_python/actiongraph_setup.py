@@ -12,7 +12,7 @@ Usage:
 
     # After robot is loaded on stage:
     create_cmd_vel_graph(
-        robot_prim_path="/World/Dingo",
+        robot_prim_path="/World/Hippo",
         robot_name="under_robot_1",
         wheel_radius=0.049,
         wheel_base=0.4523,
@@ -38,7 +38,7 @@ def create_cmd_vel_graph(
     """Create an ActionGraph for ROS2 cmd_vel subscription and differential drive control.
 
     Args:
-        robot_prim_path: USD prim path to the robot articulation root (e.g., "/World/Dingo")
+        robot_prim_path: USD prim path to the robot articulation root (e.g., "/World/Hippo")
         robot_name: Robot name used in topic (e.g., "under_robot_1" for /under_robot_1/cmd_vel)
         wheel_radius: Wheel radius in meters
         wheel_base: Distance between wheels in meters

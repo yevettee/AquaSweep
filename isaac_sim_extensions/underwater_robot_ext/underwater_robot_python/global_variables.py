@@ -76,7 +76,7 @@ JETBOT_LINEAR_SCALE = 1.0
 # ── Debug flags for physics step (toggle to isolate issues) ────────────────
 # Set to False to disable each system and test robot movement in isolation.
 # Usage: change flag → restart Isaac Sim or reload extension → LOAD → RUN
-DEBUG_ENABLE_WATER_PHYSICS = False       # 부력, 항력, 지면효과
-DEBUG_ENABLE_STURGEON_ANIM = False       # 물고기 수영 애니메이션
-DEBUG_ENABLE_WATER_SURFACE_ANIM = False  # 물 표면 파동 애니메이션
-DEBUG_ENABLE_SUCTION = False             # 흡입 시스템
+DEBUG_ENABLE_WATER_PHYSICS = True       # 부력, 항력, 지면효과
+DEBUG_ENABLE_STURGEON_ANIM = True       # 물고기 수영 애니메이션
+DEBUG_ENABLE_WATER_SURFACE_ANIM = True  # 물 표면 파동 애니메이션
+DEBUG_ENABLE_SUCTION = True             # 흡입 시스템
