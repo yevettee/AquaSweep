@@ -16,14 +16,47 @@ Drag·AddedMass·GroundEffect는 <repo>/water_tank_env/water_tank_env/ 에서 im
 from typing import List, Tuple
 
 import numpy as np
-from pxr import Usd, UsdPhysics
+from pxr import Usd, UsdGeom, UsdPhysics
 
 from . import params
 
 # ── 인라인 물리 클래스 (기존 water_tank_env 패키지에서 이전) ─────────────────
 
 _WATER_DENSITY = 1000.0  # kg/m³
-_MIN_BODY_Z = 0.02       # 바닥 관통 방지 — 바퀴 반경(0.049) + 여유
+
+# ── 소프트 바닥 구속 파라미터 ──
+_WHEEL_LINK = "left_wheel_link"
+_WHEEL_RADIUS_FALLBACK = 0.049
+_FLOOR_SPRING_K = 100000.0  # N/m — 바닥 침투 시 반발력 (강한 스프링)
+_FLOOR_DAMPING = 5000.0     # N·s/m — 속도 댐핑 (진동 방지)
+
+
+def _get_wheel_low_z(stage, robot_root: str) -> float | None:
+    """로봇의 왼쪽 바퀴 최저점 Z 좌표 (world coordinate).
+
+    wheel_low_z = 0.0이 되어야 바퀴가 바닥에 접촉하여 정상 구동된다.
+    """
+    collision_path = f"{robot_root}/{_WHEEL_LINK}/collisions"
+    prim = stage.GetPrimAtPath(collision_path)
+    if not prim or not prim.IsValid():
+        return None
+
+    cyl = UsdGeom.Cylinder(prim)
+    if not cyl:
+        return None
+
+    radius = float(cyl.GetRadiusAttr().Get() or _WHEEL_RADIUS_FALLBACK)
+    axis = str(cyl.GetAxisAttr().Get() or "Y")
+
+    xf = UsdGeom.Xformable(prim)
+    center_z = float(xf.ComputeLocalToWorldTransform(0).ExtractTranslation()[2])
+
+    if axis == "Y":
+        return center_z - radius
+    elif axis == "Z":
+        height = float(cyl.GetHeightAttr().Get() or 0.0)
+        return center_z - height / 2.0
+    return center_z - radius
 
 
 class Drag:
@@ -69,14 +102,15 @@ class _Body:
     """Per-body cached state for the physics applier."""
 
     __slots__ = (
-        "prim_path", "volume", "half_height",
+        "prim_path", "robot_root", "volume", "half_height",
         "drag", "added_mass", "ground_effect",
         "view", "prev_velocity",
     )
 
-    def __init__(self, prim_path, volume, half_height, cd_linear, cd_angular,
+    def __init__(self, prim_path, robot_root, volume, half_height, cd_linear, cd_angular,
                  added_mass_coeff, view):
         self.prim_path = prim_path
+        self.robot_root = robot_root  # 바퀴 Z 계산용 (e.g., /World/Pools/Pool_1/Robot/hippo)
         self.volume = volume
         self.half_height = half_height
         self.drag = Drag(linear_drag_coeff=cd_linear, angular_drag_coeff=cd_angular)
@@ -103,7 +137,10 @@ class WaterPhysicsApplier:
         self._rediscover_cooldown = 0  # frames remaining before next rediscover attempt
 
     def discover_bodies(self, stage):
-        """Scan stage for rigid bodies with ``aquasweep:volume`` set."""
+        """Scan stage for rigid bodies with ``aquasweep:volume`` attribute set.
+        
+        Note: volume 값이 0이어도 발견됨 (부력 비활성화 + 소프트 바닥 구속 지원).
+        """
         # Local import: isaacsim.core.prims only loads inside Isaac Sim.
         from isaacsim.core.prims import RigidPrim
 
@@ -117,8 +154,7 @@ class WaterPhysicsApplier:
                 continue
 
             volume = float(volume_attr.Get())
-            if volume <= 0.0:
-                continue
+            # volume = 0도 허용 (부력 비활성화 상태)
 
             path = prim.GetPath().pathString
             view = RigidPrim(prim_paths_expr=path)
@@ -127,8 +163,16 @@ class WaterPhysicsApplier:
             except Exception:
                 continue
 
+            # robot_root 추출: base_link의 부모 경로 (바퀴 Z 계산용)
+            # 예: /World/Pools/Pool_1/Robot/hippo/base_link → /World/Pools/Pool_1/Robot/hippo
+            if path.endswith("/base_link"):
+                robot_root = str(prim.GetParent().GetPath())
+            else:
+                robot_root = path
+
             body = _Body(
                 prim_path=path,
+                robot_root=robot_root,
                 volume=volume,
                 half_height=_get_attr(prim, HALF_HEIGHT_ATTR, 0.15),
                 cd_linear=_get_attr(prim, CD_LINEAR_ATTR, 10.0),
@@ -166,22 +210,36 @@ class WaterPhysicsApplier:
             lv = np.asarray(lin_vels[0], dtype=float)
             av = np.asarray(ang_vels[0], dtype=float)
 
-            # ── 바닥 관통 방지: Z가 최소값 미만이면 강제 보정 ──
-            if pos[2] < _MIN_BODY_Z:
-                try:
-                    _, orientations = body.view.get_world_poses()
-                    body.view.set_world_poses(
-                        positions=np.array([[pos[0], pos[1], _MIN_BODY_Z]]),
-                        orientations=orientations,
-                    )
-                    if lv[2] < 0.0:
-                        body.view.set_linear_velocities(
-                            np.array([[lv[0], lv[1], 0.0]])
+            # ── 바닥 구속: wheel_low_z = 0.0 유지 ──
+            # 하이브리드 방식: 작은 침투는 힘으로, 큰 침투는 직접 보정
+            floor_push_force = np.zeros(3)
+            wheel_low = _get_wheel_low_z(self._stage, body.robot_root)
+            if wheel_low is not None and wheel_low < 0.0:
+                penetration = abs(wheel_low)
+                
+                if penetration >= 0.003:
+                    # 큰 침투: 직접 위치 보정 (wheel_low = 0이 되도록)
+                    try:
+                        _, orientations = body.view.get_world_poses()
+                        corrected_z = pos[2] + penetration
+                        body.view.set_world_poses(
+                            positions=np.array([[pos[0], pos[1], corrected_z]]),
+                            orientations=orientations,
                         )
-                        lv[2] = 0.0
-                    pos[2] = _MIN_BODY_Z
-                except Exception:
-                    pass
+                        # Z 속도 제거
+                        if lv[2] < -0.01:
+                            body.view.set_linear_velocities(
+                                np.array([[lv[0], lv[1], 0.0]])
+                            )
+                            lv[2] = 0.0
+                        pos[2] = corrected_z
+                    except Exception:
+                        pass
+                else:
+                    # 작은 침투: 스프링-댐퍼로 부드럽게 보정
+                    spring_force = _FLOOR_SPRING_K * penetration
+                    damping_force = -_FLOOR_DAMPING * lv[2] if lv[2] < 0 else 0.0
+                    floor_push_force[2] = spring_force + damping_force
 
             accel = (lv - body.prev_velocity) / max(dt, 1e-6)
             body.prev_velocity = lv.copy()
@@ -198,7 +256,7 @@ class WaterPhysicsApplier:
                 base_drag_coeff=body.drag.Cd_linear,
             )
 
-            total_force = buoyancy_force + drag_force + added_force + ground_force
+            total_force = buoyancy_force + drag_force + added_force + ground_force + floor_push_force
 
             try:
                 body.view.apply_forces_and_torques_at_pos(
