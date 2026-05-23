@@ -1,4 +1,14 @@
-"""Thread-safe cmd_vel subscriber for use inside Isaac Sim.
+"""DEPRECATED: This module is no longer used.
+
+cmd_vel subscription is now handled by ActionGraph (actiongraph_setup.py).
+Isaac Sim's built-in ROS2 bridge nodes avoid rclpy import issues caused by
+Python version conflicts (Isaac py3.11 vs system ROS py3.10).
+
+This file is kept for reference only.
+
+---
+Original description:
+Thread-safe cmd_vel subscriber for use inside Isaac Sim.
 
 Isaac Sim runs its own event loop. rclpy must be initialized externally
 (in ui_builder.py) and an executor spun in a daemon thread before
