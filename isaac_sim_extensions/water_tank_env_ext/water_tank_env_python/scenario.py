@@ -32,11 +32,22 @@ class WaterTankScenario:
         return self._running_scenario
 
     def update_scenario(self, step: float):
+        from underwater_robot_python.global_variables import (
+            DEBUG_ENABLE_WATER_PHYSICS,
+            DEBUG_ENABLE_STURGEON_ANIM,
+            DEBUG_ENABLE_WATER_SURFACE_ANIM,
+        )
+
         if not self._running_scenario:
             return
-        self._physics.apply(step)
-        self._surface_anim.step(step)
-        self._sturgeon_anim.step(step)
+
+        if DEBUG_ENABLE_WATER_PHYSICS:
+            self._physics.apply(step)
+        if DEBUG_ENABLE_WATER_SURFACE_ANIM:
+            self._surface_anim.step(step)
+        if DEBUG_ENABLE_STURGEON_ANIM:
+            self._sturgeon_anim.step(step)
+
         if self._uw_cam is not None:
             try:
                 self._uw_cam.render()
