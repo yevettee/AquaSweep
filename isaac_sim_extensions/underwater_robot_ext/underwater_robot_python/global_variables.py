@@ -26,7 +26,7 @@ ROBOT_PRIM_PATH = "/World/Hippo"
 
 # extension/data/hippo_v1.usd — /Root/hippo, VisualWheels 는 base_link 자식.
 # 우리가 직접 개조한 underwater 청소 로봇 (Clearpath Dingo-D 플랫폼 기반).
-HIPPO_USD_FILENAME = "hippo_v1.usd"
+HIPPO_USD_FILENAME = "hippo_v1_compressed.usd" # "hippo_v1.usd"
 
 # 후방 호환: 기존 import 코드가 즉시 깨지지 않도록 별칭 유지.
 DINGO_USD_FILENAME = HIPPO_USD_FILENAME
