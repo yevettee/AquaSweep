@@ -1,14 +1,11 @@
-"""Wheel physics diagnosis script.
 
-Run in Isaac Sim Script Editor.
-"""
 
 from isaacsim.core.api.world import World
 from isaacsim.core.utils.stage import get_current_stage
 from pxr import UsdPhysics, PhysxSchema
 import numpy as np
 
-TEST_ROBOT_IDS = [1, 5]  # Compare non-moving robot 1 vs working robot 5
+TEST_ROBOT_IDS = [1, 2, 3, 4, 5, 6, 7]  # Compare non-moving robot 1 vs working robot 5
 
 
 def diagnose_robot(robot_id):
