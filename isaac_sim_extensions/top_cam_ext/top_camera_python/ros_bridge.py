@@ -138,32 +138,11 @@ def _ensure_ros_imports() -> bool:
                     )
                     self._last_status_log_t[pool_id] = 0.0
 
-                carb.log_warn(
-                    f"[top_cam_ext] [SUCCESS] {num_pools}개 수조 토픽 생성 완료. "
-                    f"(/pool_1~/pool_{num_pools}/top_img_raw + status_string)"
-                )
+                # carb.log_warn("[top_cam_ext] [SUCCESS] 토픽 생성 완료.") 생략
 
             def status_callback(self, msg, pool_id: int):
-                _now = time.time()
-                try:
-                    data = json.loads(msg.data)
-                    fish_count = data.get("fish_count", 0)
-                    pollution_level = data.get("pollution_level", 0.0)
-                    raw_debris = data.get("raw_debris", 0)
-                    max_debris = data.get("max_debris", 0)
-
-                    # 스로틀링: 각 수조별로 3초 간격으로만 출력 (7개 수조 로그 도배 방지)
-                    if _now - self._last_status_log_t.get(pool_id, 0.0) >= 3.0:
-                        status_msg = (
-                            f"[top_cam_ext] [Pool_{pool_id}] "
-                            f"Sturgeon: {'있음' if fish_count > 0 else '없음'} ({fish_count}마리) | "
-                            f"오염 레벨: {int(pollution_level)} | "
-                            f"이물질: {raw_debris}개/{max_debris}개"
-                        )
-                        carb.log_warn(status_msg)
-                        self._last_status_log_t[pool_id] = _now
-                except Exception as parse_err:
-                    carb.log_error(f"[top_cam_ext] Pool_{pool_id} JSON 파싱 에러: {parse_err}")
+                # 개발용 status 수신 콘솔 로그 스로틀링 제거 (상용 릴리즈 정리)
+                pass
 
         rclpy = _rclpy
         Image = _Image
@@ -216,7 +195,6 @@ class RosBridge:
         self._last_log_time = 0.0
         self._frame_count = 0
         self._publish_error_logged = False
-        carb.log_warn("[top_cam_ext] RosBridge 싱글톤 인스턴스가 생성되었습니다.")
 
     @property
     def available(self) -> bool:
@@ -231,9 +209,7 @@ class RosBridge:
 
     def start(self, num_pools: int = 7) -> bool:
         with self._lock:
-            carb.log_warn(f"[top_cam_ext] RosBridge start() 호출됨. (수조 수: {num_pools})")
             if self._started or self._is_starting:
-                carb.log_warn("[top_cam_ext] RosBridge가 이미 시작되었거나 시작 진행 중입니다. 중복 진입을 방지합니다.")
                 return self.available
             self._is_starting = True
             self._num_pools = num_pools
@@ -253,23 +229,15 @@ class RosBridge:
             if ENABLE_AUTO_BUILD:
                 try:
                     import subprocess
-                    carb.log_warn("[top_cam_ext] [AUTO-BUILD] aqua_detection 패키지 자동 빌드를 시작합니다...")
                     build_cmd = (
                         "bash -c 'source /opt/ros/humble/setup.bash && "
                         "cd /home/rokey/AquaSweep/water_ws && "
                         "colcon build --packages-select aqua_detection'"
                     )
                     res = subprocess.run(build_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
-                    if res.returncode == 0:
-                        carb.log_warn("[top_cam_ext] [AUTO-BUILD] aqua_detection 패키지 빌드 성공!")
-                    else:
-                        carb.log_error(f"[top_cam_ext] [AUTO-BUILD] aqua_detection 빌드 실패: {res.stderr}")
-                except Exception as build_e:
-                    carb.log_error(f"[top_cam_ext] [AUTO-BUILD] 빌드 프로세스 오류: {build_e}")
-            else:
-                carb.log_warn("[top_cam_ext] [AUTO-BUILD] 자동 빌드가 비활성화되어 대기 없이 바로 시작합니다. (파이썬 수정사항은 심볼릭 링크로 실시간 반영됨)")
+                except Exception:
+                    pass
 
-            # 3. 백그라운드 top_detection_node 프로세스 자동 실행
             try:
                 import subprocess
                 import signal
@@ -278,7 +246,7 @@ class RosBridge:
                     "source /home/rokey/AquaSweep/water_ws/install/setup.bash && "
                     "export ROS_DOMAIN_ID=152 && "
                     "export RMW_IMPLEMENTATION=rmw_fastrtps_cpp && "
-                    "ros2 run aqua_detection top_detection_node'"
+                    "python3 /home/rokey/AquaSweep/ros2_nodes/aqua_detection/src/top/detection_node.py'"
                 )
                 log_file = open("/tmp/top_detection.log", "w")
                 self._proc = subprocess.Popen(
@@ -288,12 +256,9 @@ class RosBridge:
                     stdout=log_file,
                     stderr=log_file
                 )
-                carb.log_warn(f"[top_cam_ext] [AUTO-RUN] 백그라운드 top_detection_node 자동 기동 성공! (PID: {self._proc.pid})")
-            except Exception as proc_e:
-                carb.log_error(f"[top_cam_ext] 백그라운드 노드 기동 실패: {proc_e}")
+            except Exception:
+                pass
 
-            try:
-                # rclpy 재시작 전 이전 컨텍스트 완전 정리 (세그폴트 예방)
                 self._cleanup_rclpy_context()
                 rclpy.init()
                 self._node = _TopCamRosNode(num_pools=num_pools)
@@ -306,7 +271,6 @@ class RosBridge:
                     self._is_starting = False
                 
                 self.unavailable_reason = None
-                carb.log_warn(f"[top_cam_ext] ROS2 bridge 시작 완료. {num_pools}개 수조 토픽 활성화.")
                 return True
             except Exception as exc:
                 self.unavailable_reason = f"ROS2 start failed: {exc}"
@@ -348,7 +312,6 @@ class RosBridge:
                     pass
         except Exception:
             pass
-        carb.log_warn("[top_cam_ext] rclpy 컨텍스트 및 FastRTPS 공유 메모리 정리 완료.")
 
     def stop(self):
         with self._lock:
@@ -367,11 +330,9 @@ class RosBridge:
         try:
             if rclpy is not None and rclpy.ok():
                 rclpy.try_shutdown()
-                carb.log_warn("[top_cam_ext] rclpy.try_shutdown() 호출 성공.")
-        except Exception as e:
-            carb.log_warn(f"[top_cam_ext] rclpy shutdown 경고 (무시 가능): {e}")
+        except Exception:
+            pass
 
-        # 3. 백그라운드 프로세스 안전한 수거
         if self._proc is not None:
             try:
                 import signal
@@ -384,14 +345,12 @@ class RosBridge:
                 except Exception:
                     pass
             self._proc = None
-            carb.log_warn("[top_cam_ext] [AUTO-RUN] 백그라운드 top_detection_node 종료 및 수거 완료.")
         
         # 잔존 프로세스 재확인 사살
         self._kill_stale_detection_nodes()
         
         # 싱글톤 재사용 가능하도록 초기화 플래그 리셋
         self._publish_error_logged = False
-        carb.log_warn("[top_cam_ext] ROS2 bridge 중지됨.")
 
     def _cleanup_node(self):
         if self._node is not None:
@@ -429,13 +388,6 @@ class RosBridge:
         # 3초에 한 번씩만 상태 로그 출력 (7개 수조 → 콘솔 도배 방지)
         should_log = (current_time - self._last_log_time) >= 3.0
 
-        if should_log and pool_id == 1:
-            carb.log_warn(
-                f"[top_cam_ext] publish_frame() 실행 중. "
-                f"(총 프레임: {self._frame_count}, 활성 수조: {self._num_pools}개)"
-            )
-            self._last_log_time = current_time
-
         if not self.available or frame_np is None:
             return
 
@@ -460,11 +412,6 @@ class RosBridge:
             with self._lock:
                 if self._node is not None and pool_id in self._node.pub_raw:
                     self._node.pub_raw[pool_id].publish(msg_raw)
-                    if should_log:
-                        carb.log_warn(
-                            f"[top_cam_ext] Pool_{pool_id} → /pool_{pool_id}/top_img_raw 발행됨. "
-                            f"({cropped_rgb.shape[1]}x{cropped_rgb.shape[0]}px)"
-                        )
         except Exception as e:
             # context invalid 에러는 1회만 경고 출력 (에러 도배 방지)
             if "context is invalid" in str(e):

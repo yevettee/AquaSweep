@@ -68,7 +68,6 @@ class UIBuilder:
             if world is not None:
                 try:
                     world.add_physics_callback("top_cam_auto_step", self._auto_physics_step)
-                    print("[top_cam_ext] Auto physics callback registered on PLAY.")
                 except Exception as e:
                     pass
         elif event.type == int(omni.timeline.TimelineEventType.STOP):
@@ -216,7 +215,6 @@ class UIBuilder:
                 self._camera.initialize()
                 if hasattr(self, "_bridge") and self._bridge:
                     self._bridge.start()
-                carb.log_warn(f"[top_cam_ext] AUTO-INIT: Top camera Z-axis set to 12.0. Camera initialized at: {target_path}")
                 return True
         return False
 

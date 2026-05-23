@@ -111,14 +111,6 @@ class TopDetectionNode(Node):
             self.get_logger().error(f"🔴 Pool_{pool_id}: ROS Image 변환 실패: {e}")
             return
 
-        # 개발 중에만 크롭 상태를 모니터링할 수 있도록 Pool_1에 대한 간의 raw_img 창 기동
-        if pool_id == 1:
-            try:
-                cv2.imshow("pool_1_raw_img (ROI Cropped)", cv_image)
-                cv2.waitKey(1)
-            except Exception as e:
-                pass
-
         # 30프레임 단위로 연산 상태 콘솔 출력
         should_log = (detector.frame_count % 30 == 1)
 
@@ -147,13 +139,7 @@ class TopDetectionNode(Node):
         except Exception as e:
             self.get_logger().error(f"🔴 Pool_{pool_id}: JSON 스트링 발행 실패: {e}")
 
-        if should_log:
-            self.get_logger().info(
-                f"🟢 [Pool_{pool_id} | 프레임: {detector.frame_count}] "
-                f"Fish: {fish_present} | Debris: {debris_count}/{max_debris} | "
-                f"Pollution: {pollution_level}"
-            )
-
+        # 개발용 콘솔 인지 로그 출력 및 cv2.imshow 팝업창 완전 제거 (상용 릴리즈 세팅)
         if debug_image is not None:
             try:
                 debug_msg = self.bridge.cv2_to_imgmsg(debug_image, encoding="bgr8")
@@ -163,68 +149,123 @@ class TopDetectionNode(Node):
                 self.get_logger().error(f"🔴 Pool_{pool_id}: 디버그 이미지 발행 실패: {e}")
 
     def process_image(self, cv_image, detector: PoolDetector):
-        # 1. 전처리: LAB 색공간 기반 CLAHE 적용 후 Gaussian Blur
-        lab = cv2.cvtColor(cv_image, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        cl = clahe.apply(l)
-        limg = cv2.merge((cl, a, b))
-        enhanced_bgr = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+        # 1. 이미지 크기 확인 및 3배 확대 (원래 해상도 유지 보전)
+        h_orig, w_orig = cv_image.shape[:2]
+        scale_factor = 3.0
+        cv_image_resized = cv2.resize(
+            cv_image, 
+            (int(w_orig * scale_factor), int(h_orig * scale_factor)), 
+            interpolation=cv2.INTER_CUBIC
+        )
 
-        blurred = cv2.GaussianBlur(enhanced_bgr, (5, 5), 0)
+        # 2. 조명 평탄화 (Illumination Normalization)
+        illum_bg = cv2.GaussianBlur(cv_image_resized, (151, 151), 0)
+        normalized = cv2.divide(cv_image_resized, illum_bg, scale=255)
 
-        # 2. 색공간 변환 및 마스킹 (지정된 단일 HSV 임계값 범위 완벽 준수)
-        # H: 5~35, S: 20~255, V: 80~255
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-        lower_hsv = np.array([5, 20, 80])
-        upper_hsv = np.array([35, 255, 255])
-        mask = cv2.inRange(hsv, lower_hsv, upper_hsv)
+        # 3. 그레이스케일 변환 및 가우시안 블러
+        gray = cv2.cvtColor(normalized, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        # 3. 모폴로지 연산 (3x3 커널로 Opening 노이즈 제거 -> 5x5 커널로 Closing 내부 채우기)
-        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        mask_opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
-        mask_closed = cv2.morphologyEx(mask_opened, cv2.MORPH_CLOSE, kernel_close)
+        # [개선 1] 수조 테두리 마스크 확장 (기존 -55에서 -25로 조정하여 테두리 스폰 이물질 구출) ⭐
+        h, w = gray.shape[:2]
+        center = (w // 2, h // 2)
+        radius = int(min(h, w) // 2 - 25) 
+        mask_circle = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask_circle, center, radius, 255, -1)
 
-        # 4. 윤곽선 추출 (물고기 먼저 검출)
-        contours, _ = cv2.findContours(mask_closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # -------------------------------------------------------------
+        # 4. [상어(Fish) 탐지 파이프라인]
+        # -------------------------------------------------------------
+        # 조명 근처의 흐릿한 형체 및 반만 잠긴 상어를 잡기 위해 상수 C를 3으로 대폭 낮춰 감도 극대화
+        fish_mask_raw = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 101, 3
+        )
+        fish_mask = cv2.bitwise_and(fish_mask_raw, mask_circle)
 
+        # 상어 파이프라인용 대형 모폴로지 (수면 위/아래 조각난 상어 몸통을 하나로 결합)
+        kernel_fish_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        kernel_fish_close = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+        fish_mask_processed = cv2.morphologyEx(fish_mask, cv2.MORPH_OPEN, kernel_fish_open)
+        fish_mask_processed = cv2.morphologyEx(fish_mask_processed, cv2.MORPH_CLOSE, kernel_fish_close)
+
+        # 상어 윤곽선 추출
+        fish_contours_raw, _ = cv2.findContours(fish_mask_processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         fish_contours = []
-        for cnt in contours:
+        fish_count_total = 0
+
+        for cnt in fish_contours_raw:
             area = cv2.contourArea(cnt)
-            # 물고기 탐지 기준: 윤곽선 면적이 1000 픽셀 이상이면서 가로/세로 종횡비(Aspect Ratio)가 2.0 이상인 객체
-            if area >= 1000:
-                x, y, w, h = cv2.boundingRect(cnt)
-                aspect_ratio = max(w / h if h != 0 else 0, h / w if w != 0 else 0)
-                if aspect_ratio >= 2.0:
+            # 수조 테두리선 확장으로 인해 걸릴 수 있는 거대 외곽 노이즈 차단 (면적 45000px 이상 제외)
+            if 1200 <= area <= 45000:
+                rect = cv2.minAreaRect(cnt)
+                (cx, cy), (w_rect, h_rect), angle = rect
+                max_dim = max(w_rect, h_rect)
+                min_dim = min(w_rect, h_rect)
+                aspect_ratio = float(max_dim) / min_dim if min_dim != 0 else 0
+                
+                # 수조 지름의 절반을 넘는 비정상적 거대 띠 노이즈 제거
+                if max_dim > (min(h, w) * 0.65):
+                    continue
+
+                # 반만 잠겨 종횡비가 깨진 상어도 잡을 수 있도록 종횡비 기준을 1.4로 완화 ⭐
+                if aspect_ratio >= 1.4:
                     fish_contours.append(cnt)
+                    
+                    # 마릿수 뻥튀기 원천 차단 (실제 기하학적 OBB 면적 기준 정밀 정규화)
+                    obb_area = w_rect * h_rect
+                    if obb_area >= 70000:
+                        fish_count_total += 3
+                    elif obb_area >= 36000:
+                        fish_count_total += 2
+                    else:
+                        fish_count_total += 1
 
-        # 물고기로 판별된 윤곽선 영역을 이물질 마스크에서 완전히 제외 (0으로 채움)
-        debris_mask = mask_closed.copy()
+        # -------------------------------------------------------------
+        # 5. [이물질(Debris) 탐지 파이프라인]
+        # -------------------------------------------------------------
+        # 조명 근처의 미세 이물질까지 잡도록 초고감도 설정 (C=2)
+        debris_mask_raw = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 45, 2
+        )
+        debris_mask = cv2.bitwise_and(debris_mask_raw, mask_circle)
+
+        # [개선 2] 이물질은 절대 크게 메우면 안 됨! 붙어있는 2개를 유지하기 위해 미세 커널(3x3) 사용 ⭐
+        kernel_debris = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        debris_mask_processed = cv2.morphologyEx(debris_mask, cv2.MORPH_OPEN, kernel_debris)
+        debris_mask_processed = cv2.morphologyEx(debris_mask_processed, cv2.MORPH_CLOSE, kernel_debris)
+
+        # 상어가 위치한 영역은 이물질 마스크에서 완전히 지워버림 (상어 지느러미 오탐지 방지)
         if len(fish_contours) > 0:
-            cv2.drawContours(debris_mask, fish_contours, -1, 0, thickness=cv2.FILLED)
+            cv2.drawContours(debris_mask_processed, fish_contours, -1, 0, thickness=cv2.FILLED)
 
-        # 물고기가 완전히 제외된 마스크에서 이물질 윤곽선 추출
-        debris_contours_raw, _ = cv2.findContours(debris_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+        # 이물질 윤곽선 추출
+        debris_contours_raw, _ = cv2.findContours(debris_mask_processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         debris_contours = []
         for cnt in debris_contours_raw:
             area = cv2.contourArea(cnt)
-            # 이물질 탐지 기준: 윤곽선의 넓이가 50 픽셀 이상이면서 종횡비가 0.2 ~ 5.0 사이인 객체
-            if area >= 50:
-                x, y, w, h = cv2.boundingRect(cnt)
-                aspect_ratio = float(w) / h if h != 0 else 0
-                if 0.2 <= aspect_ratio <= 5.0:
+            # 3배 확대 스케일 기준, 분리된 개별 이물질 면적 스펙트럼 필터링 (15px ~ 500px)
+            if 15 <= area <= 500:
+                x_b, y_b, w_b, h_b = cv2.boundingRect(cnt)
+                # 수조 벽면 잔여 테두리(너무 정방형으로 길게 남는 선) 필터링
+                if w_b > (w * 0.05) or h_b > (h * 0.05):
+                    continue
+                aspect_ratio = float(w_b) / h_b if h_b != 0 else 0
+                if 0.15 <= aspect_ratio <= 6.0:
                     debris_contours.append(cnt)
 
-        # 5. 오염도 데이터 보정 (Max-Hold Filter)
-        current_debris_cnt = len(debris_contours)
+        # -------------------------------------------------------------
+        # 6. 후처리 데이터 매핑 및 시각화 (기존 구조 안정적 유지)
+        # -------------------------------------------------------------
+        # 로봇 청소선 몸체 파츠 등으로 인해 상시 고정 팝업되는 4~5개의 미세 오탐지 점을 
+        # 전체 이물질 개수에서 항상 -5씩 동적 보정 (하한은 0으로 고정)
+        current_debris_cnt = max(0, len(debris_contours) - 5)
         detector.debris_history.append(current_debris_cnt)
-        
-        # 30프레임 미만이더라도 현재 들어온 데이터들 내에서 실시간 최댓값 반환 (지연 없음)
         max_debris = max(detector.debris_history) if len(detector.debris_history) > 0 else current_debris_cnt
 
-        # 6. Pollution Level 산정 (50 이하: 0, 51 ~ 70: 1, 71 이상: 2)
         if max_debris <= 50:
             pollution_level = 0.0
         elif 51 <= max_debris <= 70:
@@ -232,28 +273,37 @@ class TopDetectionNode(Node):
         else:
             pollution_level = 2.0
 
-        # 수조 내 물고기 존재 여부 (있으면 1, 없으면 0)
-        fish_present = 1 if len(fish_contours) > 0 else 0
-
-        # 7. 시각화
+        fish_present = 1 if fish_count_total > 0 else 0
         debug_image = cv_image.copy()
 
+        # 상어 박스 시각화 (Red OBB)
         for cnt in fish_contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            cv2.rectangle(debug_image, (x, y), (x + w, y + h), (0, 0, 255), 3)
-            cv2.putText(debug_image, "Sturgeon", (x, y - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            cnt_orig = (cnt / scale_factor).astype(np.int32)
+            rect_orig = cv2.minAreaRect(cnt_orig)
+            box_orig = np.int64(cv2.boxPoints(rect_orig))
+            cv2.drawContours(debug_image, [box_orig], 0, (0, 0, 255), 3)
+            
+            cx, cy = int(rect_orig[0][0]), int(rect_orig[0][1])
+            obb_area_orig = rect_orig[1][0] * rect_orig[1][1]
+            
+            if obb_area_orig >= 7700:
+                lbl = "Sturgeon (x3)"
+            elif obb_area_orig >= 4000:
+                lbl = "Sturgeon (x2)"
+            else:
+                lbl = "Sturgeon"
+            cv2.putText(debug_image, lbl, (cx - 30, cy - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
+        # 이물질 박스 시각화 (Green Bounding Box)
         for cnt in debris_contours:
-            x, y, w, h = cv2.boundingRect(cnt)
-            cv2.rectangle(debug_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cnt_orig = (cnt / scale_factor).astype(np.int32)
+            x_b, y_b, w_b, h_b = cv2.boundingRect(cnt_orig)
+            cv2.rectangle(debug_image, (x_b, y_b), (x_b + w_b, y_b + h_b), (0, 255, 0), 2)
 
-        overlay_text = f"Fish Present: {fish_present} | Debris: {current_debris_cnt}/{max_debris} | Poll: {int(pollution_level)}"
-        cv2.putText(debug_image, overlay_text, (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
+        overlay_text = f"Fish: {fish_count_total} | Debris: {current_debris_cnt}/{max_debris} | Poll: {int(pollution_level)}"
+        cv2.putText(debug_image, overlay_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
 
         return fish_present, current_debris_cnt, max_debris, pollution_level, debug_image
-
 
 def main(args=None):
     rclpy.init(args=args)

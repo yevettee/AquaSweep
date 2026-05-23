@@ -44,7 +44,8 @@ def _suppress_noise_warnings():
     except Exception:
         pass
 
-    carb.log_warn("[top_cam_ext] 노이즈 경고 채널 억제 적용 완료 (omni.log & carb.settings).")
+    # 노이즈 경고 채널 억제 적용 완료 (기능은 동작하되 알림 로그 출력 제거)
+    pass
 
 
 # ── 수조 좌표 가져오기 (water_tank_env_ext 참조) ─────────────────────────────
@@ -79,8 +80,6 @@ class TopCamExtension(omni.ext.IExt):
         # ── 노이즈 경고 억제 (모듈 레벨 함수 호출) ──────────────────────────
         _suppress_noise_warnings()
 
-        carb.log_warn(f"[top_cam_ext] Extension loaded: {len(self._pool_centers)}개 수조 감지. Run 대기 중.")
-
     def on_shutdown(self):
         self._stop_system()
         self._timeline_sub = None
@@ -92,10 +91,8 @@ class TopCamExtension(omni.ext.IExt):
     def _on_timeline_event(self, event):
         # 2. 다른 확장앱에서 Play 버튼을 누르더라도 즉시 감지하여 자동 실행
         if event.type == int(omni.timeline.TimelineEventType.PLAY):
-            carb.log_warn("[top_cam_ext] Timeline PLAY 감지됨. 탑캠 자동 시작 및 ROS 브릿지 연결!")
             self._start_system()
         elif event.type == int(omni.timeline.TimelineEventType.STOP):
-            carb.log_warn("[top_cam_ext] Timeline STOP 감지됨. 탑캠 시스템 중지.")
             self._stop_system()
 
     def _start_system(self):
@@ -130,7 +127,6 @@ class TopCamExtension(omni.ext.IExt):
                 if not stage.GetPrimAtPath(cam_path).IsValid():
                     from pxr import UsdGeom
                     UsdGeom.Camera.Define(stage, cam_path)
-                    carb.log_warn(f"[top_cam_ext] Pool_{pool_id}: TopCamera가 USD에 없어 직접 생성.")
 
                 # Isaac Sim Camera 센서로 래핑 및 절대 높이 Z = 12.0 강제 적용
                 camera = Camera(
@@ -141,9 +137,6 @@ class TopCamExtension(omni.ext.IExt):
                 camera.initialize()
                 camera.set_world_pose(position=np.array([cx, cy, 12.0]))
                 self._cameras[pool_id] = camera
-                carb.log_warn(f"[top_cam_ext] Pool_{pool_id} TopCamera 절대높이 Z=12.0 강제 설정 완료. (센터: {cx:.1f}, {cy:.1f})")
-
-            carb.log_warn(f"[top_cam_ext] 총 {len(self._cameras)}개 카메라 초기화 완료.")
         except Exception as e:
             carb.log_error(f"[top_cam_ext] Camera Setup Failed: {e}")
 
