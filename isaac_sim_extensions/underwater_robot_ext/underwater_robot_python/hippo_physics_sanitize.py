@@ -13,9 +13,44 @@ from typing import Optional
 
 import carb
 from isaacsim.core.utils.stage import get_current_stage
-from pxr import Sdf, Usd, UsdPhysics
+from pxr import Sdf, Usd, UsdGeom, UsdPhysics
 
 VISUAL_WHEELS_PRIM_NAME = "VisualWheels"
+
+
+def _fix_wheel_collision(root: Usd.Prim) -> None:
+    """Fix wheel collision: ensure CollisionAPI is applied and axis is correct.
+
+    1. Apply CollisionAPI if missing (required for physics collision detection)
+    2. Change cylinder axis from Z to Y for stable floor contact
+    """
+    wheel_link_names = ("left_wheel_link", "right_wheel_link")
+    axis_fixed = 0
+    collision_api_added = 0
+    
+    for prim in Usd.PrimRange(root):
+        if prim.GetName() == "collisions" and prim.GetTypeName() == "Cylinder":
+            parent = prim.GetParent()
+            if parent.IsValid() and parent.GetName() in wheel_link_names:
+                cyl = UsdGeom.Cylinder(prim)
+                
+                # 1. Ensure CollisionAPI is applied
+                if not prim.HasAPI(UsdPhysics.CollisionAPI):
+                    UsdPhysics.CollisionAPI.Apply(prim)
+                    collision_api_added += 1
+                    carb.log_info(f"[hippo_usd] CollisionAPI applied: {prim.GetPath()}")
+                
+                # 2. Fix cylinder axis
+                current_axis = cyl.GetAxisAttr().Get()
+                if current_axis != "Y":
+                    cyl.GetAxisAttr().Set("Y")
+                    axis_fixed += 1
+                    carb.log_info(f"[hippo_usd] wheel collision axis {current_axis} -> Y: {prim.GetPath()}")
+    
+    if collision_api_added > 0:
+        carb.log_info(f"[hippo_usd] added CollisionAPI to {collision_api_added} wheel prims")
+    if axis_fixed > 0:
+        carb.log_info(f"[hippo_usd] fixed {axis_fixed} wheel collision axes")
 
 
 def _find_visual_wheels_prim(robot_root: Usd.Prim) -> Optional[Usd.Prim]:
@@ -62,14 +97,43 @@ def prepare_hippo_usd_on_stage(robot_prim_path: str) -> None:
         return
 
     root = stage.GetPrimAtPath(robot_prim_path)
+    # #region agent log
+    import json, time
+    _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
+    _all_children = []
+    _joint_info = []
+    if root and root.IsValid():
+        for p in Usd.PrimRange(root):
+            _all_children.append(str(p.GetPath()))
+            if p.IsA(UsdPhysics.Joint):
+                _joint_info.append({"path": str(p.GetPath()), "name": p.GetName()})
+            if len(_all_children) > 50: break
+    with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"D","location":"hippo_physics_sanitize.py:prepare_hippo_usd_on_stage","message":"robot prim tree and joints","data":{"robot_prim_path":robot_prim_path,"root_valid":root.IsValid() if root else False,"prim_count":len(_all_children),"joint_info":_joint_info[:10]},"timestamp":int(time.time()*1000)})+"\n")
+    # #endregion
     if not root.IsValid():
         carb.log_warn(f"[hippo_usd] robot root invalid: {robot_prim_path}")
         return
 
+    _fix_wheel_collision(root)
+
     visual = _find_visual_wheels_prim(root)
+    # #region agent log
+    with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"D2","location":"hippo_physics_sanitize.py:prepare_hippo_usd_on_stage","message":"VisualWheels check","data":{"robot_prim_path":robot_prim_path,"visual_found":visual is not None and visual.IsValid() if visual else False,"visual_path":str(visual.GetPath()) if visual and visual.IsValid() else None},"timestamp":int(time.time()*1000)})+"\n")
+    # #endregion
     if visual is None or not visual.IsValid():
         carb.log_info("[hippo_usd] VisualWheels not found — skip physics strip")
         return
+
+    # Clear selection before modifying prims to avoid Isaac Sim UI errors
+    # (omni.physxsupportui raises "Accessed invalid null prim" when selection
+    # references prims that are being deactivated)
+    try:
+        import omni.usd
+        ctx = omni.usd.get_context()
+        if ctx:
+            ctx.get_selection().clear_selected_prim_paths()
+    except Exception:
+        pass
 
     parent = visual.GetParent()
     if parent.IsValid() and parent.GetName() == "base_link":

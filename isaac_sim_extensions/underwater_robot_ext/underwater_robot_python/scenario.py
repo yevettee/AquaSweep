@@ -1,7 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ROS2 cmd_vel feedforward + 실제 pose 기반 closed-loop 보정 시나리오.
+"""DEPRECATED: This module is no longer used.
+
+cmd_vel control is now handled by ActionGraph (actiongraph_setup.py).
+Isaac Sim's built-in ROS2 bridge nodes (ROS2SubscribeTwist, DifferentialController,
+ArticulationController) replace the rclpy-based approach, avoiding Python version
+conflicts and threading complexity.
+
+This file is kept for reference only.
+
+---
+Original description:
+ROS2 cmd_vel feedforward + 실제 pose 기반 closed-loop 보정 시나리오.
 
 /under_robot_N/cmd_vel 에서 (v, ω_ff) 를 수신하고, 매 physics step 마다
 shadow 목표 pose 와 실제 pose 를 비교해 횡방향·헤딩 오차를 ω 에 더해 보정한다.
