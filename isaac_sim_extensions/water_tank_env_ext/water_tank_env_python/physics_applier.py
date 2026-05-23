@@ -23,6 +23,7 @@ from . import params
 # ── 인라인 물리 클래스 (기존 water_tank_env 패키지에서 이전) ─────────────────
 
 _WATER_DENSITY = 1000.0  # kg/m³
+_MIN_BODY_Z = 0.02       # 바닥 관통 방지 — 바퀴 반경(0.049) + 여유
 
 
 class Drag:
@@ -164,6 +165,23 @@ class WaterPhysicsApplier:
             pos = np.asarray(positions[0], dtype=float)
             lv = np.asarray(lin_vels[0], dtype=float)
             av = np.asarray(ang_vels[0], dtype=float)
+
+            # ── 바닥 관통 방지: Z가 최소값 미만이면 강제 보정 ──
+            if pos[2] < _MIN_BODY_Z:
+                try:
+                    _, orientations = body.view.get_world_poses()
+                    body.view.set_world_poses(
+                        positions=np.array([[pos[0], pos[1], _MIN_BODY_Z]]),
+                        orientations=orientations,
+                    )
+                    if lv[2] < 0.0:
+                        body.view.set_linear_velocities(
+                            np.array([[lv[0], lv[1], 0.0]])
+                        )
+                        lv[2] = 0.0
+                    pos[2] = _MIN_BODY_Z
+                except Exception:
+                    pass
 
             accel = (lv - body.prev_velocity) / max(dt, 1e-6)
             body.prev_velocity = lv.copy()

@@ -167,8 +167,10 @@ def tag_aquasweep_attrs(robot_prim_path: str) -> None:
     RigidBodyAPI를 잃은 상태에서 base_link를 올바르게 선택한다.
     """
     from .global_variables import (
-        ROBOT_HALF_HEIGHT_M, ROBOT_VOLUME_M3,
-        DRAG_LINEAR_XY, DRAG_LINEAR_Z, DRAG_ANGULAR,
+        ROBOT_HALF_HEIGHT_M,
+        ROBOT_VOLUME_M3,
+        DRAG_LINEAR_XY,
+        DRAG_ANGULAR,
     )
 
     stage = get_current_stage()
