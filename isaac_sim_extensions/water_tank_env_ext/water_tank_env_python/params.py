@@ -20,13 +20,13 @@ TANK_FLOOR_Z = 0.0
 # Spacing: 0.5 m horizontal gap → 8.5 m centre-to-centre on x.
 #          2.0 m vertical   gap → 10  m centre-to-centre on y.
 POOL_CENTERS: list[tuple[float, float]] = [
-    (-12.75, -5.0),   # Pool_1
-    ( -4.25, -5.0),   # Pool_2
-    (  4.25, -5.0),   # Pool_3
-    ( 12.75, -5.0),   # Pool_4
-    (-12.75,  5.0),   # Pool_5
-    ( -4.25,  5.0),   # Pool_6
-    (  4.25,  5.0),   # Pool_7
+     (-12.75, -5.0),   # Pool_1
+     ( -4.25, -5.0),   # Pool_2
+     (  4.25, -5.0),   # Pool_3
+     ( 12.75, -5.0),   # Pool_4
+     (-12.75,  5.0),   # Pool_5
+     ( -4.25,  5.0),   # Pool_6
+     (  4.25,  5.0),   # Pool_7
 ]
 
 EQUIPMENT_CENTER: tuple[float, float] = (12.75, 5.0)
