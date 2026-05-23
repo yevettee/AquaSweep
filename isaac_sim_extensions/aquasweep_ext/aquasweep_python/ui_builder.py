@@ -31,6 +31,7 @@ from debris_python.scenario import DebrisScenario
 from underwater_robot_python.hippo_physics_sanitize import (
     prepare_hippo_usd_on_stage,
     tag_aquasweep_attrs,
+    add_planar_constraint,
 )
 from underwater_robot_python.actiongraph_setup import (
     create_cmd_vel_graph,
@@ -119,6 +120,11 @@ class UIBuilder:
             self._scenario_state_btn.enabled = False
 
     def on_physics_step(self, step: float):
+        # ── StateButton과 독립적으로 항상 water scenario 실행 ──
+        # Debris spawn 시 timeline stop/play 사이클에서도 Z 클램핑 유지
+        if self._water_scenario.is_loaded():
+            self._water_scenario.update_scenario(step)
+
         try:
             robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
         except Exception:
@@ -249,6 +255,7 @@ class UIBuilder:
         for _idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
             prepare_hippo_usd_on_stage(robot_root)
             tag_aquasweep_attrs(robot_root)
+            add_planar_constraint(robot_root)
 
         # ActionGraph creation is deferred to _on_run() to ensure all OmniGraph
         # node types are fully registered (avoids timing issues during extension load)
@@ -287,12 +294,14 @@ class UIBuilder:
         self._scenario_state_btn.enabled = True
 
     def _update_scenario(self, step: float):
-        """매 physics step마다 수조 물리와 흡입 시스템을 실행.
+        """매 physics step마다 흡입 시스템을 실행.
         
-        cmd_vel 제어는 ActionGraph가 자동으로 처리하므로,
-        여기서는 수조 물리와 debris 흡입만 담당한다.
+        cmd_vel 제어는 ActionGraph가 자동으로 처리하고,
+        수조 물리(부력, 항력, 착지 감지)는 on_physics_step()에서 항상 실행된다.
+        여기서는 debris 흡입만 담당한다.
         """
-        self._water_scenario.update_scenario(step)
+        # water_scenario.update_scenario()는 on_physics_step()에서 호출됨
+        # (StateButton 상태와 무관하게 항상 실행되어야 하므로)
 
         if not DEBUG_ENABLE_SUCTION:
             return

@@ -167,8 +167,10 @@ def tag_aquasweep_attrs(robot_prim_path: str) -> None:
     RigidBodyAPI를 잃은 상태에서 base_link를 올바르게 선택한다.
     """
     from .global_variables import (
-        ROBOT_HALF_HEIGHT_M, ROBOT_VOLUME_M3,
-        DRAG_LINEAR_XY, DRAG_LINEAR_Z, DRAG_ANGULAR,
+        ROBOT_HALF_HEIGHT_M,
+        ROBOT_VOLUME_M3,
+        DRAG_LINEAR_XY,
+        DRAG_ANGULAR,
     )
 
     stage = get_current_stage()
@@ -207,4 +209,17 @@ def tag_aquasweep_attrs(robot_prim_path: str) -> None:
     carb.log_info(
         f"[hippo_usd] aquasweep attrs → {target.GetPath()} "
         f"(volume={ROBOT_VOLUME_M3} m³, half_height={ROBOT_HALF_HEIGHT_M} m)"
+    )
+
+
+def add_planar_constraint(robot_prim_path: str) -> None:
+    """로봇 Z축 구속 준비 (placeholder).
+
+    D6 Joint 방식은 PhysX 호환성 문제로 사용하지 않음.
+    대신 physics_applier.py에서 매 step Z를 고정한다.
+    이 함수는 호환성을 위해 유지하되, 실제 동작은 하지 않는다.
+    """
+    carb.log_info(
+        f"[hippo_usd] planar constraint skipped for {robot_prim_path} "
+        "(Z clamping handled by physics_applier)"
     )
