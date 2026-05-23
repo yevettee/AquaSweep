@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.1.0] - 2026-05-22
+### Changed
+- 우리 개조 로봇 이름을 **dingo → hippo** 로 통일 (Clearpath Dingo-D 플랫폼 기반).
+  - 새 USD: `data/hippo_v1.usd` (v1 base를 flatten 후 cleanup +
+    카메라 위치/이름 고정 + 본체 핑크 + realsense/lidar 진짜 제거).
+  - 기존 `data/underwater_robot_camera_v1.usd` 는 호환을 위해 유지.
+- 모듈 rename:
+  - `dingo_physics_sanitize.py` → `hippo_physics_sanitize.py`
+  - `verify_dingo_usd.py` → `verify_hippo_usd.py`
+  - `prepare_dingo_usd_on_stage()` → `prepare_hippo_usd_on_stage()`
+- `global_variables.py`:
+  - `DINGO_USD_FILENAME` → `HIPPO_USD_FILENAME` (구 이름은 alias 로 유지)
+  - `DINGO_WHEEL_RADIUS_M/BASE_M` → `HIPPO_WHEEL_*` (구 이름은 alias 로 유지)
+  - `ROBOT_PRIM_PATH = "/World/Dingo"` → `"/World/Hippo"`
+  - `DEBUG_TRAIL_CURVE_PRIM_PATH = ".../DingoCenterTrail"` → `HippoCenterTrail`
+- `aquasweep_ext/ui_builder.py`: 7-pool spawn 시 scene name `dingo_{i}` → `hippo_{i}`,
+  `PRIMARY_ROBOT_SCENE_NAME = "hippo_1"`.
+- `top_cam_ext`의 `EXCLUDE_TOKENS` 에 `/hippo/` 추가 (legacy `/dingo/` 도 유지).
+
+### Removed
+- `_disable_default_cameras()` + `DEFAULT_CAMERAS_TO_DISABLE` 상수 —
+  `hippo_v1.usd` 가 flatten 결과로 realsense/viewport gizmo 가 진짜 제거된
+  상태라 런타임에 deactivate 할 prim 이 없음 (dead code).
+
 ## [1.0.4] - 2026-05-20
 ### Changed
 - `data/underwater_robot_camera_v1.usd`에 `aquasweep:*` custom attribute 적용 (v0.4.1 튜닝값 재현)

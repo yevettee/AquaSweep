@@ -28,8 +28,8 @@ importlib.reload(sturgeon_spawner)  # hot-reload support
 
 from debris_python.scenario import DebrisScenario
 
-from underwater_robot_python.dingo_physics_sanitize import (
-    prepare_dingo_usd_on_stage,
+from underwater_robot_python.hippo_physics_sanitize import (
+    prepare_hippo_usd_on_stage,
     tag_aquasweep_attrs,
 )
 from underwater_robot_python.actiongraph_setup import (
@@ -42,20 +42,20 @@ from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_c
 from underwater_robot_python.global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
     DEBUG_ENABLE_SUCTION,
-    DINGO_USD_FILENAME,
-    DINGO_WHEEL_BASE_M,
-    DINGO_WHEEL_RADIUS_M,
+    HIPPO_USD_FILENAME,
+    HIPPO_WHEEL_BASE_M,
+    HIPPO_WHEEL_RADIUS_M,
     ROBOT_SPAWN_Z_M,
 )
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
 # we redefine them below as aliases of the PRIMARY_ROBOT_* constants so the
-# multi-robot spawn (7 dingos, one nested under each /World/Pools/Pool_<n>)
+# multi-robot spawn (7 hippos, one nested under each /World/Pools/Pool_<n>)
 # can address the FSM-driven primary robot explicitly.
 
 PHYSICS_DT = 1.0 / 60.0
 _ROBOT_USD_PATH = (
     Path(__file__).resolve().parents[2]
-    / "underwater_robot_ext" / "data" / DINGO_USD_FILENAME
+    / "underwater_robot_ext" / "data" / HIPPO_USD_FILENAME
 )
 
 # ── Multi-pool robot specs ─────────────────────────────────────────────────────
@@ -76,22 +76,22 @@ def _robot_specs() -> list[tuple[int, str, str, str, np.ndarray]]:
     """Return per-pool robot (idx, scene_name, spawn_path, robot_root_path, world_position).
     
     - spawn_path: Where WheeledRobot loads the USD reference
-    - robot_root_path: Actual articulation root inside the USD (spawn_path + /dingo)
+    - robot_root_path: Actual articulation root inside the USD (spawn_path + /hippo)
     Index is 1-based.
     """
     specs: list[tuple[int, str, str, str, np.ndarray]] = []
     for i, (cx, cy) in enumerate(_POOL_CENTERS, start=1):
-        scene_name = f"dingo_{i}"
+        scene_name = f"hippo_{i}"
         spawn_path = f"/World/Pools/Pool_{i}/Robot"
-        robot_root_path = f"{spawn_path}/dingo"
+        robot_root_path = f"{spawn_path}/hippo"
         position   = np.array([cx, cy, float(ROBOT_SPAWN_Z_M)])
         specs.append((i, scene_name, spawn_path, robot_root_path, position))
     return specs
 
 
 # Back-compat alias for any external code referencing the primary robot.
-PRIMARY_ROBOT_SCENE_NAME = "dingo_1"
-PRIMARY_ROBOT_PRIM_PATH  = "/World/Pools/Pool_1/Robot/dingo"
+PRIMARY_ROBOT_SCENE_NAME = "hippo_1"
+PRIMARY_ROBOT_PRIM_PATH  = "/World/Pools/Pool_1/Robot/hippo"
 # Back-compat aliases for any external code still importing the old names.
 ROBOT_SCENE_NAME = PRIMARY_ROBOT_SCENE_NAME
 ROBOT_PRIM_PATH  = PRIMARY_ROBOT_PRIM_PATH
@@ -247,15 +247,7 @@ class UIBuilder:
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())
         for _idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
-            # #region agent log
-            import json, time
-            _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
-            stage = get_current_stage()
-            _prim = stage.GetPrimAtPath(robot_root) if stage else None
-            _children = [str(c.GetPath()) for c in _prim.GetChildren()] if _prim and _prim.IsValid() else []
-            with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"E","location":"ui_builder.py:_setup_scenario","message":"robot_root prim check at setup","data":{"idx":_idx,"robot_root":robot_root,"prim_valid":_prim.IsValid() if _prim else False,"children":_children[:10]},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
-            prepare_dingo_usd_on_stage(robot_root)
+            prepare_hippo_usd_on_stage(robot_root)
             tag_aquasweep_attrs(robot_root)
 
         # ActionGraph creation is deferred to _on_run() to ensure all OmniGraph
@@ -378,8 +370,8 @@ class UIBuilder:
             graph_path = create_cmd_vel_graph(
                 robot_prim_path=robot_root,
                 robot_name=robot_name,
-                wheel_radius=DINGO_WHEEL_RADIUS_M,
-                wheel_base=DINGO_WHEEL_BASE_M,
+                wheel_radius=HIPPO_WHEEL_RADIUS_M,
+                wheel_base=HIPPO_WHEEL_BASE_M,
             )
             # #region agent log
             with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"B","location":"ui_builder.py:_create_action_graphs","message":"graph creation result","data":{"idx":idx,"robot_name":robot_name,"graph_path":graph_path,"success":graph_path is not None},"timestamp":int(time.time()*1000)})+"\n")
