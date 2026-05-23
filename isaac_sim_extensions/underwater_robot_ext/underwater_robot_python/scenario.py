@@ -26,7 +26,7 @@ import carb
 
 from isaacsim.robot.wheeled_robots.controllers.differential_controller import DifferentialController
 
-from .global_variables import DINGO_WHEEL_BASE_M, DINGO_WHEEL_RADIUS_M
+from .global_variables import HIPPO_WHEEL_BASE_M, HIPPO_WHEEL_RADIUS_M
 
 LOG_TAG = "[underwater.robot]"
 
@@ -59,8 +59,8 @@ class UnderwaterTankJetbotFsm:
         self._robot = robot
         self._controller = DifferentialController(
             name="underwater_tank_diff",
-            wheel_radius=DINGO_WHEEL_RADIUS_M,
-            wheel_base=DINGO_WHEEL_BASE_M,
+            wheel_radius=HIPPO_WHEEL_RADIUS_M,
+            wheel_base=HIPPO_WHEEL_BASE_M,
         )
         self._controller.reset()
         self._pool_center = pool_center

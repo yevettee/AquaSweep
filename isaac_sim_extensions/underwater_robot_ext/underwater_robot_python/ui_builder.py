@@ -31,14 +31,14 @@ from pxr import Sdf, UsdLux
 
 from .global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
-    DINGO_USD_FILENAME,
-    DINGO_WHEEL_BASE_M,
-    DINGO_WHEEL_RADIUS_M,
+    HIPPO_USD_FILENAME,
+    HIPPO_WHEEL_BASE_M,
+    HIPPO_WHEEL_RADIUS_M,
     ROBOT_PRIM_PATH,
     ROBOT_SCENE_NAME,
     ROBOT_SPAWN_Z_M,
 )
-from .dingo_physics_sanitize import prepare_dingo_usd_on_stage, tag_aquasweep_attrs
+from .hippo_physics_sanitize import prepare_hippo_usd_on_stage, tag_aquasweep_attrs
 from .actiongraph_setup import create_cmd_vel_graph, remove_cmd_vel_graph
 from .suction_system import SuctionSystem
 from .trail_debug import reset_center_trail_debug, tick_center_trail_debug
@@ -201,9 +201,9 @@ class UIBuilder:
         and avoid loading anything if they are.  In this case, the user would still need to add
         their assets to the World (which has low overhead).  See commented code section in this function.
         """
-        dingo_usd_path = Path(__file__).resolve().parents[1] / "data" / DINGO_USD_FILENAME
-        if not dingo_usd_path.is_file():
-            carb.log_error(f"[underwater.robot] Dingo USD not found: {dingo_usd_path}")
+        hippo_usd_path = Path(__file__).resolve().parents[1] / "data" / HIPPO_USD_FILENAME
+        if not hippo_usd_path.is_file():
+            carb.log_error(f"[underwater.robot] Hippo USD not found: {hippo_usd_path}")
             return
 
         # water_tank_env_ext와 함께 실행할 때 새 stage를 만들면 수조/GPU dynamics 설정이 날아감.
@@ -219,11 +219,11 @@ class UIBuilder:
                 name=ROBOT_SCENE_NAME,
                 wheel_dof_names=["left_wheel_joint", "right_wheel_joint"],
                 create_robot=True,
-                usd_path=str(dingo_usd_path),
+                usd_path=str(hippo_usd_path),
                 position=np.array([0.0, 0.0, float(ROBOT_SPAWN_Z_M)]),
             )
         )
-        carb.log_info(f"[underwater.robot] Loaded Dingo from {dingo_usd_path}")
+        carb.log_info(f"[underwater.robot] Loaded Hippo from {hippo_usd_path}")
 
     def _setup_scenario(self):
         """
@@ -231,10 +231,10 @@ class UIBuilder:
         The user may assume that their assets have been loaded by their setup_scene_fn callback, that
         their objects are properly initialized, and that the timeline is paused on timestep 0.
 
-        Sets up ActionGraph for ROS2 cmd_vel control of the Dingo differential drive robot.
+        Sets up ActionGraph for ROS2 cmd_vel control of the Hippo differential drive robot.
         """
         reset_center_trail_debug()
-        prepare_dingo_usd_on_stage(ROBOT_PRIM_PATH)
+        prepare_hippo_usd_on_stage(ROBOT_PRIM_PATH)
         tag_aquasweep_attrs(ROBOT_PRIM_PATH)
 
         # Create ActionGraph for ROS2 cmd_vel subscription
@@ -242,8 +242,8 @@ class UIBuilder:
         graph_path = create_cmd_vel_graph(
             robot_prim_path=ROBOT_PRIM_PATH,
             robot_name="under_robot_1",
-            wheel_radius=DINGO_WHEEL_RADIUS_M,
-            wheel_base=DINGO_WHEEL_BASE_M,
+            wheel_radius=HIPPO_WHEEL_RADIUS_M,
+            wheel_base=HIPPO_WHEEL_BASE_M,
         )
         if graph_path:
             carb.log_info(f"[underwater.robot] ActionGraph created: {graph_path}")
