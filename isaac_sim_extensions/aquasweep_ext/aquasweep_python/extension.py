@@ -17,6 +17,27 @@ from .ui_builder import UIBuilder
 EXTENSION_TITLE = "AquaSweep"
 EXTENSION_DESCRIPTION = "AquaSweep 통합 실행 — 수조 + 로봇 + 이물질을 단일 LOAD/RUN으로 제어한다."
 
+# Window titles of sibling extensions that AquaSweep orchestrates.
+# These panels are hidden whenever AquaSweep loads or its window opens, so the
+# user only sees the AquaSweep panel. Each title here matches the EXTENSION_TITLE
+# constant in the corresponding sibling extension's global_variables.py — missing
+# extensions are silently skipped.
+SUBORDINATE_WINDOW_TITLES = (
+    "water.tank.env",
+    "debris.env",
+    "underwater.robot",
+    "top.camera",
+    "under.camera",
+    "fish",
+)
+
+
+def _hide_subordinate_windows():
+    for title in SUBORDINATE_WINDOW_TITLES:
+        window = ui.Workspace.get_window(title)
+        if window is not None and window.visible:
+            window.visible = False
+
 
 class Extension(omni.ext.IExt):
     def on_startup(self, ext_id: str):
@@ -52,6 +73,16 @@ class Extension(omni.ext.IExt):
         self._stage_event_sub = None
         self._timeline = omni.timeline.get_timeline_interface()
 
+        # Sibling extension windows are restored visible by the workspace state
+        # whenever they were open before. Defer a hide call so the sibling
+        # extensions finish their own startup first.
+        asyncio.ensure_future(self._hide_subordinate_windows_deferred())
+
+    async def _hide_subordinate_windows_deferred(self):
+        for _ in range(3):
+            await omni.kit.app.get_app().next_update_async()
+        _hide_subordinate_windows()
+
     def on_shutdown(self):
         self._models = {}
         remove_menu_items(self._menu_items, EXTENSION_TITLE)
@@ -72,6 +103,7 @@ class Extension(omni.ext.IExt):
             stream = self._timeline.get_timeline_event_stream()
             self._timeline_event_sub = stream.create_subscription_to_pop(self._on_timeline_event)
             self._build_ui()
+            _hide_subordinate_windows()
         else:
             self._usd_context = None
             self._stage_event_sub = None
