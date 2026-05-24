@@ -39,10 +39,6 @@ from underwater_robot_python.actiongraph_setup import (
     graph_exists,
 )
 from underwater_robot_python.suction_system import SuctionSystem
-from top_camera_python import ros_graph_builder as top_cam_graph
-from top_camera_python.camera_discovery import discover_top_cameras
-from under_camera_python import ros_graph_builder as under_cam_graph
-from under_camera_python.camera_discovery import discover_under_cameras
 from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_center_trail_debug
 from underwater_robot_python.global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
@@ -360,7 +356,19 @@ class UIBuilder:
 
         Replaces the manual 'Build & start publishing' step in top_cam_ext /
         under_cam_ext UIs so users don't need to open those panels.
+
+        Imports are deferred to here because top_cam_ext/under_cam_ext load
+        after aquasweep_ext (module-top import would fail during startup).
         """
+        try:
+            from top_camera_python import ros_graph_builder as top_cam_graph
+            from top_camera_python.camera_discovery import discover_top_cameras
+            from under_camera_python import ros_graph_builder as under_cam_graph
+            from under_camera_python.camera_discovery import discover_under_cameras
+        except ImportError as exc:
+            carb.log_warn(f"[aquasweep] camera ext not loaded, skip auto-publish: {exc}")
+            return
+
         if not top_cam_graph.graph_exists():
             entries = discover_top_cameras()
             if entries:
