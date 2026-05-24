@@ -352,25 +352,9 @@ class UIBuilder:
 
     def _create_action_graphs(self):
         """Create ActionGraph for each robot's cmd_vel control."""
-        # #region agent log
-        import json, time
-        _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
-        # #endregion
         success_count = 0
         for idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
             robot_name = f"under_robot_{idx}"
-            # #region agent log
-            stage = get_current_stage()
-            _prim = stage.GetPrimAtPath(robot_root) if stage else None
-            _prim_valid = _prim.IsValid() if _prim else False
-            _joint_names = []
-            if _prim_valid:
-                from pxr import UsdPhysics, Usd
-                for p in Usd.PrimRange(_prim):
-                    if p.IsA(UsdPhysics.Joint):
-                        _joint_names.append(str(p.GetPath()))
-            with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"A","location":"ui_builder.py:_create_action_graphs","message":"robot prim and joints before graph creation","data":{"idx":idx,"robot_name":robot_name,"robot_root":robot_root,"prim_valid":_prim_valid,"joint_names":_joint_names[:10]},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
             # Skip if graph already exists
             if graph_exists(robot_name):
                 carb.log_info(f"[aquasweep] ActionGraph already exists for {robot_name}")
@@ -382,9 +366,6 @@ class UIBuilder:
                 wheel_radius=HIPPO_WHEEL_RADIUS_M,
                 wheel_base=HIPPO_WHEEL_BASE_M,
             )
-            # #region agent log
-            with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"B","location":"ui_builder.py:_create_action_graphs","message":"graph creation result","data":{"idx":idx,"robot_name":robot_name,"graph_path":graph_path,"success":graph_path is not None},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
             if graph_path:
                 carb.log_info(f"[aquasweep] ActionGraph created: {graph_path} for {robot_name}")
                 success_count += 1

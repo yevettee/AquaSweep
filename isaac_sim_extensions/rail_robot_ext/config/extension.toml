@@ -1,0 +1,14 @@
+[package]
+title = "Rail Robot"
+description = "수조 벽면 청소용 원형 레일 협동로봇 (Doosan M0609)"
+version = "0.1.0"
+category = "Simulation"
+keywords = ["robot", "cobot", "cleaning", "aquasweep"]
+
+[dependencies]
+"omni.kit.uiapp" = {}
+"isaacsim.core.api" = {}
+"isaacsim.gui.components" = {}
+
+[[python.module]]
+name = "rail_robot_python"

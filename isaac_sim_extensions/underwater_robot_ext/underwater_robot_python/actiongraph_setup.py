@@ -64,28 +64,6 @@ def create_cmd_vel_graph(
         carb.log_error("[actiongraph_setup] No stage available")
         return None
 
-    # #region agent log
-    import json, time
-    _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
-    _robot_prim = stage.GetPrimAtPath(robot_prim_path)
-    _robot_valid = _robot_prim.IsValid() if _robot_prim else False
-    _robot_children = [str(c.GetPath()) for c in _robot_prim.GetChildren()][:10] if _robot_valid else []
-    # Check for articulation API
-    _has_articulation = False
-    _articulation_root_path = None
-    if _robot_valid:
-        from pxr import UsdPhysics
-        if _robot_prim.HasAPI(UsdPhysics.ArticulationRootAPI):
-            _has_articulation = True
-            _articulation_root_path = str(_robot_prim.GetPath())
-        else:
-            for p in _robot_prim.GetChildren():
-                if p.HasAPI(UsdPhysics.ArticulationRootAPI):
-                    _has_articulation = True
-                    _articulation_root_path = str(p.GetPath())
-                    break
-    with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"C","location":"actiongraph_setup.py:create_cmd_vel_graph","message":"robot prim for ActionGraph","data":{"robot_prim_path":robot_prim_path,"robot_name":robot_name,"prim_valid":_robot_valid,"children":_robot_children,"has_articulation":_has_articulation,"articulation_root_path":_articulation_root_path},"timestamp":int(time.time()*1000)})+"\n")
-    # #endregion
 
     # Remove existing graph if present
     existing = stage.GetPrimAtPath(graph_path)
@@ -204,6 +182,84 @@ def remove_cmd_vel_graph(robot_name: str = "under_robot_1") -> bool:
         return True
 
     return False
+
+
+def create_cmd_vel_subscriber_graph(
+    robot_name: str = "under_robot_1",
+) -> Optional[str]:
+    """ROS2 cmd_vel 구독 전용 ActionGraph 생성 (휠 제어 없음).
+
+    SubscribeTwist → BreakLinear/BreakAngular 까지만 구성한다.
+    linear.x, angular.z 값은 read_cmd_vel()로 읽는다.
+    """
+    try:
+        import omni.graph.core as og
+        from isaacsim.core.utils.stage import get_current_stage
+    except ImportError as e:
+        carb.log_error(f"[actiongraph_setup] OmniGraph import failed: {e}")
+        return None
+
+    graph_path = GRAPH_PATH_PATTERN.format(robot_name=robot_name)
+    topic_name = f"/{robot_name}/cmd_vel"
+
+    stage = get_current_stage()
+    if stage is None:
+        return None
+
+    existing = stage.GetPrimAtPath(graph_path)
+    if existing.IsValid():
+        stage.RemovePrim(graph_path)
+
+    if not stage.GetPrimAtPath("/World/Graphs").IsValid():
+        stage.DefinePrim("/World/Graphs", "Scope")
+
+    try:
+        keys = og.Controller.Keys
+        og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    ("OnPlaybackTick", "omni.graph.action.OnPlaybackTick"),
+                    ("ROS2Context",    "isaacsim.ros2.bridge.ROS2Context"),
+                    ("SubscribeTwist", "isaacsim.ros2.bridge.ROS2SubscribeTwist"),
+                    ("BreakLinear",    "omni.graph.nodes.BreakVector3"),
+                    ("BreakAngular",   "omni.graph.nodes.BreakVector3"),
+                ],
+                keys.SET_VALUES: [
+                    ("SubscribeTwist.inputs:topicName", topic_name),
+                ],
+                keys.CONNECT: [
+                    ("OnPlaybackTick.outputs:tick",      "SubscribeTwist.inputs:execIn"),
+                    ("ROS2Context.outputs:context",       "SubscribeTwist.inputs:context"),
+                    ("SubscribeTwist.outputs:linearVelocity",  "BreakLinear.inputs:tuple"),
+                    ("SubscribeTwist.outputs:angularVelocity", "BreakAngular.inputs:tuple"),
+                ],
+            },
+        )
+        carb.log_info(f"[actiongraph_setup] cmd_vel subscriber graph created: {graph_path} | topic={topic_name}")
+        return graph_path
+    except Exception as e:
+        carb.log_error(f"[actiongraph_setup] Failed: {e}")
+        return None
+
+
+def read_cmd_vel(robot_name: str = "under_robot_1") -> tuple:
+    """ActionGraph 에서 최신 cmd_vel (linear_x, angular_z) 를 읽는다.
+
+    ActionGraph 가 없거나 실패하면 (0.0, 0.0) 반환.
+    """
+    try:
+        import omni.graph.core as og
+        graph_path = GRAPH_PATH_PATTERN.format(robot_name=robot_name)
+        lx = og.Controller.get(
+            og.Controller.attribute(f"{graph_path}/BreakLinear.outputs:x")
+        )
+        az = og.Controller.get(
+            og.Controller.attribute(f"{graph_path}/BreakAngular.outputs:z")
+        )
+        return float(lx), float(az)
+    except Exception:
+        return 0.0, 0.0
 
 
 def graph_exists(robot_name: str = "under_robot_1") -> bool:

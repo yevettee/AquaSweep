@@ -32,13 +32,30 @@ class ControllerNode(Node):
         self.declare_parameter('robot_name', 'under_robot_1')
         self.declare_parameter('rail_name', 'rail_robot_1')
         self.declare_parameter('pool_id', 'pool_1')
+        self.declare_parameter('tank_diameter', 8.0)
+        self.declare_parameter('tank_margin', 0.08)
+        self.declare_parameter('robot_footprint', 0.686)
+        self.declare_parameter('linear_speed', 0.55)
+        self.declare_parameter('omega_max', 2.8)
 
-        robot_name = self.get_parameter('robot_name').get_parameter_value().string_value
-        rail_name  = self.get_parameter('rail_name').get_parameter_value().string_value
-        pool_id    = self.get_parameter('pool_id').get_parameter_value().string_value
+        robot_name     = self.get_parameter('robot_name').get_parameter_value().string_value
+        rail_name      = self.get_parameter('rail_name').get_parameter_value().string_value
+        pool_id        = self.get_parameter('pool_id').get_parameter_value().string_value
+        tank_diameter  = self.get_parameter('tank_diameter').get_parameter_value().double_value
+        tank_margin    = self.get_parameter('tank_margin').get_parameter_value().double_value
+        robot_footprint = self.get_parameter('robot_footprint').get_parameter_value().double_value
+        linear_speed   = self.get_parameter('linear_speed').get_parameter_value().double_value
+        omega_max      = self.get_parameter('omega_max').get_parameter_value().double_value
 
         self._cmd_vel_pub = self.create_publisher(Twist, f'/{robot_name}/cmd_vel', 10)
-        self._planner = SpiralPlanner(physics_dt=1.0 / CONTROL_HZ)
+        self._planner = SpiralPlanner(
+            physics_dt=1.0 / CONTROL_HZ,
+            tank_diameter=tank_diameter,
+            tank_margin=tank_margin,
+            robot_footprint=robot_footprint,
+            linear_speed=linear_speed,
+            omega_max=omega_max,
+        )
 
         # 핸들러 인스턴스 생성
         self._clean_floor_handler = CleanFloorHandler(self, self._planner, self._cmd_vel_pub)
@@ -72,7 +89,8 @@ class ControllerNode(Node):
         self.get_logger().info(
             f'ControllerNode ready | robot={robot_name} | pool={pool_id}\n'
             f'  cmd_vel : /{robot_name}/cmd_vel\n'
-            f'  actions : /{pool_id}/clean_floor | /{pool_id}/clean_wall | /{pool_id}/move_fish'
+            f'  actions : /{pool_id}/clean_floor | /{pool_id}/clean_wall | /{pool_id}/move_fish\n'
+            f'  spiral  : tank_diameter={tank_diameter}m  linear_speed={linear_speed}m/s'
         )
 
 
