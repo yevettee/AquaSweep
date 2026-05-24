@@ -29,6 +29,7 @@ SUBORDINATE_WINDOW_TITLES = (
     "top.camera",
     "under.camera",
     "fish",
+    "rail_robot",
 )
 
 
