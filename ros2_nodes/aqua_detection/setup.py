@@ -5,7 +5,8 @@ package_name = 'aqua_detection'
 setup(
     name=package_name,
     version='0.0.0',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(where='src'),
+    package_dir={'': 'src'},
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -13,17 +14,14 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='woody',
-    maintainer_email='woody.myung@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    maintainer='rokey',
+    maintainer_email='rokey@todo.todo',
+    description='AquaSweep Camera Object Detection package',
+    license='Apache-2.0',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'top_detection_node = top.detection_node:main',
         ],
     },
 )
