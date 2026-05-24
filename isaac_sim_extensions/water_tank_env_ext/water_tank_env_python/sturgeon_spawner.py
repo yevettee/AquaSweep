@@ -39,7 +39,7 @@ _STURGEON_USD = os.path.normpath(
 # ── Spawn-time tunables ──────────────────────────────────────────────────────
 TARGET_LENGTH_M = 1.0                # 1 m sturgeon (was 0.90)
 
-_EMPTY_POOLS_MIN = 1
+_EMPTY_POOLS_MIN = 3
 _EMPTY_POOLS_MAX = 3
 _FISH_PER_POOL_MIN = 5
 _FISH_PER_POOL_MAX = 10
