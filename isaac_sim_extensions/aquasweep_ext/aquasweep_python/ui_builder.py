@@ -251,6 +251,11 @@ class UIBuilder:
             )
 
     def _setup_scenario(self):
+        # Re-hide sibling extension windows: their UIs may have been created
+        # after aquasweep's startup hide pass, leaving stale tabs visible.
+        from .extension import _hide_subordinate_windows
+        _hide_subordinate_windows()
+
         scene_builders.enable_gpu_dynamics(get_current_stage())
         for _idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
             prepare_hippo_usd_on_stage(robot_root)
@@ -349,6 +354,11 @@ class UIBuilder:
         if not self._graphs_created:
             self._create_action_graphs()
         self._build_camera_graphs()
+
+        # Re-hide sibling windows in case any reappeared between LOAD and RUN.
+        from .extension import _hide_subordinate_windows
+        _hide_subordinate_windows()
+
         self._timeline.play()
 
     def _build_camera_graphs(self):
