@@ -4,6 +4,10 @@ Services:
     /planner/start            - Start cleaning for all eligible pools (fish_count == 0)
     /planner/pause            - Cancel all current tasks
     /{pool_id}/start_clean_floor - Start cleaning for a specific pool
+
+Sturgeon Animation Control:
+    - Automatically pauses sturgeon animation when cleaning starts
+    - Resumes animation when all cleaning tasks complete
 """
 
 from functools import partial
@@ -32,6 +36,11 @@ class PlannerNode(Node):
         self._pool_status: Dict[str, Optional[PoolStatus]] = {}
         self._is_running: Dict[str, bool] = {}
         self._global_task_active = False
+        self._sturgeon_paused = False
+
+        # Sturgeon animation control service clients
+        self._sturgeon_pause_cli = self.create_client(Trigger, '/sturgeon/pause')
+        self._sturgeon_resume_cli = self.create_client(Trigger, '/sturgeon/resume')
 
         for pool_id in self._pool_ids:
             self._executors[pool_id] = TaskExecutor(self, pool_id=pool_id)
@@ -152,6 +161,10 @@ class PlannerNode(Node):
         if executor is None:
             return False
 
+        # Pause sturgeon animation before cleaning starts (performance optimization)
+        if not self._sturgeon_paused:
+            self._call_sturgeon_pause()
+
         success = executor.send_clean_floor_goal(
             feedback_callback=partial(self._on_feedback, pool_id),
             done_callback=partial(self._on_done, pool_id)
@@ -161,6 +174,48 @@ class PlannerNode(Node):
             self._is_running[pool_id] = True
 
         return success
+
+    def _call_sturgeon_pause(self) -> None:
+        """Call /sturgeon/pause service (non-blocking)."""
+        if not self._sturgeon_pause_cli.service_is_ready():
+            self.get_logger().warn('Sturgeon pause service not available, skipping')
+            return
+        
+        future = self._sturgeon_pause_cli.call_async(Trigger.Request())
+        future.add_done_callback(self._on_sturgeon_pause_done)
+
+    def _on_sturgeon_pause_done(self, future) -> None:
+        """Handle sturgeon pause service response."""
+        try:
+            result = future.result()
+            if result.success:
+                self._sturgeon_paused = True
+                self.get_logger().info(f'Sturgeon animation paused: {result.message}')
+            else:
+                self.get_logger().warn(f'Sturgeon pause failed: {result.message}')
+        except Exception as e:
+            self.get_logger().error(f'Sturgeon pause service error: {e}')
+
+    def _call_sturgeon_resume(self) -> None:
+        """Call /sturgeon/resume service (non-blocking)."""
+        if not self._sturgeon_resume_cli.service_is_ready():
+            self.get_logger().warn('Sturgeon resume service not available, skipping')
+            return
+        
+        future = self._sturgeon_resume_cli.call_async(Trigger.Request())
+        future.add_done_callback(self._on_sturgeon_resume_done)
+
+    def _on_sturgeon_resume_done(self, future) -> None:
+        """Handle sturgeon resume service response."""
+        try:
+            result = future.result()
+            if result.success:
+                self._sturgeon_paused = False
+                self.get_logger().info(f'Sturgeon animation resumed: {result.message}')
+            else:
+                self.get_logger().warn(f'Sturgeon resume failed: {result.message}')
+        except Exception as e:
+            self.get_logger().error(f'Sturgeon resume service error: {e}')
 
     def _handle_pause(
         self, request: Trigger.Request, response: Trigger.Response
@@ -204,6 +259,9 @@ class PlannerNode(Node):
         if not any(self._is_running.values()):
             self._global_task_active = False
             self.get_logger().info('All pool tasks completed')
+            # Resume sturgeon animation after all cleaning tasks complete
+            if self._sturgeon_paused:
+                self._call_sturgeon_resume()
 
 
 def main(args=None) -> None:

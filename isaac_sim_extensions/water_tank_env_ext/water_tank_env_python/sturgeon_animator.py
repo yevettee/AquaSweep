@@ -127,16 +127,45 @@ def _params_from_path(prim_path_str: str, is_flipped: bool) -> dict:
 
 
 class SturgeonAnimator:
+    # 성능 최적화: N step마다만 실제 업데이트 실행
+    UPDATE_INTERVAL = 2  # 2 step마다 업데이트 (60fps → 30Hz 애니메이션)
+
     def __init__(self):
         self._t = 0.0
         self._sturgeons: list[_SturgeonCache] | None = None
+        self._step_counter = 0
+        self._enabled = True
+
+    @property
+    def enabled(self) -> bool:
+        """상어 애니메이션 활성화 여부."""
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """상어 애니메이션 활성화/비활성화.
+        
+        Args:
+            enabled: True면 애니메이션 실행, False면 일시정지
+        """
+        self._enabled = enabled
+        carb.log_info(f"[sturgeon_animator] animation {'enabled' if enabled else 'disabled'}")
 
     def reset(self) -> None:
         self._t = 0.0
         self._sturgeons = None
+        self._step_counter = 0
 
     def step(self, dt: float) -> None:
+        if not self._enabled:
+            return
+        
         self._t += dt
+        self._step_counter += 1
+        
+        # 성능 최적화: N step마다만 transform 업데이트
+        if self._step_counter % self.UPDATE_INTERVAL != 0:
+            return
+        
         stage = get_current_stage()
         if not stage:
             return
