@@ -146,8 +146,15 @@ class SturgeonAnimator:
         
         Args:
             enabled: True면 애니메이션 실행, False면 일시정지
+        
+        Note:
+            pause 시 USD prim 캐시를 해제하여 렌더링 부하를 완전히 제거.
+            resume 시 _discover()가 다시 호출되어 캐시 재구성 (1회성 비용).
         """
         self._enabled = enabled
+        if not enabled:
+            # Release USD prim references to fully eliminate rendering overhead
+            self._sturgeons = None
         carb.log_info(f"[sturgeon_animator] animation {'enabled' if enabled else 'disabled'}")
 
     def reset(self) -> None:
