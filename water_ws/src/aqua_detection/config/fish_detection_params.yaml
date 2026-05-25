@@ -1,18 +1,36 @@
 # Fish Detection Node Configuration
-# Usage: ros2 run aqua_detection fish_detection_node --ros-args --params-file config/fish_detection_params.yaml
+# ============================================================================
+#
+# QUICK START (YOLO + Global Camera - 권장):
+#   cd ~/AquaSweep/water_ws
+#   ros2 run aqua_detection fish_detection_node --ros-args \
+#       --params-file src/aqua_detection/config/fish_detection_params.yaml
+#
+# 또는 파라미터 오버라이드:
+#   ros2 run aqua_detection fish_detection_node --ros-args \
+#       --params-file src/aqua_detection/config/fish_detection_params.yaml \
+#       -p use_global_camera:=false
+#
+# ============================================================================
 
 fish_detection_node:
   ros__parameters:
-    # Detector selection: "opencv", "sam2", "yolo"
+    # ─── 핵심 설정 ───────────────────────────────────────────────────────────
+    # Detector: "opencv" (legacy), "yolo" (권장), "sam2", "yoloworld"
     detector_type: "yolo"
+    
+    # Camera mode:
+    #   true  = /global/top_img_raw 단일 토픽 (1개 렌더패스, 성능 좋음)
+    #   false = /pool_N/top_img_raw 7개 토픽 (7개 렌더패스)
+    use_global_camera: true
     
     # Number of pools to monitor
     num_pools: 7
     
-    # Enable debug visualization
+    # Enable debug visualization (/pool_N/top_img_det 토픽 발행)
     debug_visualization: true
 
-    # Image subscription QoS (Isaac Sim publishes RELIABLE; best_effort is fine for vision)
+    # Image subscription QoS
     image_qos_reliability: "best_effort"
     image_qos_depth: 10
     
@@ -46,7 +64,7 @@ fish_detection_node:
     # Status classifier parameters (contrast-based dead/alive detection)
     classifier:
       # Velocity settings
-      use_velocity: true           # Toggle velocity-based classification on/off
+      use_velocity: false           # Toggle velocity-based classification on/off
       velocity_threshold: 0.02     # Below this = suspicious (relative velocity)
       velocity_weight: 0.20        # Weight for velocity score
       

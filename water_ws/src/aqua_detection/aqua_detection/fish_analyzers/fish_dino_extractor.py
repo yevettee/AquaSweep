@@ -294,7 +294,7 @@ class SimpleFishStatusClassifier(BaseStatusClassifier):
     
     def __init__(
         self,
-        contrast_threshold: float = 30.0,
+        contrast_threshold: float = 8.0,
         water_similarity_threshold: float = 0.3,
         value_std_threshold: float = 40.0,
         saturation_std_threshold: float = 30.0,
@@ -458,10 +458,11 @@ class SimpleFishStatusClassifier(BaseStatusClassifier):
         # Weight multiplier when velocity is disabled
         color_weight = 1.0 if self.use_velocity else (1.0 / (1.0 - self.velocity_weight))
         
-        # 1. HIGH contrast with background -> suspicious (weight: 0.40)
+        # 1. HIGH contrast with background -> suspicious (weight: 0.45)
         # Dead fish floating on surface stand out from blue water
+        # Note: 0.45 * 1.25 (no velocity) = 0.5625 > 0.5 threshold
         if features['bg_contrast'] > self.contrast_threshold:
-            score += 0.40 * color_weight
+            score += 0.45 * color_weight
         
         # 2. Different from water color -> suspicious (weight: 0.25)
         if features['water_similarity'] < self.water_similarity_threshold:

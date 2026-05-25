@@ -23,7 +23,7 @@ import random
 from typing import Optional
 
 import carb
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, UsdSkel
 
 from . import params
 from .scene_builders import POOLS_ROOT
@@ -101,10 +101,15 @@ def _is_proxy_box_mesh(prim) -> bool:
 def _disable_proxy_prims(stage, prim_path: str) -> dict:
     """Deactivate proxy/preview prims bundled inside a sturgeon reference.
 
-    Handles bounding cubes, embedded cameras, and preview lights so they don't
-    pollute the bbox calculation or leak into the scene.
+    Handles bounding cubes, embedded cameras, preview lights, and skeleton
+    animations so they don't pollute the bbox calculation, leak into the scene,
+    or cause unnecessary GPU/CPU overhead.
+    
+    [PERF] SkelAnimation 비활성화가 핵심 - USD 내장 스켈레톤 수영 애니메이션이
+    30개 인스턴스에서 실행되면 엄청난 오버헤드 발생.
+    우리는 Xform 기반 sturgeon_animator.py로 이동을 처리하므로 SkelAnimation 불필요.
     """
-    counts = {"cubes": 0, "cameras": 0, "lights": 0}
+    counts = {"cubes": 0, "cameras": 0, "lights": 0, "skelanims": 0}
     root = stage.GetPrimAtPath(prim_path)
     if not root.IsValid():
         return counts
@@ -120,6 +125,11 @@ def _disable_proxy_prims(stage, prim_path: str) -> dict:
         elif any(prim.IsA(t) for t in _LIGHT_TYPES):
             prim.SetActive(False)
             counts["lights"] += 1
+        elif prim.IsA(UsdSkel.Animation):
+            # [PERF] SkelAnimation 비활성화 - 스켈레톤 기반 수영 애니메이션 OFF
+            # 이것이 FPS 하락의 주요 원인! (30마리 × skinning 연산)
+            prim.SetActive(False)
+            counts["skelanims"] += 1
     return counts
 
 
@@ -198,6 +208,15 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
     Returns the total number of sturgeons placed. Each sturgeon gets a unique
     name ``Sturgeon_<m>`` under its pool.
     """
+    # [DEBUG] Sturgeon spawn 비활성화 - FPS 영향 테스트
+    try:
+        from underwater_robot_python.global_variables import DEBUG_ENABLE_STURGEON_SPAWN
+        if not DEBUG_ENABLE_STURGEON_SPAWN:
+            carb.log_info("[sturgeon_spawner] DEBUG_ENABLE_STURGEON_SPAWN=False, skipping spawn")
+            return 0
+    except ImportError:
+        pass  # 플래그 없으면 정상 spawn
+
     asset_url = _resolve_asset_url()
     if asset_url is None:
         carb.log_warn(
@@ -280,8 +299,8 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
                 carb.log_info(
                     f"[sturgeon_spawner] mesh-only length={natural:.3f} m → "
                     f"scale={scale_factor:.4f} (target {target_length_m * 100:.1f} cm; "
-                    f"proxies disabled — cubes={proxies['cubes']}, "
-                    f"cameras={proxies['cameras']}, lights={proxies['lights']})"
+                    f"disabled — cubes={proxies['cubes']}, cameras={proxies['cameras']}, "
+                    f"lights={proxies['lights']}, skelanims={proxies['skelanims']})"
                 )
 
             xf = UsdGeom.Xformable(sturgeon_xform)

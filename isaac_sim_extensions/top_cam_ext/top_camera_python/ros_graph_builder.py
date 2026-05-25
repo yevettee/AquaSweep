@@ -27,8 +27,8 @@ from .global_variables import (
 )
 
 # 성능 최적화: 카메라 발행 프레임레이트 제한
-# 60fps 시뮬레이션에서 step=6 → 10fps 발행
-PUBLISH_STEP_INTERVAL = 6
+# 24fps 시뮬레이션에서 step=3 → ~8fps 발행 (블러링 감소, detection 품질 향상)
+PUBLISH_STEP_INTERVAL = 3
 
 
 def topic_for(pool_id: int) -> str:
@@ -88,7 +88,7 @@ def build_graph(
         ("Gate", "isaacsim.core.nodes.IsaacSimulationGate"),  # 프레임레이트 제한
     ]
     set_values: list[tuple[str, object]] = [
-        ("Gate.inputs:step", PUBLISH_STEP_INTERVAL),  # 6 tick마다 1번 → 10fps
+        ("Gate.inputs:step", PUBLISH_STEP_INTERVAL),  # N tick마다 1번 발행
     ]
     connect: list[tuple[str, str]] = [
         ("OnTick.outputs:tick", "Gate.inputs:execIn"),  # OnTick → Gate
@@ -131,7 +131,7 @@ def build_graph(
         traceback.print_exc()
         return False, "OmniGraph build raised; see kit log."
 
-    fps = 60 // PUBLISH_STEP_INTERVAL  # 대략적인 발행 fps
+    fps = 24 // PUBLISH_STEP_INTERVAL  # 대략적인 발행 fps (physics 24Hz 기준)
     msg = (
         f"Publishing {len(entries)} top camera(s) "
         f"at {resolution[0]}x{resolution[1]}, ~{fps}fps (step={PUBLISH_STEP_INTERVAL})."
@@ -218,7 +218,7 @@ def build_global_graph(
         traceback.print_exc()
         return False, "Global OmniGraph build raised; see kit log."
 
-    fps = 60 // PUBLISH_STEP_INTERVAL
+    fps = 24 // PUBLISH_STEP_INTERVAL  # physics 24Hz 기준
     msg = (
         f"Publishing global camera at {resolution[0]}x{resolution[1]}, "
         f"~{fps}fps (step={PUBLISH_STEP_INTERVAL}). "

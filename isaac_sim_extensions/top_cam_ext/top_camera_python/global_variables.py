@@ -23,7 +23,7 @@ GLOBAL_CAM_PATH = "/World/GlobalTopCamera"
 GLOBAL_GRAPH_PATH = "/global_cam_graph"
 GLOBAL_TOPIC = "/global/top_img_raw"
 GLOBAL_FRAME_ID = "global_top_cam"
-GLOBAL_RESOLUTION = (1920, 1440)  # 4:3 ratio, ~480x480 per pool region
+GLOBAL_RESOLUTION = (2560, 1920)  # 4:3 ratio, ~640x640 per pool region (matches per-pool camera)
 
 # Selection — opposite polarity from under_cam_ext: we *require* a "top"
 # token in the path and reject anything that looks like an under-water

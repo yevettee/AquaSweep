@@ -56,27 +56,27 @@ from aqua_detection.image_qos import image_subscription_qos
 NUM_POOLS = 7
 
 # ── Global camera pool regions ───────────────────────────────────────────────
-# Pixel coordinates (x1, y1, x2, y2) for each pool in the 1920x1440 global image.
+# Pixel coordinates (x1, y1, x2, y2) for each pool in the 2560x1920 global image.
 # Derived from pool world positions and camera projection:
-#   Building: 40m x 30m, Camera at (0, 0, 25m), FOV ~104°
-#   Image: 1920x1440, center at (960, 720)
-#   Scale: ~48 px/m horizontal, ~48 px/m vertical
+#   Building: 40m x 30m, Camera at (0, 0, 12m), FOV ~120°
+#   Image: 2560x1920, center at (1280, 960)
+#   Scale: ~64 px/m horizontal, ~64 px/m vertical
 #
 # Pool layout (world coords, meters):
 #   Pool_5(-12.75, 5)   Pool_6(-4.25, 5)   Pool_7(4.25, 5)    [Equipment]
 #   Pool_1(-12.75,-5)   Pool_2(-4.25,-5)   Pool_3(4.25,-5)   Pool_4(12.75,-5)
 #
-# Pool radius: 4m → ~192px, using 240px margin for safety
+# Pool radius: 4m → ~256px, using 320px margin for safety
 GLOBAL_POOL_REGIONS: Dict[int, Tuple[int, int, int, int]] = {
-    # Bottom row (y=-5m → image y=960)
-    1: (108, 720, 588, 1200),    # Pool_1: center (-12.75, -5) → px (348, 960)
-    2: (516, 720, 996, 1200),    # Pool_2: center (-4.25, -5) → px (756, 960)
-    3: (924, 720, 1404, 1200),   # Pool_3: center (4.25, -5) → px (1164, 960)
-    4: (1332, 720, 1812, 1200),  # Pool_4: center (12.75, -5) → px (1572, 960)
-    # Top row (y=5m → image y=480)
-    5: (108, 240, 588, 720),     # Pool_5: center (-12.75, 5) → px (348, 480)
-    6: (516, 240, 996, 720),     # Pool_6: center (-4.25, 5) → px (756, 480)
-    7: (924, 240, 1404, 720),    # Pool_7: center (4.25, 5) → px (1164, 480)
+    # Bottom row (y=-5m → image y=1280)
+    1: (144, 960, 784, 1600),    # Pool_1: center (-12.75, -5) → px (464, 1280)
+    2: (688, 960, 1328, 1600),   # Pool_2: center (-4.25, -5) → px (1008, 1280)
+    3: (1232, 960, 1872, 1600),  # Pool_3: center (4.25, -5) → px (1552, 1280)
+    4: (1776, 960, 2416, 1600),  # Pool_4: center (12.75, -5) → px (2096, 1280)
+    # Top row (y=5m → image y=640)
+    5: (144, 320, 784, 960),     # Pool_5: center (-12.75, 5) → px (464, 640)
+    6: (688, 320, 1328, 960),    # Pool_6: center (-4.25, 5) → px (1008, 640)
+    7: (1232, 320, 1872, 960),   # Pool_7: center (4.25, 5) → px (1552, 640)
 }
 
 
@@ -109,7 +109,7 @@ class PoolState:
         # Initialize status classifier with config
         cls_cfg = classifier_config or {}
         self.status_classifier = SimpleFishStatusClassifier(
-            contrast_threshold=cls_cfg.get('contrast_threshold', 30.0),
+            contrast_threshold=cls_cfg.get('contrast_threshold', 8.0),
             water_similarity_threshold=cls_cfg.get('water_similarity_threshold', 0.3),
             value_std_threshold=cls_cfg.get('value_std_threshold', 40.0),
             saturation_std_threshold=cls_cfg.get('saturation_std_threshold', 30.0),
@@ -126,7 +126,7 @@ class FishDetectionNode(Node):
         super().__init__('fish_detection_node')
         
         # Declare parameters
-        self.declare_parameter('detector_type', 'opencv')
+        self.declare_parameter('detector_type', 'yolo')
         self.declare_parameter('num_pools', NUM_POOLS)
         self.declare_parameter('debug_visualization', True)
         self.declare_parameter('image_qos_reliability', 'best_effort')
@@ -142,7 +142,7 @@ class FishDetectionNode(Node):
         self.declare_parameter('classifier.use_velocity', True)
         self.declare_parameter('classifier.velocity_threshold', 0.02)
         self.declare_parameter('classifier.velocity_weight', 0.20)
-        self.declare_parameter('classifier.contrast_threshold', 30.0)
+        self.declare_parameter('classifier.contrast_threshold', 8.0)
         self.declare_parameter('classifier.water_similarity_threshold', 0.3)
         self.declare_parameter('classifier.value_std_threshold', 40.0)
         self.declare_parameter('classifier.saturation_std_threshold', 30.0)
@@ -179,6 +179,11 @@ class FishDetectionNode(Node):
         self.get_logger().info(
             f"ROS env: ROS_DOMAIN_ID={self._ros_domain_id}, "
             f"RMW_IMPLEMENTATION={self._rmw}, ROS_DISTRO={self._ros_distro}"
+        )
+        self.get_logger().info(
+            f"Classifier config: contrast_threshold={self._classifier_config['contrast_threshold']}, "
+            f"use_velocity={self._classifier_config['use_velocity']}, "
+            f"velocity_weight={self._classifier_config['velocity_weight']}"
         )
         
         # Initialize detector

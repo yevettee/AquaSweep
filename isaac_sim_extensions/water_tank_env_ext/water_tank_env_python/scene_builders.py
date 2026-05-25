@@ -154,7 +154,7 @@ def _build_solid_cylinder_mesh(stage, path, center, height, radius,
     if collision:
         UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim())
-        UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("none")
+        UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("convexDecomposition")
     return mesh
 
 
@@ -198,7 +198,7 @@ def _build_tube_mesh(stage, path, center, height, inner_radius, outer_radius,
 
     UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
     UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim())
-    UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("none")
+    UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("convexDecomposition")
     return mesh
 
 
@@ -478,8 +478,8 @@ def build_top_cameras(stage, root: str = POOLS_ROOT) -> None:
 
 
 # ── Global top-view camera (single camera for all pools) ─────────────────────
-_GLOBAL_CAM_HEIGHT = 15.0      # m — adjusted height for better pool visibility
-_GLOBAL_CAM_FOCAL = 8.0        # mm — wide FOV (~104°) for full coverage
+_GLOBAL_CAM_HEIGHT = 12.0      # m — lowered for better resolution per pool
+_GLOBAL_CAM_FOCAL = 6.5        # mm — wider FOV (~120°) to cover 40x30m at 12m height
 _GLOBAL_CAM_H_APERTURE = 20.955  # mm
 _GLOBAL_CAM_V_APERTURE = 15.291  # mm (4:3 aspect for 1920x1440)
 GLOBAL_CAM_PATH = "/World/GlobalTopCamera"
