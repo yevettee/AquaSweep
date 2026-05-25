@@ -48,3 +48,18 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+
+# YOLO Training - Dataset images (keep results, ignore raw images)
+water_ws/src/aqua_detection/dataset_replicator/images/
+water_ws/src/aqua_detection/dataset_replicator/labels/
+water_ws/src/aqua_detection/dataset/
+water_ws/src/aqua_detection/runs/detect/*/weights/last.pt
+water_ws/src/aqua_detection/runs/detect/**/train_batch*.jpg
+water_ws/src/aqua_detection/runs/detect/**/val_batch*.jpg
+water_ws/src/aqua_detection/runs/detect/**/labels.jpg
+
+# Keep these (not ignored):
+# - models/*.pt (trained models)
+# - runs/detect/*/weights/best.pt (best model)
+# - runs/detect/*/*.yaml, *.csv, *.png (training results)
+# - dataset_replicator/dataset.yaml (dataset config)
