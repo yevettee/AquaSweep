@@ -11,15 +11,18 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotStatus.msg"
   "msg/PoolStatus.msg"
   "msg/PoolPhysicalVariables.msg"
+  "msg/FishStatus.msg"
   "action/CleanFloor.action"
   "action/CleanWall.action"
   "action/MoveFish.action"
+  DEPENDENCIES builtin_interfaces
 )
 
 ament_export_dependencies(rosidl_default_runtime)

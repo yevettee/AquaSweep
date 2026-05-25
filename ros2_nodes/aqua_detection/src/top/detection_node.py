@@ -12,6 +12,7 @@ import numpy as np
 from collections import deque
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 import json
@@ -58,7 +59,7 @@ class TopDetectionNode(Node):
                 Image,
                 f'/pool_{pool_id}/top_img_raw',
                 lambda msg, pid=pool_id: self.image_callback(msg, pid),
-                10
+                qos_profile_sensor_data,
             )
 
             self.pub_status[pool_id] = self.create_publisher(

@@ -40,10 +40,11 @@ _ROLL_FREQ_MIN = 3                   # 최소 흔들림 주파수 (Hz)
 _ROLL_FREQ_MAX = 5                   # 최대 흔들림 주파수 (Hz)
 
 # ── Motion bounds for FLIPPED (dead/sick) sturgeons ───────────────────────────
-_Z_MIN_FLIPPED = params.WATER_LEVEL - 0.15   # 수면 아래 15cm
-_Z_MAX_FLIPPED = params.WATER_LEVEL - 0.05   # 수면 아래 5cm (거의 떠있음)
+# 죽은 물고기는 수면에 둥둥 떠있어야 함 (등이 살짝 노출)
+_Z_MIN_FLIPPED = params.WATER_LEVEL + 0.02   # 수면 위 2cm
+_Z_MAX_FLIPPED = params.WATER_LEVEL + 0.03   # 수면 위 3cm
 _Z_MID_FLIPPED = (_Z_MIN_FLIPPED + _Z_MAX_FLIPPED) / 2.0
-_Z_AMP_FLIPPED = 0.03                # ±3cm 출렁임
+_Z_AMP_FLIPPED = 0.01                # ±1cm 출렁임 (물결에 따라 살짝 오르내림)
 
 _OMEGA_MIN_FLIPPED = 0.05            # rad/s ≈ 3°/s, 한 바퀴 ~2분 (느린 표류)
 _OMEGA_MAX_FLIPPED = 0.1             # rad/s ≈ 6°/s, 한 바퀴 ~1분

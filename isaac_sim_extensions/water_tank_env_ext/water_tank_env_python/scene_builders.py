@@ -45,7 +45,7 @@ BUILDING_ROOT = "/World/Building"
 _FLOOR_THICKNESS = 0.05
 _WALL_THICKNESS = 0.30
 _WALL_HEIGHT = 5.0
-_FLOOR_COLOR = (0.42, 0.41, 0.39)        # darker concrete (wet/troweled)
+_FLOOR_COLOR = (0.0, 0.14, 0.08)         # 청테이프/방수페인트 녹색 (어둡게)
 _WALL_COLOR  = (0.58, 0.57, 0.54)        # lighter concrete (poured panel)
 
 
@@ -266,27 +266,53 @@ def _build_tank_meshes(stage, pool_path: str) -> None:
 
 
 def _build_water_body(stage, pool_path: str) -> None:
-    inset = 0.01
-    r = params.TANK_RADIUS - inset
-    body_height = params.WATER_LEVEL
-    body_center_z = params.TANK_FLOOR_Z + body_height / 2
+    """수면을 얇은 디스크로 표현.
+    
+    전체 수심을 채우는 실린더 대신 수면만 얇은 plate로 만들어서:
+    - 빛이 물 아래까지 투과 (아래 물고기도 보임)
+    - 사선에서 봤을 때 수면의 반사/굴절 효과 유지
+    - 수면 위/아래 물고기 구분 가능
+    """
+    r = params.TANK_RADIUS - 0.01
+    surface_z = params.water_surface_z()  # 수면 높이 (1.2m)
+    plate_thickness = 0.02  # 2cm 두께의 얇은 디스크
 
-    # WaterBody — water-like material but cylinder is open at the bottom.
-    # The omitted bottom cap (skip_bottom_cap=True) is what previously caused
-    # sturgeons to appear ghost-reflected on the building floor when viewed
-    # from the robot's onboard camera (the bottom face acted as an internal
-    # mirror coincident with the floor at z=0).
-    _build_solid_cylinder_mesh(stage, f"{pool_path}/WaterBody",
-                               center=(0, 0, body_center_z),
-                               height=body_height, radius=r,
-                               color=(0.18, 0.40, 0.50),
-                               opacity=0.30,
+    mesh = _build_solid_cylinder_mesh(stage, f"{pool_path}/WaterBody",
+                               center=(0, 0, surface_z),
+                               height=plate_thickness, radius=r,
+                               color=(0.15, 0.40, 0.55),   # 푸른 수면
+                               opacity=0.25,               # 수면 느낌 (25%)
                                collision=False,
-                               roughness=0.55,
-                               clearcoat=0.05,
-                               clearcoat_roughness=0.4,
-                               ior=1.33,
-                               skip_bottom_cap=True)
+                               roughness=0.15,             # 약간의 물결 느낌
+                               clearcoat=0.3,              # 수면 반사
+                               clearcoat_roughness=0.2,
+                               ior=1.33)
+    
+    # 그림자 드리움만 비활성화 - 수면이 물고기에 그림자를 드리우지 않도록
+    # (invisibleToSecondaryRays는 사용 안 함 - 굴절/투과까지 차단됨)
+    prim = mesh.GetPrim()
+    prim.CreateAttribute("primvars:doNotCastShadows", Sdf.ValueTypeNames.Bool).Set(True)
+
+
+def _build_underwater_light(stage, pool_path: str) -> None:
+    """수조 바닥에 원형 조명 추가 - WaterBody가 위에서 오는 빛을 차단해도 물고기가 보이도록.
+    
+    실제 양식장에서도 수중 조명을 사용하는 경우가 많음.
+    """
+    light_path = f"{pool_path}/UnderwaterLight"
+    if stage.GetPrimAtPath(light_path).IsValid():
+        return
+    
+    # 수조 형태에 맞춘 원형 조명 (DiskLight)
+    light = UsdLux.DiskLight.Define(stage, light_path)
+    light.CreateIntensityAttr(200.0)             # 밝은 조명
+    light.CreateColorAttr(Gf.Vec3f(0.95, 0.98, 1.0))  # 차가운 흰색 (수중 느낌)
+    light.CreateRadiusAttr(params.TANK_RADIUS)  # 수조 반경에 맞춤
+    
+    # 바닥에서 위를 향하도록 배치 (Z=0.1, 위쪽 방향)
+    xf = UsdGeom.Xformable(light)
+    xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.1))
+    xf.AddRotateXYZOp().Set(Gf.Vec3f(180.0, 0.0, 0.0))  # 위쪽을 향하도록 뒤집기
 
 
 def _build_water_surface(stage, pool_path: str) -> None:
@@ -352,6 +378,7 @@ def build_pool(stage, pool_path: str, center: tuple[float, float]) -> None:
 
     _build_tank_meshes(stage, pool_path)
     _build_water_body(stage, pool_path)
+    _build_underwater_light(stage, pool_path)
 
 
 def build_pools(stage, root: str = POOLS_ROOT) -> None:
@@ -363,7 +390,7 @@ def build_pools(stage, root: str = POOLS_ROOT) -> None:
 
 
 # ── Top-view cameras (one per pool) ──────────────────────────────────────────
-_TOPCAM_HEIGHT = 6.0           # m above pool floor
+_TOPCAM_HEIGHT = 12.0           # m above pool floor
 _TOPCAM_FOCAL_LENGTH = 15.0    # mm — wide enough to frame an 8 m pool
 _TOPCAM_H_APERTURE = 20.955    # mm — Isaac Sim default 16:9 sensor
 _TOPCAM_V_APERTURE = 15.291    # mm
@@ -577,17 +604,42 @@ def add_lighting(stage, root: str = "/World/Lighting") -> None:
         return
     UsdGeom.Xform.Define(stage, root)
 
+    # Isaac Sim 기본 환경 조명 비활성화/조절 (과도한 그림자 및 반사 방지)
+    _configure_default_environment_light(stage)
+
     cool_white = Gf.Vec3f(0.91, 0.96, 1.0)   # #E8F4FF — fluorescent tone
 
-    sun = UsdLux.DistantLight.Define(stage, f"{root}/Sun")
-    sun.CreateIntensityAttr(40.0)    # subtle indoor fill (was 800 → 120 → 40)
-    sun.CreateColorAttr(cool_white)
-    UsdGeom.Xformable(sun).AddRotateXYZOp().Set(Gf.Vec3f(-45.0, 0.0, 30.0))
+    # 환경광 (DomeLight) - 전체적인 색조와 ambient 제공 (고정, 따라다니지 않음)
+    dome = UsdLux.DomeLight.Define(stage, f"{root}/AmbientDome")
+    dome.CreateIntensityAttr(600.0)
+    dome.CreateExposureAttr(1.0)
+    dome.CreateColorAttr(cool_white)
+    # 그림자 비활성화
+    dome.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool).Set(False)
 
+    # 천장 조명 - 실제 양식장처럼 균일한 실내 조명
     ceiling = UsdLux.RectLight.Define(stage, f"{root}/CeilingLight")
-    ceiling.CreateIntensityAttr(150.0)  # was 2500 → 400 → 150
+    ceiling.CreateIntensityAttr(1000.0)
+    ceiling.CreateExposureAttr(1.0)
     ceiling.CreateColorAttr(cool_white)
-    # Match the building footprint so the whole hall is lit evenly.
     ceiling.CreateWidthAttr(params.BUILDING_X * 0.9)
     ceiling.CreateHeightAttr(params.BUILDING_Y * 0.9)
     UsdGeom.Xformable(ceiling).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 3.0))
+    # 그림자 비활성화
+    ceiling.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool).Set(False)
+
+
+def _configure_default_environment_light(stage) -> None:
+    """Isaac Sim 기본 환경 조명(/Environment/defaultLight) 비활성화.
+    
+    Camera Light는 카메라를 따라다니므로 비활성화하고,
+    고정된 Stage 조명(CeilingLight, UnderwaterLight)만 사용.
+    """
+    default_light_path = "/Environment/defaultLight"
+    prim = stage.GetPrimAtPath(default_light_path)
+    
+    if not prim or not prim.IsValid():
+        return
+    
+    # Camera Light 완전 비활성화 (따라다니는 빛 반사 제거)
+    prim.SetActive(False)
