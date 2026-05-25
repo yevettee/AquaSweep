@@ -148,6 +148,8 @@ world/
 - `/planner/start` - 대시보드 전체 시작
 - `/planner/pause` - 대시보드 전체 일시 정지
 - `/pool_1/start_clean_floor` - 대시보드 개별 under_robot 시작
+- `/sturgeon/pause` - 철갑상어 애니메이션 일시 정지 (청소 시작 시 자동 호출)
+- `/sturgeon/resume` - 철갑상어 애니메이션 재개 (청소 완료 시 자동 호출)
 
 **Request**
 
@@ -241,11 +243,18 @@ world/
 
 ### 4.2 Services
 
-| Action | Client | Server | 우선 순위 |
+| Service | Client | Server | 우선 순위 |
 | --- | --- | --- | --- |
 | `/planner/start` | dashboard node | planner node | **1차 필수** |
 | `/planner/pause` | dashboard node | planner node | **1차 필수** |
 | `/pool_1/start_clean_floor` | dashboard node | planner node | **1차 필수** |
+| `/sturgeon/pause` | planner node | `aquasweep_ext` (Isaac Sim) | **1차 필수** |
+| `/sturgeon/resume` | planner node | `aquasweep_ext` (Isaac Sim) | **1차 필수** |
+
+> **철갑상어 애니메이션 제어 흐름:**
+> - 청소 시작 시 (`/planner/start` 또는 `/{pool_id}/start_clean_floor`) → planner가 `/sturgeon/pause` 자동 호출
+> - 모든 청소 완료 시 → planner가 `/sturgeon/resume` 자동 호출
+> - 성능 최적화 목적: 청소 중 불필요한 철갑상어 transform 업데이트 (~35 USD Set() calls/step) 중단
 
 ### 4.3 Actions
 

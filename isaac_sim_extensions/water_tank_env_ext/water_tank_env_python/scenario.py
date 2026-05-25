@@ -31,6 +31,11 @@ class WaterTankScenario:
     def is_loaded(self) -> bool:
         return self._running_scenario
 
+    @property
+    def sturgeon_animator(self) -> SturgeonAnimator:
+        """SturgeonAnimator 인스턴스 반환 (외부 서비스 연결용)."""
+        return self._sturgeon_anim
+
     def update_scenario(self, step: float):
         from underwater_robot_python.global_variables import (
             DEBUG_ENABLE_WATER_PHYSICS,

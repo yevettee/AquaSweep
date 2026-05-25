@@ -40,6 +40,7 @@ from underwater_robot_python.actiongraph_setup import (
 )
 from underwater_robot_python.suction_system import SuctionSystem
 from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_center_trail_debug
+from .sturgeon_animation_service import SturgeonAnimationService
 from underwater_robot_python.global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
     DEBUG_ENABLE_SUCTION,
@@ -175,6 +176,10 @@ class UIBuilder:
         # Remove ActionGraphs for all robots
         for i in range(_NUM_ROBOTS):
             remove_cmd_vel_graph(f"under_robot_{i + 1}")
+        # Stop sturgeon animation ROS2 service
+        if self._sturgeon_service is not None:
+            self._sturgeon_service.stop()
+            self._sturgeon_service = None
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
@@ -252,6 +257,7 @@ class UIBuilder:
             for i in range(_NUM_ROBOTS)
         ]
         self._graphs_created = False
+        self._sturgeon_service: SturgeonAnimationService | None = None
 
     def _setup_scene(self):
         _apply_viewport_performance_settings()
@@ -303,6 +309,13 @@ class UIBuilder:
 
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
+
+        # Sturgeon animation ROS2 service 시작
+        if self._sturgeon_service is None:
+            self._sturgeon_service = SturgeonAnimationService(
+                self._water_scenario.sturgeon_animator
+            )
+        self._sturgeon_service.start()
 
         for suction in self._suctions:
             suction.reset()

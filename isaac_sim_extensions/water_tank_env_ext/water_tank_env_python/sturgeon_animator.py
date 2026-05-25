@@ -134,6 +134,21 @@ class SturgeonAnimator:
         self._t = 0.0
         self._sturgeons: list[_SturgeonCache] | None = None
         self._step_counter = 0
+        self._enabled = True
+
+    @property
+    def enabled(self) -> bool:
+        """상어 애니메이션 활성화 여부."""
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """상어 애니메이션 활성화/비활성화.
+        
+        Args:
+            enabled: True면 애니메이션 실행, False면 일시정지
+        """
+        self._enabled = enabled
+        carb.log_info(f"[sturgeon_animator] animation {'enabled' if enabled else 'disabled'}")
 
     def reset(self) -> None:
         self._t = 0.0
@@ -141,6 +156,9 @@ class SturgeonAnimator:
         self._step_counter = 0
 
     def step(self, dt: float) -> None:
+        if not self._enabled:
+            return
+        
         self._t += dt
         self._step_counter += 1
         
