@@ -243,7 +243,8 @@ class RosBridge:
             return "Task already running"
 
         client = self._node._planner_start_client
-        if not client.wait_for_service(timeout_sec=0.5):
+        # Non-blocking service check
+        if not client.service_is_ready():
             return f"Planner start service not available: {planner_start_service()}"
 
         request = Trigger.Request()
@@ -271,7 +272,8 @@ class RosBridge:
         if action_client is None:
             return f"No action client for pool {pool_id}"
 
-        if not action_client.wait_for_server(timeout_sec=0.5):
+        # Non-blocking server check
+        if not action_client.server_is_ready():
             msg = f"CleanFloor action server not available: {pool_clean_floor_action(pool_id)}"
             self._set_error(pool_id, msg)
             return msg

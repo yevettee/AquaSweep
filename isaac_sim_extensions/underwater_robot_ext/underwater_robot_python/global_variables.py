@@ -55,6 +55,9 @@ DEBUG_TRAIL_LINE_WIDTH_WORLD = 0.02
 
 # Physics step 디버그 — False로 끄고 extension reload 후 LOAD → RUN
 DEBUG_ENABLE_WATER_PHYSICS = True
+DEBUG_ENABLE_ROBOT_SPAWN = True       # Robot USD 로드 (DEACTIVATED 상태로)
+DEBUG_ENABLE_WHEELED_ROBOT = True     # True=WheeledRobot(Articulation), False=단일RigidBody(Kinematic)
+DEBUG_ENABLE_STURGEON_SPAWN = True   # Sturgeon USD 로드 비활성화
 DEBUG_ENABLE_STURGEON_ANIM = True
-DEBUG_ENABLE_WATER_SURFACE_ANIM = True
+DEBUG_ENABLE_WATER_SURFACE_ANIM = False
 DEBUG_ENABLE_SUCTION = True

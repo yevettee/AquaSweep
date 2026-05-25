@@ -162,7 +162,8 @@ class SturgeonAnimator:
             )
             x = radius * math.cos(angle)
             y = radius * math.sin(angle)
-            z = p["z_mid"] + p["z_amp"] * math.sin(t * p["z_freq"] + p["z_phase"])
+            # Bobbing 제거: z 고정 (수직 oscillation 비활성화)
+            z = p["z_mid"]
 
             # Yaw aligned with the orbit tangent — sign comes from omega so
             # CCW and CW swimmers both face forward.

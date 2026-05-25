@@ -1,0 +1,54 @@
+물고기 detection 모델을 구현하려고 해. 아래 내용을 참고해서 점진적인 작업 계획을 세워줘. 
+
+### 조건
+
+1. 물고기와 이물질(debris) 을 구분해야햔다.
+2. 물고기가 몇 마리인지 알 수 있어야한다. 
+3. 살아있는 물고기와 죽은(suspicious) 물고기를 구분해야한다. 
+4. 풀에 있는 각 물고기의 상태와 이동 속도를 알 수 있어야한다. 
+
+### 모델
+
+1. SAM2 : zero shot 으로 detection & annotating 
+    1. 비디오 판독 성능이 좋으면서도 zeroshot 이라서 골랐어. 
+2. DINOv2 : 이미지를 의미론적으로 추출. 예를 들어 죽은 물고기는 표면에서 반 정도 노출된 채로 둥둥 떠다니므로, 물속의 물고기에 비해 특징점 분포 차이가 있을 것. (색상, 선명도 등) 
+3. ?? : 해당 bbox 의 위치 이동을 기반으로 개별 물고기의 이동 속도를 추출한다. 
+    1. 단, 멀리 있을수록 적게 움직이는 것처럼 보일 수 있어 보정이 필요한다. 이동의 절대량이 아니라 이동의 상대량이어야 함.
+    2. lucas kanade, dense optical flow, open cv 등 성능을 비교해서 현재 상황에 맞는 솔루션 제안.
+
+### 구현할 기능
+
+1. aqua_detection
+    1. image receiver(이미 구현되어있을 수도) isaacsim 이 발행한 top_cam_raw 토픽 수신하여 모델을 적용하여 여러 형태의 결과를 발행하는 역할을 하는 ros2 package
+    2. detection node 
+        1. sam2: 
+            1. 물고기와 이물질을 구분해서 bounding box 혹은 annotating(seg) 를 해라 (정확히는 물고기와 이물질을 혼동하지 않아야 함.) 
+        2. dinov2: 
+            1. sam2 가 seg 해준 물고기 image 를 모델 돌려서, 각 색상 분포 차이를 계산해라. 혹은 시각화해라
+        3. velocity_checker (deep optical flow or lucas kanade, or open cv) 
+            1. sam2 가 바운딩박스로 만들어준 물고기를 프레임 크기 대비 이동한 거리(x^2 + y^2  의 root), 즉 상대적인 속도를 계산
+        4. final_determination: 
+            1. 하나의 바운딩 박스에 대해 dinov2 + velociy_checker(가칭) 이 낸 결과를 종합적으로 판단해서 해당 바운딩박스의 fish 가  suspicious 한지 아닌지 판단
+            2. /pool_id/status 발행 (planner 가 구독) 
+            3. /pool_id/fish_id/status 발행 (dashboard 가 구독)
+                1. 현재 없는 인터페이스임. 만들어야 할 것 같음. 그런데 일단 나중에
+        5. publisher: 
+            1. image 에 이 물고기  bbox 와 classification 된 결과 ( default, suspicious )  를 image로 토픽 발행
+            2. final_determination  정보를 종합하여 /pool_id/status 발행 
+            3. (신규) final_determination 정보를 종합하여 /pool_id/fish_id/status 토픽 발행. 아니면 final determination  에서 발행해도 됨. 발행 주체는 누가 좋을지 모르겠음. 
+    3. visualization node
+        1. 모델 파이프라인을 입력하면 (예를 들어 sam2 만, sam2 + dinov2 만, sam2+velocity checker만, 전체 다) rqt graph 로 쉽게 세그 된 모습을 확인할 수 있는 디버깅용 툴
+    4. performance evaluator node
+        1. 디버깅용. final_determination 의 결과와 실제 isaac 의 ground truth 와 추론 결과 비교. 실시간 노드가 좋을지, 아니면 실행할 때마다 결과를 캡처해주는 게 좋을지는 너가 제안해줘. 
+2. dashboard_ext 에 추가 (나중에)
+    1. pool 의 물고기별 상태 모니터링
+        1. fish_id
+        2. Image(영상)
+        3. velocity graph
+
+### Appendix
+
+(must have 는 아니지만 고려해볼만한 거)
+
+- 장기적으로는 sam2가 아니라 각 물고기가 정밀하게 학습된 모델을 쓸 것 같은데, 이때 그냥 사용자는 카메라만 딸깍하면 모델 학습부터 적용까지 한번에 되는 모델을 만드는 파이프라인도 만들고 싶어. (annotating 만 모델이 해주고, class 입력은 사용자가 직접 한다거나)
+    - 이걸 고려한 확장성 좋은 설계를 해주어도 좋고. 근데 그냥 참고만.

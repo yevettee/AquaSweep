@@ -21,6 +21,7 @@ Tank material — FRP (glass-fibre reinforced plastic):
 import math
 import os
 
+import carb
 from pxr import Gf, Sdf, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 from . import params
@@ -153,7 +154,7 @@ def _build_solid_cylinder_mesh(stage, path, center, height, radius,
     if collision:
         UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim())
-        UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("none")
+        UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("convexDecomposition")
     return mesh
 
 
@@ -197,7 +198,7 @@ def _build_tube_mesh(stage, path, center, height, inner_radius, outer_radius,
 
     UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
     UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim())
-    UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("none")
+    UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("convexDecomposition")
     return mesh
 
 
@@ -246,23 +247,43 @@ def _build_tank_meshes(stage, pool_path: str) -> None:
     debris and the sturgeon up into the robot's camera view. The building
     floor at z=0 already sits flush with the wall bottom and acts as the
     physical/visual floor inside each pool.
+
+    Idempotent: skips meshes that already exist.
     """
+    carb.log_info(f"[scene_builders] _build_tank_meshes called: {pool_path}")
+    
     r  = params.TANK_RADIUS
     h  = params.TANK_INNER_Z
     z0 = params.TANK_FLOOR_Z
+    
+    carb.log_info(f"[scene_builders] Tank params: TANK_RADIUS={r}, TANK_INNER_Z={h}, TANK_FLOOR_Z={z0}")
 
-    _build_tube_mesh(stage, f"{pool_path}/Wall",
-                     center=(0, 0, z0),
-                     height=h, inner_radius=r, outer_radius=r + params.WALL_THICKNESS,
-                     color=_FRP_EXTERIOR, opacity=0.78,
-                     roughness=_FRP_ROUGHNESS_EXT)
+    wall_path = f"{pool_path}/Wall"
+    wall_exists = stage.GetPrimAtPath(wall_path).IsValid()
+    carb.log_info(f"[scene_builders] Wall path={wall_path}, exists={wall_exists}")
+    
+    if not wall_exists:
+        carb.log_info(f"[scene_builders] Creating Wall mesh...")
+        _build_tube_mesh(stage, wall_path,
+                         center=(0, 0, z0),
+                         height=h, inner_radius=r, outer_radius=r + params.WALL_THICKNESS,
+                         color=_FRP_EXTERIOR, opacity=0.78,
+                         roughness=_FRP_ROUGHNESS_EXT)
+        carb.log_info(f"[scene_builders] Wall mesh created, valid={stage.GetPrimAtPath(wall_path).IsValid()}")
 
-    _build_lateral_cylinder(stage, f"{pool_path}/WallInterior",
-                            center=(0.0, 0.0, z0 + h / 2.0),
-                            height=h,
-                            radius=r - 0.001,
-                            color=_FRP_INTERIOR, opacity=0.88,
-                            roughness=_FRP_ROUGHNESS_INT)
+    interior_path = f"{pool_path}/WallInterior"
+    interior_exists = stage.GetPrimAtPath(interior_path).IsValid()
+    carb.log_info(f"[scene_builders] WallInterior path={interior_path}, exists={interior_exists}")
+    
+    if not interior_exists:
+        carb.log_info(f"[scene_builders] Creating WallInterior mesh...")
+        _build_lateral_cylinder(stage, interior_path,
+                                center=(0.0, 0.0, z0 + h / 2.0),
+                                height=h,
+                                radius=r - 0.001,
+                                color=_FRP_INTERIOR, opacity=0.88,
+                                roughness=_FRP_ROUGHNESS_INT)
+        carb.log_info(f"[scene_builders] WallInterior mesh created, valid={stage.GetPrimAtPath(interior_path).IsValid()}")
 
 
 def _build_water_body(stage, pool_path: str) -> None:
@@ -272,12 +293,18 @@ def _build_water_body(stage, pool_path: str) -> None:
     - 빛이 물 아래까지 투과 (아래 물고기도 보임)
     - 사선에서 봤을 때 수면의 반사/굴절 효과 유지
     - 수면 위/아래 물고기 구분 가능
+
+    Idempotent: skips if WaterBody already exists.
     """
+    water_body_path = f"{pool_path}/WaterBody"
+    if stage.GetPrimAtPath(water_body_path).IsValid():
+        return
+
     r = params.TANK_RADIUS - 0.01
     surface_z = params.water_surface_z()  # 수면 높이 (1.2m)
     plate_thickness = 0.02  # 2cm 두께의 얇은 디스크
 
-    mesh = _build_solid_cylinder_mesh(stage, f"{pool_path}/WaterBody",
+    mesh = _build_solid_cylinder_mesh(stage, water_body_path,
                                center=(0, 0, surface_z),
                                height=plate_thickness, radius=r,
                                color=(0.15, 0.40, 0.55),   # 푸른 수면
@@ -364,33 +391,50 @@ def build_pool(stage, pool_path: str, center: tuple[float, float]) -> None:
     """Build one full pool (tank + water body) at a 2-D centre.
 
     The Pool Xform carries the translate; child meshes are in local coords.
-    Idempotent: skips if pool_path already exists.
+    Idempotent: each component (Xform, Wall, WaterBody, etc.) is created only
+    if it doesn't already exist, so partial states are recovered gracefully.
 
     The animated water-surface disc is intentionally omitted — its semi-transparent
     overlay made debris/sturgeon harder to see and added little visual value.
     """
-    if stage.GetPrimAtPath(pool_path).IsValid():
-        return
-    pool_xform = UsdGeom.Xform.Define(stage, pool_path)
-    xf = UsdGeom.Xformable(pool_xform)
-    xf.ClearXformOpOrder()
-    xf.AddTranslateOp().Set(Gf.Vec3d(center[0], center[1], 0.0))
+    carb.log_info(f"[scene_builders] build_pool called: {pool_path}, center={center}")
+    
+    # Create Pool Xform if it doesn't exist
+    pool_exists = stage.GetPrimAtPath(pool_path).IsValid()
+    carb.log_info(f"[scene_builders] Pool Xform exists: {pool_exists}")
+    
+    if not pool_exists:
+        pool_xform = UsdGeom.Xform.Define(stage, pool_path)
+        xf = UsdGeom.Xformable(pool_xform)
+        xf.ClearXformOpOrder()
+        xf.AddTranslateOp().Set(Gf.Vec3d(center[0], center[1], 0.0))
+        carb.log_info(f"[scene_builders] Created Pool Xform: {pool_path}")
 
+    # Always attempt to build child components — each function checks internally
     _build_tank_meshes(stage, pool_path)
     _build_water_body(stage, pool_path)
     _build_underwater_light(stage, pool_path)
+    
+    # Verify what was created
+    wall_exists = stage.GetPrimAtPath(f"{pool_path}/Wall").IsValid()
+    water_exists = stage.GetPrimAtPath(f"{pool_path}/WaterBody").IsValid()
+    carb.log_info(f"[scene_builders] After build_pool: Wall={wall_exists}, WaterBody={water_exists}")
 
 
 def build_pools(stage, root: str = POOLS_ROOT) -> None:
     """Build all 7 pools defined by params.POOL_CENTERS under root/Pool_<n>."""
+    carb.log_info(f"[scene_builders] build_pools called, root={root}, POOL_CENTERS count={len(params.POOL_CENTERS)}")
+    
     if not stage.GetPrimAtPath(root).IsValid():
         UsdGeom.Xform.Define(stage, root)
+        carb.log_info(f"[scene_builders] Created Pools root: {root}")
+    
     for i, center in enumerate(params.POOL_CENTERS, start=1):
         build_pool(stage, f"{root}/Pool_{i}", center)
 
 
 # ── Top-view cameras (one per pool) ──────────────────────────────────────────
-_TOPCAM_HEIGHT = 12.0           # m above pool floor
+_TOPCAM_HEIGHT = 10.0           # m above pool floor
 _TOPCAM_FOCAL_LENGTH = 15.0    # mm — wide enough to frame an 8 m pool
 _TOPCAM_H_APERTURE = 20.955    # mm — Isaac Sim default 16:9 sensor
 _TOPCAM_V_APERTURE = 15.291    # mm
@@ -431,6 +475,40 @@ def build_top_cameras(stage, root: str = POOLS_ROOT) -> None:
         return
     for pool_prim in sorted(pools_prim.GetChildren(), key=lambda p: str(p.GetPath())):
         _build_top_camera(stage, str(pool_prim.GetPath()))
+
+
+# ── Global top-view camera (single camera for all pools) ─────────────────────
+_GLOBAL_CAM_HEIGHT = 12.0      # m — lowered for better resolution per pool
+_GLOBAL_CAM_FOCAL = 6.5        # mm — wider FOV (~120°) to cover 40x30m at 12m height
+_GLOBAL_CAM_H_APERTURE = 20.955  # mm
+_GLOBAL_CAM_V_APERTURE = 15.291  # mm (4:3 aspect for 1920x1440)
+GLOBAL_CAM_PATH = "/World/GlobalTopCamera"
+
+
+def build_global_top_camera(stage, path: str = GLOBAL_CAM_PATH) -> None:
+    """Single downward-facing camera viewing entire building from above.
+
+    Replaces 7 per-pool cameras with 1 global camera for performance:
+    - 7 render products → 1 render product (86% reduction)
+    - GPU renders single large frame instead of 7 small ones
+
+    Coverage: 40m × 30m building at 25m height with 8mm focal length.
+    Recommended resolution: 1920×1440 (4:3) → ~480×480 per pool region.
+
+    Detection node crops pool regions from the global image.
+    """
+    if stage.GetPrimAtPath(path).IsValid():
+        return
+
+    cam = UsdGeom.Camera.Define(stage, path)
+    cam.CreateFocalLengthAttr(_GLOBAL_CAM_FOCAL)
+    cam.CreateHorizontalApertureAttr(_GLOBAL_CAM_H_APERTURE)
+    cam.CreateVerticalApertureAttr(_GLOBAL_CAM_V_APERTURE)
+    cam.CreateClippingRangeAttr(Gf.Vec2f(_TOPCAM_CLIP_NEAR, _TOPCAM_CLIP_FAR))
+
+    xf = UsdGeom.Xformable(cam)
+    xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, _GLOBAL_CAM_HEIGHT))
 
 
 # ── Equipment builder (Isaac asset reference w/ placeholder fallback) ────────
@@ -519,11 +597,11 @@ def build_building(stage, root: str = BUILDING_ROOT) -> None:
 
     Built procedurally instead of referencing an asset so the building owns no
     extra UsdPhysics.Scene (which previously broke particle GPU dynamics).
-    Idempotent.
+    Idempotent: each component is created only if it doesn't already exist.
     """
-    if stage.GetPrimAtPath(root).IsValid():
-        return
-    UsdGeom.Xform.Define(stage, root)
+    # Create Building Xform if it doesn't exist
+    if not stage.GetPrimAtPath(root).IsValid():
+        UsdGeom.Xform.Define(stage, root)
 
     bx = params.BUILDING_X
     by = params.BUILDING_Y
@@ -535,10 +613,12 @@ def build_building(stage, root: str = BUILDING_ROOT) -> None:
     # Near-fully matte (roughness ≈ 1.0) and ior=1.0 to suppress fresnel
     # reflection — otherwise sturgeons swimming above appear mirrored on the
     # floor through the translucent water body.
-    _build_box(stage, f"{root}/Floor",
-               center=(0.0, 0.0, -ft / 2.0),
-               size=(bx + 2 * wt, by + 2 * wt, ft),
-               color=_FLOOR_COLOR, roughness=0.98, ior=1.0)
+    floor_path = f"{root}/Floor"
+    if not stage.GetPrimAtPath(floor_path).IsValid():
+        _build_box(stage, floor_path,
+                   center=(0.0, 0.0, -ft / 2.0),
+                   size=(bx + 2 * wt, by + 2 * wt, ft),
+                   color=_FLOOR_COLOR, roughness=0.98, ior=1.0)
 
     # Walls — 4 cuboids hugging the building perimeter.
     half_bx_out = (bx + wt) / 2.0   # wall centre offset along x (south/north walls span full x)
@@ -546,22 +626,33 @@ def build_building(stage, root: str = BUILDING_ROOT) -> None:
     full_x_len  = bx + 2 * wt       # south/north walls extend past corners
     interior_y_len = by             # east/west walls fit between the n/s walls
 
-    _build_box(stage, f"{root}/Wall_South",
-               center=(0.0, -half_by_out, wh / 2.0),
-               size=(full_x_len, wt, wh),
-               color=_WALL_COLOR, roughness=0.85)
-    _build_box(stage, f"{root}/Wall_North",
-               center=(0.0,  half_by_out, wh / 2.0),
-               size=(full_x_len, wt, wh),
-               color=_WALL_COLOR, roughness=0.85)
-    _build_box(stage, f"{root}/Wall_West",
-               center=(-half_bx_out, 0.0, wh / 2.0),
-               size=(wt, interior_y_len, wh),
-               color=_WALL_COLOR, roughness=0.85)
-    _build_box(stage, f"{root}/Wall_East",
-               center=( half_bx_out, 0.0, wh / 2.0),
-               size=(wt, interior_y_len, wh),
-               color=_WALL_COLOR, roughness=0.85)
+    wall_south_path = f"{root}/Wall_South"
+    if not stage.GetPrimAtPath(wall_south_path).IsValid():
+        _build_box(stage, wall_south_path,
+                   center=(0.0, -half_by_out, wh / 2.0),
+                   size=(full_x_len, wt, wh),
+                   color=_WALL_COLOR, roughness=0.85)
+
+    wall_north_path = f"{root}/Wall_North"
+    if not stage.GetPrimAtPath(wall_north_path).IsValid():
+        _build_box(stage, wall_north_path,
+                   center=(0.0,  half_by_out, wh / 2.0),
+                   size=(full_x_len, wt, wh),
+                   color=_WALL_COLOR, roughness=0.85)
+
+    wall_west_path = f"{root}/Wall_West"
+    if not stage.GetPrimAtPath(wall_west_path).IsValid():
+        _build_box(stage, wall_west_path,
+                   center=(-half_bx_out, 0.0, wh / 2.0),
+                   size=(wt, interior_y_len, wh),
+                   color=_WALL_COLOR, roughness=0.85)
+
+    wall_east_path = f"{root}/Wall_East"
+    if not stage.GetPrimAtPath(wall_east_path).IsValid():
+        _build_box(stage, wall_east_path,
+                   center=( half_bx_out, 0.0, wh / 2.0),
+                   size=(wt, interior_y_len, wh),
+                   color=_WALL_COLOR, roughness=0.85)
 
 
 def build_equipment(stage, root: str = EQUIPMENT_ROOT) -> None:
@@ -599,10 +690,13 @@ def build_equipment(stage, root: str = EQUIPMENT_ROOT) -> None:
 
 # ── Lighting ─────────────────────────────────────────────────────────────────
 def add_lighting(stage, root: str = "/World/Lighting") -> None:
-    """Indoor fish-farm lighting: cool-white DistantLight + ceiling RectLight."""
-    if stage.GetPrimAtPath(root).IsValid():
-        return
-    UsdGeom.Xform.Define(stage, root)
+    """Indoor fish-farm lighting: cool-white DistantLight + ceiling RectLight.
+
+    Idempotent: each light is created only if it doesn't already exist.
+    """
+    # Create Lighting Xform if it doesn't exist
+    if not stage.GetPrimAtPath(root).IsValid():
+        UsdGeom.Xform.Define(stage, root)
 
     # Isaac Sim 기본 환경 조명 비활성화/조절 (과도한 그림자 및 반사 방지)
     _configure_default_environment_light(stage)
@@ -610,23 +704,27 @@ def add_lighting(stage, root: str = "/World/Lighting") -> None:
     cool_white = Gf.Vec3f(0.91, 0.96, 1.0)   # #E8F4FF — fluorescent tone
 
     # 환경광 (DomeLight) - 전체적인 색조와 ambient 제공 (고정, 따라다니지 않음)
-    dome = UsdLux.DomeLight.Define(stage, f"{root}/AmbientDome")
-    dome.CreateIntensityAttr(600.0)
-    dome.CreateExposureAttr(1.0)
-    dome.CreateColorAttr(cool_white)
-    # 그림자 비활성화
-    dome.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool).Set(False)
+    dome_path = f"{root}/AmbientDome"
+    if not stage.GetPrimAtPath(dome_path).IsValid():
+        dome = UsdLux.DomeLight.Define(stage, dome_path)
+        dome.CreateIntensityAttr(600.0)
+        dome.CreateExposureAttr(1.0)
+        dome.CreateColorAttr(cool_white)
+        # 그림자 비활성화
+        dome.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool).Set(False)
 
     # 천장 조명 - 실제 양식장처럼 균일한 실내 조명
-    ceiling = UsdLux.RectLight.Define(stage, f"{root}/CeilingLight")
-    ceiling.CreateIntensityAttr(1000.0)
-    ceiling.CreateExposureAttr(1.0)
-    ceiling.CreateColorAttr(cool_white)
-    ceiling.CreateWidthAttr(params.BUILDING_X * 0.9)
-    ceiling.CreateHeightAttr(params.BUILDING_Y * 0.9)
-    UsdGeom.Xformable(ceiling).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 3.0))
-    # 그림자 비활성화
-    ceiling.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool).Set(False)
+    ceiling_path = f"{root}/CeilingLight"
+    if not stage.GetPrimAtPath(ceiling_path).IsValid():
+        ceiling = UsdLux.RectLight.Define(stage, ceiling_path)
+        ceiling.CreateIntensityAttr(1000.0)
+        ceiling.CreateExposureAttr(1.0)
+        ceiling.CreateColorAttr(cool_white)
+        ceiling.CreateWidthAttr(params.BUILDING_X * 0.9)
+        ceiling.CreateHeightAttr(params.BUILDING_Y * 0.9)
+        UsdGeom.Xformable(ceiling).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 3.0))
+        # 그림자 비활성화
+        ceiling.GetPrim().CreateAttribute("inputs:shadow:enable", Sdf.ValueTypeNames.Bool).Set(False)
 
 
 def _configure_default_environment_light(stage) -> None:

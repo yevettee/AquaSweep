@@ -53,7 +53,7 @@ from underwater_robot_python.global_variables import (
 # multi-robot spawn (7 hippos, one nested under each /World/Pools/Pool_<n>)
 # can address the FSM-driven primary robot explicitly.
 
-PHYSICS_DT = 1.0 / 60.0
+PHYSICS_DT = 1.0 / 24.0
 _ROBOT_USD_PATH = (
     Path(__file__).resolve().parents[2]
     / "underwater_robot_ext" / "data" / HIPPO_USD_FILENAME
@@ -238,7 +238,6 @@ class UIBuilder:
             SuctionSystem(particles_prim_path=f"/World/Pools/Pool_{i+1}/Debris/Particles")
             for i in range(_NUM_ROBOTS)
         ]
-        # ActionGraph creation is deferred to _on_run() to avoid timing issues
         self._graphs_created = False
 
     def _setup_scene(self):
@@ -253,10 +252,20 @@ class UIBuilder:
         scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
 
+        # [DEBUG] Robot spawn 비활성화 - FPS 영향 테스트
+        try:
+            from underwater_robot_python.global_variables import DEBUG_ENABLE_ROBOT_SPAWN
+            if not DEBUG_ENABLE_ROBOT_SPAWN:
+                carb.log_info("[aquasweep] DEBUG_ENABLE_ROBOT_SPAWN=False, skipping robot spawn")
+                return
+        except ImportError:
+            pass  # 플래그 없으면 정상 spawn
+
         if not _ROBOT_USD_PATH.is_file():
             carb.log_error(f"[aquasweep] Robot USD not found: {_ROBOT_USD_PATH}")
             return
 
+        # WheeledRobot으로 직접 로드 (기존 방식)
         for _idx, scene_name, spawn_path, _robot_root, position in _robot_specs():
             World.instance().scene.add(
                 WheeledRobot(
@@ -271,13 +280,12 @@ class UIBuilder:
 
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())
-        for _idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
+
+        # Physics 설정 적용
+        for _idx, scene_name, spawn_path, robot_root, _pos in _robot_specs():
             prepare_hippo_usd_on_stage(robot_root)
             tag_aquasweep_attrs(robot_root)
             add_planar_constraint(robot_root)
-
-        # ActionGraph creation is deferred to _on_run() to ensure all OmniGraph
-        # node types are fully registered (avoids timing issues during extension load)
 
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
@@ -364,32 +372,17 @@ class UIBuilder:
         except Exception:
             pass
 
-        # Create ActionGraphs on first RUN (deferred from _setup_scenario to avoid timing issues)
+        # Create ActionGraphs for all robots if not yet created
         if not self._graphs_created:
             self._create_action_graphs()
+
         self._timeline.play()
 
     def _create_action_graphs(self):
         """Create ActionGraph for each robot's cmd_vel control."""
-        # #region agent log
-        import json, time
-        _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
-        # #endregion
         success_count = 0
         for idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
             robot_name = f"under_robot_{idx}"
-            # #region agent log
-            stage = get_current_stage()
-            _prim = stage.GetPrimAtPath(robot_root) if stage else None
-            _prim_valid = _prim.IsValid() if _prim else False
-            _joint_names = []
-            if _prim_valid:
-                from pxr import UsdPhysics, Usd
-                for p in Usd.PrimRange(_prim):
-                    if p.IsA(UsdPhysics.Joint):
-                        _joint_names.append(str(p.GetPath()))
-            with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"A","location":"ui_builder.py:_create_action_graphs","message":"robot prim and joints before graph creation","data":{"idx":idx,"robot_name":robot_name,"robot_root":robot_root,"prim_valid":_prim_valid,"joint_names":_joint_names[:10]},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
             # Skip if graph already exists
             if graph_exists(robot_name):
                 carb.log_info(f"[aquasweep] ActionGraph already exists for {robot_name}")
@@ -401,9 +394,6 @@ class UIBuilder:
                 wheel_radius=HIPPO_WHEEL_RADIUS_M,
                 wheel_base=HIPPO_WHEEL_BASE_M,
             )
-            # #region agent log
-            with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"B","location":"ui_builder.py:_create_action_graphs","message":"graph creation result","data":{"idx":idx,"robot_name":robot_name,"graph_path":graph_path,"success":graph_path is not None},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
             if graph_path:
                 carb.log_info(f"[aquasweep] ActionGraph created: {graph_path} for {robot_name}")
                 success_count += 1
