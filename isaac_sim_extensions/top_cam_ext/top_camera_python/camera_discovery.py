@@ -9,17 +9,38 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Optional
 
 import omni.usd
 
-from .global_variables import EXCLUDE_TOKENS, INCLUDE_TOKENS, POOL_ID_REGEX
+from .global_variables import EXCLUDE_TOKENS, INCLUDE_TOKENS, POOL_ID_REGEX, GLOBAL_CAM_PATH
 
 
 @dataclass(frozen=True)
 class CameraEntry:
     pool_id: int
     prim_path: str
+
+
+@dataclass(frozen=True)
+class GlobalCameraEntry:
+    """Entry for the single global top-view camera."""
+    prim_path: str
+
+
+def discover_global_camera() -> Optional[GlobalCameraEntry]:
+    """Check if the global top-view camera exists on the stage.
+    
+    Returns GlobalCameraEntry if /World/GlobalTopCamera exists, None otherwise.
+    """
+    stage = omni.usd.get_context().get_stage()
+    if stage is None:
+        return None
+    
+    prim = stage.GetPrimAtPath(GLOBAL_CAM_PATH)
+    if prim and prim.IsValid() and prim.GetTypeName() == "Camera":
+        return GlobalCameraEntry(prim_path=GLOBAL_CAM_PATH)
+    return None
 
 
 def discover_top_cameras() -> list[CameraEntry]:

@@ -14,7 +14,7 @@ from .base import BaseDetector, DetectionResult, FishDetection, DebrisDetection
 
 # Package root for resolving relative paths
 _PACKAGE_ROOT = Path(__file__).parent.parent.parent  # aqua_detection/
-_DEFAULT_CHECKPOINT = _PACKAGE_ROOT / "models" / "sam2.1_hiera_large.pt"
+_DEFAULT_CHECKPOINT = _PACKAGE_ROOT / "models" / "sam2.1_hiera_tiny.pt"
 
 # SAM2 imports (lazy loading to avoid import errors if not installed)
 _sam2_available = False
@@ -54,15 +54,17 @@ class FishSAM2Detector(BaseDetector):
     
     def __init__(
         self,
-        model_cfg: str = "sam2.1_hiera_l.yaml",
+        model_cfg: str = "configs/sam2.1/sam2.1_hiera_t.yaml",
         checkpoint_path: Optional[str] = None,
         device: str = "cuda",
         fish_area_range: Tuple[int, int] = (500, 50000),
         fish_aspect_ratio_min: float = 1.3,
         debris_area_range: Tuple[int, int] = (50, 500),
-        points_per_side: int = 32,
+        points_per_side: int = 16,  # Reduced from 32 for lower GPU memory (16x16=256 vs 32x32=1024 points)
         pred_iou_thresh: float = 0.88,
         stability_score_thresh: float = 0.95,
+        use_half_precision: bool = True,  # Use fp16 for lower memory
+        max_image_size: int = 640,  # Resize large images to save memory
     ):
         """Initialize SAM2 detector.
         
@@ -89,6 +91,8 @@ class FishSAM2Detector(BaseDetector):
         self.points_per_side = points_per_side
         self.pred_iou_thresh = pred_iou_thresh
         self.stability_score_thresh = stability_score_thresh
+        self.use_half_precision = use_half_precision
+        self.max_image_size = max_image_size
         
         self._predictor = None
         self._mask_generator = None
@@ -104,9 +108,13 @@ class FishSAM2Detector(BaseDetector):
             return False
         
         try:
+            import torch
             # For image-based detection, we use SAM2ImagePredictor
             from sam2.build_sam import build_sam2
             from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+            
+            # Use fp16 for lower memory footprint on CUDA
+            dtype = torch.float16 if (self.use_half_precision and self.device == "cuda") else torch.float32
             
             sam2_model = build_sam2(
                 self.model_cfg,
@@ -114,12 +122,16 @@ class FishSAM2Detector(BaseDetector):
                 device=self.device
             )
             
+            # Convert to half precision if requested
+            if dtype == torch.float16:
+                sam2_model = sam2_model.half()
+            
             self._mask_generator = SAM2AutomaticMaskGenerator(
                 model=sam2_model,
                 points_per_side=self.points_per_side,
                 pred_iou_thresh=self.pred_iou_thresh,
                 stability_score_thresh=self.stability_score_thresh,
-                crop_n_layers=1,
+                crop_n_layers=0,  # Reduced from 1 for lower memory
                 crop_n_points_downscale_factor=2,
                 min_mask_region_area=100,
             )
@@ -146,6 +158,14 @@ class FishSAM2Detector(BaseDetector):
         if not self._initialize():
             return DetectionResult()
         
+        # Resize image if too large to save GPU memory
+        orig_h, orig_w = image.shape[:2]
+        scale = 1.0
+        if max(orig_h, orig_w) > self.max_image_size:
+            scale = self.max_image_size / max(orig_h, orig_w)
+            new_w, new_h = int(orig_w * scale), int(orig_h * scale)
+            image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        
         # Convert BGR to RGB for SAM2
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
@@ -165,8 +185,13 @@ class FishSAM2Detector(BaseDetector):
             bbox = mask_data['bbox']  # XYWH format
             stability_score = mask_data['stability_score']
             
-            # Convert bbox from XYWH to our format
-            x, y, w, h = [int(v) for v in bbox]
+            # Convert bbox from XYWH to our format, scaling back if resized
+            x, y, w, h = [int(v / scale) for v in bbox]
+            area = int(area / (scale * scale))  # Scale area back to original
+            
+            # Resize mask back to original size if needed
+            if scale != 1.0:
+                mask = cv2.resize(mask.astype(np.uint8), (orig_w, orig_h), interpolation=cv2.INTER_NEAREST).astype(bool)
             
             # Calculate aspect ratio
             aspect_ratio = max(w, h) / min(w, h) if min(w, h) > 0 else 1.0
@@ -229,12 +254,15 @@ class FishSAM2VideoDetector(BaseDetector):
     
     def __init__(
         self,
-        model_cfg: str = "configs/sam2.1/sam2.1_hiera_l.yaml",
-        checkpoint_path: str = "models/sam2.1_hiera_large.pt",
+        model_cfg: str = "configs/sam2.1/sam2.1_hiera_t.yaml",
+        checkpoint_path: Optional[str] = None,
         device: str = "cuda",
     ):
         self.model_cfg = model_cfg
-        self.checkpoint_path = checkpoint_path
+        if checkpoint_path is None:
+            self.checkpoint_path = str(_DEFAULT_CHECKPOINT)
+        else:
+            self.checkpoint_path = checkpoint_path
         self.device = device
         
         self._predictor = None

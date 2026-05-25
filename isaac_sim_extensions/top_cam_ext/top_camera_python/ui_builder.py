@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import omni.timeline
 import omni.ui as ui
 import omni.usd
@@ -10,9 +9,18 @@ from isaacsim.gui.components.element_wrappers import CollapsableFrame
 from isaacsim.gui.components.ui_utils import get_style
 
 from . import ros_graph_builder
-from .camera_discovery import CameraEntry, discover_top_cameras, format_entries
-from .global_variables import DEFAULT_RESOLUTION
-from .fish_gt_publisher import FishGTPublisher
+
+from .camera_discovery import (
+    CameraEntry,
+    GlobalCameraEntry,
+    discover_top_cameras,
+    discover_global_camera,
+    format_entries,
+)
+from .global_variables import DEFAULT_RESOLUTION, GLOBAL_RESOLUTION
+
+
+NUM_POOLS = 7
 
 
 class UIBuilder:
@@ -22,17 +30,16 @@ class UIBuilder:
         self._timeline = omni.timeline.get_timeline_interface()
 
         self._entries: list[CameraEntry] = []
+        self._global_entry: GlobalCameraEntry | None = None
         self._status_label: ui.Label | None = None
         self._discover_label: ui.Label | None = None
-        self._gt_status_label: ui.Label | None = None
+        self._global_status_label: ui.Label | None = None
         self._resolution = DEFAULT_RESOLUTION
         
-        # Fish GT Publisher
-        self._gt_publisher = FishGTPublisher()
-        self._gt_enabled = False
-        self._gt_frame_count = 0
-        self._rclpy_node = None
-        self._gt_publishers = {}  # pool_id -> publisher
+        # Pool selection checkboxes (1-indexed pool_id -> checkbox model)
+        self._pool_checkboxes: dict[int, ui.SimpleBoolModel] = {}
+        for pool_id in range(1, NUM_POOLS + 1):
+            self._pool_checkboxes[pool_id] = ui.SimpleBoolModel(True)  # default: all selected
 
     # ---- lifecycle hooks called by extension.py ----------------------------
 
@@ -40,125 +47,21 @@ class UIBuilder:
         pass
 
     def on_timeline_event(self, event):
-        if event.type == int(omni.timeline.TimelineEventType.STOP):
-            self._gt_enabled = False
-            self._set_gt_status("GT publishing stopped (timeline stopped)")
+        pass
 
     def on_physics_step(self, step: float):
-        """Publish fish GT on each physics step if enabled."""
-        if not self._gt_enabled:
-            return
-        
-        self._gt_frame_count += 1
-        
-        # Publish every 10 frames (~3Hz at 30fps physics)
-        if self._gt_frame_count % 10 != 0:
-            return
-        
-        try:
-            # Get current stage
-            stage = omni.usd.get_context().get_stage()
-            if stage is None:
-                return
-            
-            self._gt_publisher.set_stage(stage)
-            
-            # Collect GT for all pools
-            gt_data = self._gt_publisher.collect_all_pools(num_pools=7)
-            
-            # Publish via ROS2 if available
-            if self._rclpy_node is not None:
-                self._publish_gt_ros2(gt_data)
-            
-        except Exception as e:
-            print(f"GT publish error: {e}")
+        pass
 
     def on_stage_event(self, event):
         self._entries = []
         self._refresh_discover_label()
-        self._gt_enabled = False
 
     def cleanup(self):
-        self._gt_enabled = False
-        self._cleanup_ros2()
         for w in self.wrapped_ui_elements:
             try:
                 w.cleanup()
             except Exception:
                 pass
-    
-    def _init_ros2_gt_publishers(self):
-        """Initialize ROS2 publishers for GT data."""
-        try:
-            # Use Isaac's ROS environment
-            import sys
-            from pathlib import Path
-            
-            # Try to import from common ros_isaac_env
-            common_path = Path(__file__).parent.parent.parent / "common"
-            if common_path.exists() and str(common_path) not in sys.path:
-                sys.path.insert(0, str(common_path))
-            
-            try:
-                from ros_isaac_env import configure_isaac_ros_env
-                configure_isaac_ros_env()
-            except ImportError:
-                pass
-            
-            import rclpy
-            from rclpy.node import Node
-            from std_msgs.msg import String
-            
-            if not rclpy.ok():
-                rclpy.init()
-            
-            self._rclpy_node = rclpy.create_node('fish_gt_publisher')
-            
-            # Create publishers for each pool
-            for pool_id in range(1, 8):
-                self._gt_publishers[pool_id] = self._rclpy_node.create_publisher(
-                    String,
-                    f'/pool_{pool_id}/fish_gt',
-                    10
-                )
-            
-            return True
-            
-        except Exception as e:
-            print(f"ROS2 GT publisher init failed: {e}")
-            print("GT will be collected but not published to ROS2")
-            return False
-    
-    def _publish_gt_ros2(self, gt_data: dict):
-        """Publish GT data to ROS2 topics."""
-        if self._rclpy_node is None:
-            return
-        
-        try:
-            from std_msgs.msg import String
-            
-            for pool_id, fish_list in gt_data.items():
-                if pool_id not in self._gt_publishers:
-                    continue
-                
-                msg = String()
-                msg.data = json.dumps({
-                    f"pool_{pool_id}": [f.to_dict() for f in fish_list]
-                })
-                self._gt_publishers[pool_id].publish(msg)
-                
-        except Exception as e:
-            print(f"GT ROS2 publish error: {e}")
-    
-    def _cleanup_ros2(self):
-        """Cleanup ROS2 resources."""
-        try:
-            if self._rclpy_node is not None:
-                self._rclpy_node.destroy_node()
-                self._rclpy_node = None
-            self._gt_publishers.clear()
-        except Exception:
-            pass
 
     # ---- UI ---------------------------------------------------------------
 
@@ -176,15 +79,34 @@ class UIBuilder:
                     "(not scanned yet)", word_wrap=True, height=0,
                 )
 
-        publish_frame = CollapsableFrame("Image Publishing", collapsed=False)
+        publish_frame = CollapsableFrame("Per-Pool Publishing (selective)", collapsed=True)
         with publish_frame:
             with ui.VStack(style=get_style(), spacing=6, height=0):
+                ui.Label(
+                    "Select pools to publish. Each pool = 1 GPU render pass.",
+                    word_wrap=True, height=0,
+                )
+                
+                # Pool selection checkboxes (2 rows: 1-4, 5-7)
+                with ui.HStack(spacing=4, height=0):
+                    for pool_id in range(1, 5):
+                        ui.CheckBox(model=self._pool_checkboxes[pool_id], width=16)
+                        ui.Label(f"Pool {pool_id}", width=50)
+                with ui.HStack(spacing=4, height=0):
+                    for pool_id in range(5, NUM_POOLS + 1):
+                        ui.CheckBox(model=self._pool_checkboxes[pool_id], width=16)
+                        ui.Label(f"Pool {pool_id}", width=50)
+                
+                # Select all / none buttons
+                with ui.HStack(spacing=4, height=0):
+                    ui.Button("Select All", height=0, clicked_fn=self._select_all_pools, width=80)
+                    ui.Button("Select None", height=0, clicked_fn=self._select_no_pools, width=80)
+                
                 ui.Button(
-                    "Build & start publishing",
+                    "Build selected cameras",
                     height=0,
                     clicked_fn=self._on_build,
-                    tooltip="Create the OmniGraph that publishes every "
-                            "discovered top camera to /pool_N/top_img_raw.",
+                    tooltip="Create OmniGraph for selected pool cameras.",
                 )
                 ui.Button(
                     "Stop publishing",
@@ -196,32 +118,33 @@ class UIBuilder:
                     "(idle)", word_wrap=True, height=0,
                 )
 
-        # Fish Ground Truth Publishing
-        gt_frame = CollapsableFrame("Fish Ground Truth", collapsed=False)
-        with gt_frame:
+        # Global Camera Publishing (recommended for performance)
+        global_frame = CollapsableFrame("Global Camera (1 camera, recommended)", collapsed=False)
+        with global_frame:
             with ui.VStack(style=get_style(), spacing=6, height=0):
                 ui.Label(
-                    "Publish fish GT (position, species, status) to /pool_N/fish_gt",
+                    "Single camera viewing all pools. 86% fewer GPU render passes. "
+                    "Detection node crops pool regions from 1920x1440 image.",
                     word_wrap=True, height=0,
                 )
                 ui.Button(
-                    "Start GT Publishing",
+                    "Build global camera graph",
                     height=0,
-                    clicked_fn=self._on_start_gt,
-                    tooltip="Start publishing fish ground truth on physics step. "
-                            "Used for YOLO training and performance evaluation.",
+                    clicked_fn=self._on_build_global,
+                    tooltip="Create OmniGraph for /World/GlobalTopCamera. "
+                            "Publishes to /global/top_img_raw at 1920x1440.",
                 )
                 ui.Button(
-                    "Stop GT Publishing",
+                    "Stop global camera",
                     height=0,
-                    clicked_fn=self._on_stop_gt,
-                    tooltip="Stop GT publishing.",
+                    clicked_fn=self._on_stop_global,
+                    tooltip="Delete the global camera graph.",
                 )
-                self._gt_status_label = ui.Label(
-                    "(GT idle)", word_wrap=True, height=0,
+                self._global_status_label = ui.Label(
+                    "(idle)", word_wrap=True, height=0,
                 )
 
-        self.frames.extend([cameras_frame, publish_frame, gt_frame])
+        self.frames.extend([cameras_frame, global_frame, publish_frame])
 
     # ---- button handlers --------------------------------------------------
 
@@ -233,8 +156,17 @@ class UIBuilder:
         if not self._entries:
             self._entries = discover_top_cameras()
             self._refresh_discover_label()
+        
+        # Get selected pool IDs
+        selected_pools = self._get_selected_pools()
+        if not selected_pools:
+            self._set_status("FAIL: No pools selected.")
+            return
+        
         ok, message = ros_graph_builder.build_graph(
-            self._entries, resolution=self._resolution
+            self._entries,
+            resolution=self._resolution,
+            selected_pools=selected_pools,
         )
         self._set_status(("OK: " if ok else "FAIL: ") + message)
 
@@ -242,30 +174,40 @@ class UIBuilder:
         ros_graph_builder.teardown_graph()
         self._set_status("Stopped. Graph removed.")
 
-    def _on_start_gt(self):
-        """Start fish GT publishing."""
-        if self._gt_enabled:
-            self._set_gt_status("GT already running")
+    def _on_build_global(self):
+        """Build and start publishing the global camera."""
+        self._global_entry = discover_global_camera()
+        if self._global_entry is None:
+            self._set_global_status("FAIL: GlobalTopCamera not found. Run LOAD first.")
             return
-        
-        # Initialize ROS2 publishers
-        ros_ok = self._init_ros2_gt_publishers()
-        
-        self._gt_enabled = True
-        self._gt_frame_count = 0
-        
-        if ros_ok:
-            self._set_gt_status("GT publishing started (ROS2 enabled)")
-        else:
-            self._set_gt_status("GT publishing started (ROS2 not available)")
-    
-    def _on_stop_gt(self):
-        """Stop fish GT publishing."""
-        self._gt_enabled = False
-        self._cleanup_ros2()
-        self._set_gt_status("GT publishing stopped")
+        ok, message = ros_graph_builder.build_global_graph(
+            self._global_entry, resolution=GLOBAL_RESOLUTION
+        )
+        self._set_global_status(("OK: " if ok else "FAIL: ") + message)
+
+    def _on_stop_global(self):
+        """Stop global camera publishing."""
+        ros_graph_builder.teardown_global_graph()
+        self._set_global_status("Stopped. Global graph removed.")
 
     # ---- helpers ----------------------------------------------------------
+    
+    def _get_selected_pools(self) -> list[int]:
+        """Get list of selected pool IDs (1-indexed)."""
+        return [
+            pool_id for pool_id, model in self._pool_checkboxes.items()
+            if model.get_value_as_bool()
+        ]
+    
+    def _select_all_pools(self):
+        """Select all pool checkboxes."""
+        for model in self._pool_checkboxes.values():
+            model.set_value(True)
+    
+    def _select_no_pools(self):
+        """Deselect all pool checkboxes."""
+        for model in self._pool_checkboxes.values():
+            model.set_value(False)
 
     def _refresh_discover_label(self):
         if self._discover_label is None:
@@ -279,7 +221,7 @@ class UIBuilder:
     def _set_status(self, text: str):
         if self._status_label is not None:
             self._status_label.text = text
-    
-    def _set_gt_status(self, text: str):
-        if self._gt_status_label is not None:
-            self._gt_status_label.text = text
+
+    def _set_global_status(self, text: str):
+        if self._global_status_label is not None:
+            self._global_status_label.text = text
