@@ -65,6 +65,24 @@ _POOL_CENTERS: list[tuple[float, float]] = list(getattr(_params, "POOL_CENTERS",
 _NUM_ROBOTS = len(_POOL_CENTERS)
 
 
+def _apply_viewport_performance_settings() -> None:
+    """뷰포트 렌더링 성능 최적화 - ROS 카메라 품질은 유지."""
+    try:
+        import carb.settings
+        settings = carb.settings.get_settings()
+        
+        # 뷰포트 해상도 스케일 50%로 낮춤
+        settings.set("/app/renderer/resolution/scaleFactor", 0.5)
+        
+        # 추가 최적화 옵션
+        settings.set("/rtx/post/aa/op", 0)  # AA 비활성화
+        settings.set("/rtx/ambientOcclusion/enabled", False)  # AO 비활성화
+        
+        carb.log_info("[aquasweep] Viewport performance settings applied (50% scale)")
+    except Exception as e:
+        carb.log_warn(f"[aquasweep] Failed to apply viewport settings: {e}")
+
+
 def _set_viewport_lighting_mode(mode: str) -> None:
     try:
         import omni.kit.commands
@@ -224,6 +242,7 @@ class UIBuilder:
         self._graphs_created = False
 
     def _setup_scene(self):
+        _apply_viewport_performance_settings()
         stage = get_current_stage()
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
         scene_builders.enable_gpu_dynamics(stage)
@@ -267,7 +286,7 @@ class UIBuilder:
             suction.reset()
         reset_center_trail_debug()
 
-        _set_viewport_lighting_mode("camera")
+        _set_viewport_lighting_mode("stage")  # 고정된 Stage 조명 사용 (Camera Light 비활성화)
 
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True

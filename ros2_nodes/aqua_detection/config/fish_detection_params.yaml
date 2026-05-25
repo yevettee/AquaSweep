@@ -1,0 +1,52 @@
+# Fish Detection Node Configuration
+# Usage: ros2 run aqua_detection fish_detection_node --ros-args --params-file config/fish_detection_params.yaml
+
+fish_detection_node:
+  ros__parameters:
+    # Detector selection: "opencv", "sam2", "yolo"
+    detector_type: "opencv"
+    
+    # Number of pools to monitor
+    num_pools: 7
+    
+    # Enable debug visualization
+    debug_visualization: true
+    
+    # OpenCV detector parameters
+    opencv:
+      scale_factor: 3.0
+      fish_area_min: 1200
+      fish_area_max: 45000
+      fish_aspect_ratio_min: 1.4
+      debris_area_min: 15
+      debris_area_max: 500
+      pool_margin: 25
+    
+    # SAM2 detector parameters (Track A)
+    sam2:
+      model_type: "vit_h"  # vit_h, vit_l, vit_b
+      checkpoint_path: "models/sam2_hiera_large.pt"
+      points_per_side: 32
+      pred_iou_thresh: 0.88
+      stability_score_thresh: 0.95
+    
+    # YOLO detector parameters (Track B)
+    yolo:
+      model_path: "models/yolov8_fish_species.pt"
+      confidence_threshold: 0.5
+      iou_threshold: 0.45
+      # Classes: sturgeon, salmon, debris
+    
+    # DINOv2 status classifier parameters
+    dino:
+      model_type: "dinov2_vits14"
+      sharpness_variance_threshold: 0.3  # For bimodal detection
+      saturation_variance_threshold: 0.25
+      velocity_threshold: 0.02  # Relative velocity
+    
+    # Tracker parameters
+    tracker:
+      type: "bytetrack"
+      track_thresh: 0.5
+      track_buffer: 30
+      match_thresh: 0.8

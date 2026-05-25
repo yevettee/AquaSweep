@@ -4,7 +4,7 @@ package_name = 'aqua_detection'
 
 setup(
     name=package_name,
-    version='0.0.0',
+    version='0.1.0',
     packages=find_packages(where='src'),
     package_dir={'': 'src'},
     data_files=[
@@ -21,6 +21,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            # New modular fish detection node
+            'fish_detection_node = fish_detection_node:main',
+            # Legacy node (kept for backward compatibility)
             'top_detection_node = top.detection_node:main',
         ],
     },

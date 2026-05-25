@@ -53,11 +53,10 @@ _SPAWN_Z_MIN = 0.30
 _SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
 
 # ── Flipped (belly-up) sturgeon settings ──────────────────────────────────────
-_FLIP_PROBABILITY = 0.5             # 25% chance each fish is flipped
-_FLIPPED_Z_MIN = params.WATER_LEVEL - 0.07  # slightly below surface
-_FLIPPED_Z_MAX = params.WATER_LEVEL - 0.05  # nearly at surface (floating)
+_FLIP_PROBABILITY = 0.5             # 50% chance each fish is flipped (dead)
 _FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
-_FLIP_Z_OFFSET = 0.15                # compensate for pivot offset when flipped
+# 참고: 죽은 물고기의 정확한 Z 위치는 sturgeon_animator.py에서 관리
+# (수면 위에 둥둥 뜨는 효과 + 출렁임 애니메이션)
 
 # ── Colour palette (dark → near-current) ─────────────────────────────────────
 _COLOR_DARK    = (0.02, 0.02, 0.03)  # near-black
@@ -244,11 +243,11 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             local_y = radius * math.sin(angle)
             yaw_deg = rng.uniform(0.0, 360.0)
 
-            # Determine if this fish is flipped (belly-up, floating near surface).
+            # Determine if this fish is flipped (belly-up, dead/sick).
             is_flipped = rng.random() < _FLIP_PROBABILITY
             if is_flipped:
-                # Add Z offset to compensate for pivot point shift after RotateX(180)
-                spawn_z = rng.uniform(_FLIPPED_Z_MIN, _FLIPPED_Z_MAX) + _FLIP_Z_OFFSET
+                # 초기 Z는 대략 수면 근처 — animator가 즉시 정확한 위치로 조정
+                spawn_z = params.WATER_LEVEL
                 roll_deg = _FLIP_ROLL_DEG
                 n_flipped_in_pool += 1
             else:
