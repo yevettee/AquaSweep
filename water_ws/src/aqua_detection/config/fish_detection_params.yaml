@@ -4,7 +4,7 @@
 fish_detection_node:
   ros__parameters:
     # Detector selection: "opencv", "sam2", "yolo"
-    detector_type: "opencv"
+    detector_type: "yolo"
     
     # Number of pools to monitor
     num_pools: 7
@@ -39,14 +39,35 @@ fish_detection_node:
       model_path: "models/yolov8_fish_species.pt"
       confidence_threshold: 0.5
       iou_threshold: 0.45
+      imgsz: 640           # Inference image size (match training)
+      half: true           # FP16 inference for speed
       # Classes: sturgeon, salmon, debris
     
-    # DINOv2 status classifier parameters
+    # Status classifier parameters (contrast-based dead/alive detection)
+    classifier:
+      # Velocity settings
+      use_velocity: true           # Toggle velocity-based classification on/off
+      velocity_threshold: 0.02     # Below this = suspicious (relative velocity)
+      velocity_weight: 0.20        # Weight for velocity score
+      
+      # Contrast-based classification (KEY FEATURE)
+      contrast_threshold: 8.0     # Brightness contrast with background (higher = suspicious)
+      
+      # Additional thresholds
+      water_similarity_threshold: 0.3  # Below = different from water color
+      value_std_threshold: 40.0    # HSV value std above = bimodal
+      saturation_std_threshold: 30.0  # HSV saturation std above = bimodal
+    
+    # Velocity estimator parameters
+    velocity:
+      use_optical_flow: false      # Disable for slow rendering
+      use_tracking: false
+      frame_skip: 10               # Compare with N frames ago (~1 second)
+    
+    # DINOv2 (optional, for advanced features)
     dino:
       model_type: "dinov2_vits14"
-      sharpness_variance_threshold: 0.3  # For bimodal detection
-      saturation_variance_threshold: 0.25
-      velocity_threshold: 0.02  # Relative velocity
+      use_dino_features: false     # Disable for faster inference
     
     # Tracker parameters
     tracker:

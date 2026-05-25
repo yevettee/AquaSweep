@@ -39,19 +39,20 @@ class FishTrack:
 
 
 class FishVelocityEstimator:
-    """Estimates fish velocity using optical flow and tracking.
+    """Estimates fish velocity using frame-skip based tracking.
     
-    Two methods combined:
-    1. Farneback Optical Flow: Dense flow within fish bbox
-    2. Tracking-based: Bbox center displacement
+    Compares positions across N frames (default: 10, ~1 second) instead of
+    consecutive frames. This is more robust for slow rendering environments
+    where consecutive frames show minimal movement.
     
     Velocity is relative (normalized by frame diagonal).
     """
     
     def __init__(
         self,
-        use_optical_flow: bool = True,
+        use_optical_flow: bool = False,
         use_tracking: bool = True,
+        frame_skip: int = 10,
         flow_pyr_scale: float = 0.5,
         flow_levels: int = 3,
         flow_winsize: int = 15,
@@ -63,13 +64,15 @@ class FishVelocityEstimator:
         """Initialize velocity estimator.
         
         Args:
-            use_optical_flow: Use Farneback optical flow
+            use_optical_flow: Use Farneback optical flow (disabled by default for slow rendering)
             use_tracking: Use tracking-based velocity
+            frame_skip: Number of frames to skip for velocity calculation (~1sec at 10fps)
             flow_*: Farneback optical flow parameters
             max_track_age: Max frames to keep track without update
         """
         self.use_optical_flow = use_optical_flow
         self.use_tracking = use_tracking
+        self.frame_skip = frame_skip
         self.max_track_age = max_track_age
         
         # Farneback parameters
@@ -89,6 +92,9 @@ class FishVelocityEstimator:
         self._tracks: Dict[str, FishTrack] = {}
         self._frame_diagonal: float = 1.0
         self._next_id: int = 0
+        
+        # Frame buffer for frame-skip based velocity
+        self._frame_buffer: deque = deque(maxlen=frame_skip + 1)
     
     def update(
         self,
@@ -97,6 +103,9 @@ class FishVelocityEstimator:
         fish_ids: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         """Update velocity estimates with new frame.
+        
+        Compares current frame with frame from N frames ago for more
+        accurate velocity estimation in slow rendering environments.
         
         Args:
             image: Current BGR frame
@@ -114,9 +123,16 @@ class FishVelocityEstimator:
         if fish_ids is None:
             fish_ids = [f"fish_{i}" for i in range(len(fish_bboxes))]
         
+        # Store current frame data in buffer
+        current_frame_data = {
+            'bboxes': {fid: bbox for fid, bbox in zip(fish_ids, fish_bboxes)},
+            'gray': gray if self.use_optical_flow else None,
+        }
+        self._frame_buffer.append(current_frame_data)
+        
         velocities = {}
         
-        # Compute optical flow if enabled
+        # Compute optical flow if enabled (between consecutive frames)
         flow = None
         if self.use_optical_flow and self._prev_gray is not None:
             flow = cv2.calcOpticalFlowFarneback(
@@ -124,26 +140,26 @@ class FishVelocityEstimator:
             )
             self._prev_flow = flow
         
-        # Update tracks
+        # Calculate velocity by comparing with N frames ago
         for fish_id, bbox in zip(fish_ids, fish_bboxes):
-            velocity = self._compute_velocity(fish_id, bbox, flow)
+            velocity = self._compute_velocity_with_skip(fish_id, bbox, flow)
             velocities[fish_id] = velocity
         
         # Age out old tracks
         self._age_tracks(set(fish_ids))
         
-        # Store for next frame
+        # Store for next frame (optical flow)
         self._prev_gray = gray
         
         return velocities
     
-    def _compute_velocity(
+    def _compute_velocity_with_skip(
         self,
         fish_id: str,
         bbox: Tuple[int, int, int, int],
         flow: Optional[np.ndarray],
     ) -> float:
-        """Compute velocity for a single fish."""
+        """Compute velocity by comparing with N frames ago."""
         x, y, w, h = bbox
         center = (x + w // 2, y + h // 2)
         
@@ -157,25 +173,42 @@ class FishVelocityEstimator:
         velocity_flow = 0.0
         velocity_track = 0.0
         
-        # 1. Optical flow based velocity
+        # 1. Optical flow based velocity (consecutive frames)
         if self.use_optical_flow and flow is not None:
             velocity_flow = self._compute_flow_velocity(bbox, flow)
         
-        # 2. Tracking based velocity
-        if self.use_tracking and track.last_bbox is not None:
-            prev_center = (
-                track.last_bbox[0] + track.last_bbox[2] // 2,
-                track.last_bbox[1] + track.last_bbox[3] // 2,
-            )
-            displacement = np.sqrt(
-                (center[0] - prev_center[0])**2 +
-                (center[1] - prev_center[1])**2
-            )
-            velocity_track = displacement / self._frame_diagonal
+        # 2. Frame-skip based tracking velocity
+        if self.use_tracking and len(self._frame_buffer) > self.frame_skip:
+            old_frame_data = self._frame_buffer[0]
+            
+            if fish_id in old_frame_data['bboxes']:
+                old_bbox = old_frame_data['bboxes'][fish_id]
+                old_center = (
+                    old_bbox[0] + old_bbox[2] // 2,
+                    old_bbox[1] + old_bbox[3] // 2,
+                )
+                displacement = np.sqrt(
+                    (center[0] - old_center[0])**2 +
+                    (center[1] - old_center[1])**2
+                )
+                # Normalize by frame diagonal and frame_skip for per-frame velocity
+                velocity_track = displacement / self._frame_diagonal / self.frame_skip
+            else:
+                # Fish not seen N frames ago - use consecutive frame if available
+                if track.last_bbox is not None:
+                    prev_center = (
+                        track.last_bbox[0] + track.last_bbox[2] // 2,
+                        track.last_bbox[1] + track.last_bbox[3] // 2,
+                    )
+                    displacement = np.sqrt(
+                        (center[0] - prev_center[0])**2 +
+                        (center[1] - prev_center[1])**2
+                    )
+                    velocity_track = displacement / self._frame_diagonal
         
-        # Combine velocities (weighted average)
+        # Combine velocities
         if self.use_optical_flow and self.use_tracking:
-            velocity = 0.6 * velocity_flow + 0.4 * velocity_track
+            velocity = 0.4 * velocity_flow + 0.6 * velocity_track
         elif self.use_optical_flow:
             velocity = velocity_flow
         else:
@@ -255,13 +288,21 @@ class FishVelocityEstimator:
 
 
 class SimpleVelocityEstimator:
-    """Simple velocity estimator using only bbox tracking.
+    """Simple velocity estimator using bbox tracking with frame skip.
     
-    Fallback when optical flow is not needed or too expensive.
+    Compares positions across N frames for more accurate velocity
+    in slow rendering environments.
     """
     
-    def __init__(self, history_length: int = 10):
+    def __init__(self, history_length: int = 15, frame_skip: int = 10):
+        """Initialize simple velocity estimator.
+        
+        Args:
+            history_length: Max history length per fish
+            frame_skip: Compare with N frames ago for velocity
+        """
         self.history_length = history_length
+        self.frame_skip = frame_skip
         self._prev_bboxes: Dict[str, deque] = {}
         self._frame_diagonal: float = 1.0
     
@@ -271,7 +312,7 @@ class SimpleVelocityEstimator:
         fish_bboxes: List[Tuple[int, int, int, int]],
         fish_ids: List[str],
     ) -> Dict[str, float]:
-        """Update velocity estimates."""
+        """Update velocity estimates using frame-skip comparison."""
         h, w = frame_shape[:2]
         self._frame_diagonal = np.sqrt(w**2 + h**2)
         
@@ -285,7 +326,17 @@ class SimpleVelocityEstimator:
             
             history = self._prev_bboxes[fish_id]
             
-            if len(history) > 0:
+            # Compare with frame_skip frames ago if available
+            if len(history) >= self.frame_skip:
+                old_center = history[-self.frame_skip]
+                displacement = np.sqrt(
+                    (center[0] - old_center[0])**2 +
+                    (center[1] - old_center[1])**2
+                )
+                # Normalize by frame_skip for per-frame velocity
+                velocity = displacement / self._frame_diagonal / self.frame_skip
+            elif len(history) > 0:
+                # Fallback to most recent frame
                 prev_center = history[-1]
                 displacement = np.sqrt(
                     (center[0] - prev_center[0])**2 +

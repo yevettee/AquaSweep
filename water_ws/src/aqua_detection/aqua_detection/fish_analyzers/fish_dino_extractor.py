@@ -283,51 +283,212 @@ class FishDINOExtractor(BaseStatusClassifier):
 
 
 class SimpleFishStatusClassifier(BaseStatusClassifier):
-    """Simple rule-based classifier without DINOv2.
+    """Color-based fish status classifier.
     
-    Fallback when DINOv2 is not available.
-    Uses only basic image statistics.
+    Classifies fish as alive or suspicious based on:
+    1. Contrast with background: Dead fish have HIGH contrast with water
+    2. Water similarity: Alive fish are similar to water color (blurry, underwater)
+    3. HSV bimodal: Suspicious fish have high variance (part exposed, part submerged)
+    4. Velocity (optional): Slow/stationary = suspicious
     """
     
     def __init__(
         self,
-        sharpness_var_threshold: float = 0.3,
-        saturation_var_threshold: float = 0.25,
+        contrast_threshold: float = 30.0,
+        water_similarity_threshold: float = 0.3,
+        value_std_threshold: float = 40.0,
+        saturation_std_threshold: float = 30.0,
         velocity_threshold: float = 0.02,
+        use_velocity: bool = True,
+        velocity_weight: float = 0.20,
+        # Legacy params (kept for compatibility)
+        darkness_threshold: float = 0.4,
+        intensity_threshold: float = 0.3,
     ):
-        self.sharpness_var_threshold = sharpness_var_threshold
-        self.saturation_var_threshold = saturation_var_threshold
+        """Initialize classifier.
+        
+        Args:
+            contrast_threshold: Brightness contrast threshold (higher = more different from bg)
+            water_similarity_threshold: Ratio of water-like pixels below = suspicious
+            value_std_threshold: Value (brightness) std threshold for bimodal
+            saturation_std_threshold: Saturation std threshold for bimodal
+            velocity_threshold: Relative velocity below = suspicious
+            use_velocity: Whether to use velocity in classification
+            velocity_weight: Weight for velocity score (0.0-1.0)
+        """
+        self.contrast_threshold = contrast_threshold
+        self.water_similarity_threshold = water_similarity_threshold
+        self.value_std_threshold = value_std_threshold
+        self.saturation_std_threshold = saturation_std_threshold
         self.velocity_threshold = velocity_threshold
+        self.use_velocity = use_velocity
+        self.velocity_weight = velocity_weight
+        self.darkness_threshold = darkness_threshold
+        self.intensity_threshold = intensity_threshold
+        
+        # Store last context for feature extraction
+        self._last_full_image = None
+        self._last_bbox = None
+    
+    def _compute_color_features(
+        self,
+        fish_image: np.ndarray,
+        full_image: Optional[np.ndarray] = None,
+        bbox: Optional[Tuple[int, int, int, int]] = None,
+    ) -> Dict[str, float]:
+        """Extract color features including contrast with background.
+        
+        Key insight: Dead fish floating on surface have HIGH contrast with
+        the blue water background. Alive fish underwater blend in.
+        """
+        hsv = cv2.cvtColor(fish_image, cv2.COLOR_BGR2HSV)
+        h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+        
+        features = {}
+        
+        # 1. Fish region statistics
+        features['mean_value'] = float(np.mean(v))
+        features['mean_saturation'] = float(np.mean(s))
+        features['mean_hue'] = float(np.mean(h))
+        
+        # 2. Contrast with surrounding background (KEY FEATURE)
+        features['bg_contrast'] = 0.0
+        if full_image is not None and bbox is not None:
+            bg_features = self._compute_background_features(full_image, bbox)
+            features.update(bg_features)
+            
+            # Contrast = difference in brightness between fish and background
+            features['bg_contrast'] = abs(features['mean_value'] - features.get('bg_mean_value', features['mean_value']))
+        
+        # 3. Water similarity: blue-ish, low saturation, high value
+        water_like_mask = (h > 90) & (h < 130) & (s < 80) & (v > 100)
+        features['water_similarity'] = float(np.sum(water_like_mask) / max(water_like_mask.size, 1))
+        
+        # 4. HSV bimodal distribution (high variance = surface boundary)
+        features['value_std'] = float(np.std(v))
+        features['saturation_std'] = float(np.std(s))
+        
+        # 5. Vertical brightness difference
+        mid_y = fish_image.shape[0] // 2
+        if mid_y > 0:
+            top_v = np.mean(v[:mid_y, :])
+            bottom_v = np.mean(v[mid_y:, :])
+            features['vertical_brightness_diff'] = float(abs(top_v - bottom_v))
+        else:
+            features['vertical_brightness_diff'] = 0.0
+        
+        return features
+    
+    def _compute_background_features(
+        self,
+        full_image: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+        margin: int = 20,
+    ) -> Dict[str, float]:
+        """Compute features of the background around the fish bbox."""
+        x, y, w, h = bbox
+        img_h, img_w = full_image.shape[:2]
+        
+        # Expand bbox by margin for background sampling
+        x1_bg = max(0, x - margin)
+        y1_bg = max(0, y - margin)
+        x2_bg = min(img_w, x + w + margin)
+        y2_bg = min(img_h, y + h + margin)
+        
+        # Create mask: 1 for background (outside fish), 0 for fish
+        bg_region = full_image[y1_bg:y2_bg, x1_bg:x2_bg].copy()
+        mask = np.ones((y2_bg - y1_bg, x2_bg - x1_bg), dtype=bool)
+        
+        # Mark fish region as False in mask
+        fish_x1 = x - x1_bg
+        fish_y1 = y - y1_bg
+        fish_x2 = fish_x1 + w
+        fish_y2 = fish_y1 + h
+        
+        fish_x1 = max(0, fish_x1)
+        fish_y1 = max(0, fish_y1)
+        fish_x2 = min(mask.shape[1], fish_x2)
+        fish_y2 = min(mask.shape[0], fish_y2)
+        
+        mask[fish_y1:fish_y2, fish_x1:fish_x2] = False
+        
+        # Extract background pixels
+        if np.sum(mask) > 0:
+            bg_hsv = cv2.cvtColor(bg_region, cv2.COLOR_BGR2HSV)
+            bg_v = bg_hsv[:, :, 2][mask]
+            bg_s = bg_hsv[:, :, 1][mask]
+            bg_h = bg_hsv[:, :, 0][mask]
+            
+            return {
+                'bg_mean_value': float(np.mean(bg_v)),
+                'bg_mean_saturation': float(np.mean(bg_s)),
+                'bg_mean_hue': float(np.mean(bg_h)),
+            }
+        
+        return {'bg_mean_value': 150.0, 'bg_mean_saturation': 50.0, 'bg_mean_hue': 100.0}
     
     def classify(
         self,
         fish_image: np.ndarray,
-        velocity: float = 0.0
+        velocity: float = 0.0,
+        full_image: Optional[np.ndarray] = None,
+        bbox: Optional[Tuple[int, int, int, int]] = None,
     ) -> Tuple[str, float]:
-        """Classify using simple image statistics."""
+        """Classify fish status using contrast-based analysis.
+        
+        Args:
+            fish_image: Cropped BGR image of fish region
+            velocity: Relative velocity (0-1 range)
+            full_image: Full frame image (for background contrast)
+            bbox: Fish bounding box in full image
+            
+        Returns:
+            (status, confidence) tuple
+        """
+        if fish_image.size == 0:
+            return "alive", 0.5
+        
+        # Store context for get_features()
+        self._last_full_image = full_image
+        self._last_bbox = bbox
+        
+        features = self._compute_color_features(fish_image, full_image, bbox)
         score = 0.0
         
-        # Sharpness analysis
-        gray = cv2.cvtColor(fish_image, cv2.COLOR_BGR2GRAY)
-        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        sharpness_mean = np.mean(np.abs(laplacian))
-        sharpness_var = np.var(laplacian)
+        # Weight multiplier when velocity is disabled
+        color_weight = 1.0 if self.use_velocity else (1.0 / (1.0 - self.velocity_weight))
         
-        sharpness_var_normalized = sharpness_var / (sharpness_mean + 1e-6)
-        if sharpness_var_normalized > self.sharpness_var_threshold:
-            score += 0.35
+        # 1. HIGH contrast with background -> suspicious (weight: 0.40)
+        # Dead fish floating on surface stand out from blue water
+        if features['bg_contrast'] > self.contrast_threshold:
+            score += 0.40 * color_weight
         
-        # Saturation analysis
-        hsv = cv2.cvtColor(fish_image, cv2.COLOR_BGR2HSV)
-        saturation = hsv[:, :, 1].astype(float) / 255.0
-        if np.var(saturation) > self.saturation_var_threshold:
-            score += 0.25
+        # 2. Different from water color -> suspicious (weight: 0.25)
+        if features['water_similarity'] < self.water_similarity_threshold:
+            score += 0.25 * color_weight
         
-        # Velocity
-        if velocity < self.velocity_threshold:
-            score += 0.40
+        # 3. HSV bimodal distribution -> suspicious (weight: 0.15)
+        if features['value_std'] > self.value_std_threshold or features['saturation_std'] > self.saturation_std_threshold:
+            score += 0.15 * color_weight
         
+        # 4. Velocity (toggleable, weight: 0.20)
+        if self.use_velocity and velocity < self.velocity_threshold:
+            score += self.velocity_weight
+        
+        # Determine status
         if score > 0.5:
-            return "suspicious", min(score, 1.0)
+            status = "suspicious"
+            confidence = min(score, 1.0)
         else:
-            return "alive", 1.0 - score
+            status = "alive"
+            confidence = 1.0 - score
+        
+        return status, confidence
+    
+    def get_features(self, fish_image: np.ndarray) -> Dict[str, float]:
+        """Get all extracted features for debugging."""
+        return self._compute_color_features(
+            fish_image,
+            self._last_full_image,
+            self._last_bbox,
+        )

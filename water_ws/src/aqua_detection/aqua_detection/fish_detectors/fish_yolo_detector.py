@@ -57,6 +57,9 @@ class FishYOLODetector(BaseDetector):
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
         device: str = "cuda",
+        imgsz: int = 640,
+        half: bool = True,
+        use_tracking: bool = True,
     ):
         """Initialize YOLO detector.
         
@@ -65,14 +68,21 @@ class FishYOLODetector(BaseDetector):
             confidence_threshold: Detection confidence threshold
             iou_threshold: NMS IoU threshold
             device: "cuda" or "cpu"
+            imgsz: Inference image size (should match training)
+            half: Use FP16 inference for faster speed
+            use_tracking: Use ByteTrack for persistent fish IDs
         """
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.device = device
+        self.imgsz = imgsz
+        self.half = half
+        self.use_tracking = use_tracking
         
         self._model = None
         self._initialized = False
+        self._warmed_up = False
     
     def _initialize(self) -> bool:
         """Lazy initialization of YOLO model."""
@@ -113,8 +123,24 @@ class FishYOLODetector(BaseDetector):
     def get_name(self) -> str:
         return "yolo"
     
+    def warmup(self):
+        """Warmup model with dummy inference to avoid first-frame latency."""
+        if self._warmed_up:
+            return
+        if not self._initialize():
+            return
+        try:
+            dummy = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
+            self._model(dummy, imgsz=self.imgsz, half=self.half, verbose=False)
+            self._warmed_up = True
+            print(f"YOLO model warmed up (imgsz={self.imgsz}, half={self.half})")
+        except Exception as e:
+            print(f"YOLO warmup failed: {e}")
+    
     def detect(self, image: np.ndarray) -> DetectionResult:
         """Detect fish and debris using YOLOv8.
+        
+        If use_tracking is enabled, uses ByteTrack for persistent IDs.
         
         Args:
             image: BGR image from camera
@@ -122,15 +148,21 @@ class FishYOLODetector(BaseDetector):
         Returns:
             DetectionResult with fish and debris detections
         """
+        # Use tracking mode for persistent IDs
+        if self.use_tracking:
+            return self.detect_with_tracking(image)
+        
         if not self._initialize():
             return DetectionResult()
         
-        # Run inference
+        # Run inference with optimized parameters
         try:
             results = self._model(
                 image,
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
+                imgsz=self.imgsz,
+                half=self.half,
                 verbose=False,
             )
         except Exception as e:
@@ -202,6 +234,8 @@ class FishYOLODetector(BaseDetector):
                 image,
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
+                imgsz=self.imgsz,
+                half=self.half,
                 persist=persist,
                 verbose=False,
             )

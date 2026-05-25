@@ -61,6 +61,11 @@ class WaterTankScenario:
             self._init_uw_camera(stage)
 
     def _init_uw_camera(self, stage) -> None:
+        # OceanSim UW_Camera 비활성화 (렌더링 성능 최적화)
+        # 다시 활성화하려면 아래 return 주석 처리
+        carb.log_info("[water_tank_env] OceanSim UW_Camera 비활성화됨 (성능 최적화)")
+        return
+        
         if not _ocam.OCEANSIM_AVAILABLE:
             return
         paths = _ocam.discover_camera_prims(stage)

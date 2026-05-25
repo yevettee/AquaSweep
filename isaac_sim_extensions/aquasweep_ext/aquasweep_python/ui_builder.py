@@ -21,6 +21,8 @@ from pxr import UsdGeom
 
 # ── 각 서브시스템 임포트 ─────────────────────────────────────────────────────
 from water_tank_env_python import scene_builders
+importlib.reload(scene_builders)  # hot-reload support
+
 from water_tank_env_python.scenario import WaterTankScenario
 
 from water_tank_env_python import sturgeon_spawner
@@ -77,8 +79,21 @@ def _apply_viewport_performance_settings() -> None:
         # 추가 최적화 옵션
         settings.set("/rtx/post/aa/op", 0)  # AA 비활성화
         settings.set("/rtx/ambientOcclusion/enabled", False)  # AO 비활성화
+        settings.set("/rtx/post/motionBlur/enabled", False)  # Motion Blur 비활성화 (상어 궤적 번짐 제거)
         
-        carb.log_info("[aquasweep] Viewport performance settings applied (50% scale)")
+        # DLSS Performance 모드 (0=Performance, 1=Balanced, 2=Quality, 3=Auto)
+        # Auto(3)는 720p 이하에서 Quality를 선택하여 성능 저하 → Performance 강제
+        settings.set("/rtx/post/dlss/execMode", 0)
+        
+        # RTX 추가 최적화 - 수조 렌더링에 불필요한 기능 비활성화
+        settings.set("/rtx/reflections/enabled", False)  # 반사 비활성화
+        # NOTE: translucency는 반드시 켜져있어야 함 - 수조 벽면과 물이 반투명(opacity<1.0)
+        settings.set("/rtx/indirectDiffuse/enabled", False)  # GI 비활성화
+        
+        # Auto-Exposure 비활성화 - 풀 개수에 따른 밝기 변화 방지
+        settings.set("/rtx/post/tonemap/autoExposure/enabled", False)
+        
+        carb.log_info("[aquasweep] Viewport performance settings applied (DLSS Performance, RTX optimized, Auto-Exposure off)")
     except Exception as e:
         carb.log_warn(f"[aquasweep] Failed to apply viewport settings: {e}")
 
@@ -250,6 +265,7 @@ class UIBuilder:
         scene_builders.build_building(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
+        scene_builders.build_global_top_camera(stage)  # 전체 수조를 보는 단일 글로벌 카메라
         scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
 

@@ -39,10 +39,10 @@ _STURGEON_USD = os.path.normpath(
 # ── Spawn-time tunables ──────────────────────────────────────────────────────
 TARGET_LENGTH_M = 1.0                # 1 m sturgeon (was 0.90)
 
-_EMPTY_POOLS_MIN = 1
+_EMPTY_POOLS_MIN = 2      # 모든 풀에 상어 spawn (빈 풀 없음)
 _EMPTY_POOLS_MAX = 3
-_FISH_PER_POOL_MIN = 5
-_FISH_PER_POOL_MAX = 10
+_FISH_PER_POOL_MIN = 5    # 풀당 5~7마리
+_FISH_PER_POOL_MAX = 7
 
 # Initial XY pose around pool centre — kept inside the inner radius with margin.
 _RADIUS_MIN = 0.6
@@ -53,7 +53,7 @@ _SPAWN_Z_MIN = 0.30
 _SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
 
 # ── Flipped (belly-up) sturgeon settings ──────────────────────────────────────
-_FLIP_PROBABILITY = 0.5             # 50% chance each fish is flipped (dead)
+_FLIP_PROBABILITY = 0.2             # 20% chance each fish is flipped (dead) - 풀당 최대 ~1마리
 _FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
 # 참고: 죽은 물고기의 정확한 Z 위치는 sturgeon_animator.py에서 관리
 # (수면 위에 둥둥 뜨는 효과 + 출렁임 애니메이션)
@@ -190,7 +190,10 @@ def _bind_random_palette_material(stage, prim, palette_paths: list[str], rng: ra
 
 
 def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
-    """Place 5–10 sturgeons into a random subset of pools (1–3 left empty).
+    """Place 5–10 sturgeons into specified or random subset of pools.
+
+    If params.STURGEON_SPAWN_POOLS is set (list of 1-indexed pool numbers),
+    only those pools will have sturgeons. Otherwise, random selection is used.
 
     Returns the total number of sturgeons placed. Each sturgeon gets a unique
     name ``Sturgeon_<m>`` under its pool.
@@ -210,17 +213,29 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
     rng = random.Random()           # fresh entropy each call → different layout per LOAD
     palette = _ensure_palette(stage)
 
-    # Decide which pools are empty (robot only). Always leave at least one
-    # pool occupied even if there are fewer pools than the default range.
     n_pools = len(pool_paths)
-    n_empty = min(rng.randint(_EMPTY_POOLS_MIN, _EMPTY_POOLS_MAX), n_pools - 1)
-    empty_indices = set(rng.sample(range(n_pools), n_empty))
-    occupied = [i for i in range(n_pools) if i not in empty_indices]
-    carb.log_info(
-        f"[sturgeon_spawner] {n_pools} pools total, "
-        f"{len(empty_indices)} left empty: {sorted(i + 1 for i in empty_indices)}; "
-        f"{len(occupied)} occupied: {sorted(i + 1 for i in occupied)}"
-    )
+    
+    # Check if specific pools are configured for spawning
+    spawn_pools = getattr(params, 'STURGEON_SPAWN_POOLS', None)
+    
+    if spawn_pools is not None and len(spawn_pools) > 0:
+        # Use configured pool list (1-indexed → 0-indexed)
+        occupied = [p - 1 for p in spawn_pools if 1 <= p <= n_pools]
+        empty_indices = set(i for i in range(n_pools) if i not in occupied)
+        carb.log_info(
+            f"[sturgeon_spawner] {n_pools} pools total, "
+            f"configured spawn pools: {spawn_pools} (0-indexed: {occupied})"
+        )
+    else:
+        # Random selection: leave 1-3 pools empty
+        n_empty = min(rng.randint(_EMPTY_POOLS_MIN, _EMPTY_POOLS_MAX), n_pools - 1)
+        empty_indices = set(rng.sample(range(n_pools), n_empty))
+        occupied = [i for i in range(n_pools) if i not in empty_indices]
+        carb.log_info(
+            f"[sturgeon_spawner] {n_pools} pools total, "
+            f"{len(empty_indices)} left empty: {sorted(i + 1 for i in empty_indices)}; "
+            f"{len(occupied)} occupied: {sorted(i + 1 for i in occupied)}"
+        )
 
     scale_factor: Optional[float] = None
     total_placed = 0
