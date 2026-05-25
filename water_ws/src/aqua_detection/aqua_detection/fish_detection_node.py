@@ -584,6 +584,33 @@ class FishDetectionNode(Node):
             except Exception as e:
                 self.get_logger().error(f"Pool_{pool_id}: Debug image publish failed: {e}")
     
+    def _center_crop_square(self, image: np.ndarray, size: int = 640) -> np.ndarray:
+        """이미지를 중앙 기준 정사각형으로 크롭 (비율 유지, 리사이즈 없음).
+        
+        양옆에 다른 풀이 살짝 걸리는 문제를 해결하기 위해
+        640x480 이미지에서 중앙 480x480 또는 지정된 size로 크롭합니다.
+        
+        Args:
+            image: 입력 이미지 (H, W, C)
+            size: 크롭할 정사각형 크기 (기본 640)
+        
+        Returns:
+            중앙 크롭된 정사각형 이미지
+        """
+        h, w = image.shape[:2]
+        
+        # 정사각형 크롭 크기 결정 (min(w, h)와 size 중 작은 값)
+        crop_size = min(w, h, size)
+        
+        # 중앙 좌표 계산
+        cx, cy = w // 2, h // 2
+        x1 = cx - crop_size // 2
+        y1 = cy - crop_size // 2
+        x2 = x1 + crop_size
+        y2 = y1 + crop_size
+        
+        return image[y1:y2, x1:x2]
+    
     def _image_callback(self, msg: Image, pool_id: int):
         """Process incoming image from per-pool camera (delegates to shared method)."""
         if self._frames_received[pool_id] == 0:
@@ -604,6 +631,9 @@ class FishDetectionNode(Node):
                 f"(encoding={msg.encoding}): {e}"
             )
             return
+        
+        # 중앙 크롭 (양옆 다른 풀 제거) - 640x480 → 480x480
+        cv_image = self._center_crop_square(cv_image)
         
         # Use shared processing method
         self._process_pool_image(cv_image, pool_id, msg.header)
