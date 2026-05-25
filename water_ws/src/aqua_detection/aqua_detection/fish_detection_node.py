@@ -98,6 +98,9 @@ class PoolState:
         self.frame_count = 0
         self.last_detection: Optional[DetectionResult] = None
         
+        self.fish_count_history = deque(maxlen=7)
+        self.fish_suspicious_history = deque(maxlen=7)
+        
         # Initialize velocity estimator with config
         vel_cfg = velocity_config or {}
         self.velocity_estimator = FishVelocityEstimator(
@@ -545,12 +548,18 @@ class FishDetectionNode(Node):
                     'features': {},
                 })
         
+        # Update fish count history and compute smoothed values (median of last 7 frames)
+        state.fish_count_history.append(detection_result.fish_count)
+        state.fish_suspicious_history.append(fish_count_suspicious)
+        smoothed_fish_count = int(np.median(state.fish_count_history))
+        smoothed_suspicious = int(np.median(state.fish_suspicious_history))
+        
         # Publish PoolStatus
         status_msg = PoolStatus()
         status_msg.pollution_level = float(pollution_level)
         status_msg.fish_type = "sturgeon"
-        status_msg.fish_count = detection_result.fish_count
-        status_msg.fish_count_suspicious = fish_count_suspicious
+        status_msg.fish_count = smoothed_fish_count
+        status_msg.fish_count_suspicious = smoothed_suspicious
         self.pub_status[pool_id].publish(status_msg)
         
         # Publish JSON status
@@ -558,8 +567,8 @@ class FishDetectionNode(Node):
             status_str_msg = String()
             status_str_msg.data = json.dumps({
                 "pool_id": pool_id,
-                "fish_count": detection_result.fish_count,
-                "fish_count_suspicious": fish_count_suspicious,
+                "fish_count": smoothed_fish_count,
+                "fish_count_suspicious": smoothed_suspicious,
                 "pollution_level": float(pollution_level),
                 "fish_type": "sturgeon",
                 "debris_count": debris_count,
