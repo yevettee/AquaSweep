@@ -1,7 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ROS2 bridge for dashboard_ext: subscribes to tank telemetry, camera images, and sends start commands."""
+"""ROS2 bridge for dashboard_ext: subscribes to tank telemetry, camera images, and sends start commands.
+
+WARNING: This module creates its own rclpy node inside Isaac Sim, which can conflict with
+Isaac Sim's internal isaacsim.ros2.bridge extension context. If you see errors like
+"must be of type rclpy node" when calling services, use the external dashboard instead:
+
+    ros2 run aqua_dashboard dashboard_gui
+
+The external dashboard runs in a separate process with its own clean rclpy context,
+avoiding the context conflict issue entirely.
+"""
 
 from __future__ import annotations
 

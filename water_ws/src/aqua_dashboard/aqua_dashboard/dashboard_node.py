@@ -4,20 +4,26 @@ This node provides a headless interface for monitoring pool status and triggerin
 cleaning operations. It can serve as a backend for a web UI or CLI testing.
 
 Subscriptions:
-    /{pool_id}/status         - Pool status (PoolStatus)
+    /pool_{id}/status         - Pool status (PoolStatus)
     /under_robot_{id}/status  - Robot status (RobotStatus)
+    /pool_{id}/top_img_det    - Top camera detection image (Image)
+    /pool_{id}/under_img_det  - Under camera detection image (Image)
 
 Service Clients:
     /planner/start            - Start cleaning for all eligible pools
     /planner/pause            - Pause all cleaning operations
-    /{pool_id}/start_clean_floor - Start cleaning for a specific pool
+    /pool_{id}/start_clean_floor - Start cleaning for a specific pool
+
+For the GUI version with PyQt5, use:
+    ros2 run aqua_dashboard dashboard_gui
 """
 
 from functools import partial
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
 
 from aqua_interfaces.msg import RobotStatus, PoolStatus
@@ -29,6 +35,8 @@ from .ros_topics import (
     pool_robot_status_topic,
     pool_start_clean_floor_service,
     pool_status_topic,
+    pool_top_cam_det_topic,
+    pool_under_cam_det_topic,
 )
 
 ROBOT_STATE_NAMES = {
@@ -40,18 +48,38 @@ ROBOT_STATE_NAMES = {
 
 
 class DashboardNode(Node):
-    """Dashboard node for monitoring pools and controlling the planner."""
+    """Dashboard node for monitoring pools and controlling the planner.
 
-    def __init__(self) -> None:
+    This node can be extended with callback hooks for GUI integration.
+    Set the on_pool_status, on_robot_status, on_top_cam_image, on_under_cam_image
+    callbacks to receive data updates.
+    """
+
+    def __init__(self, subscribe_images: bool = False) -> None:
+        """Initialize the dashboard node.
+
+        Args:
+            subscribe_images: If True, subscribe to camera image topics.
+                             Set to False for headless mode to save bandwidth.
+        """
         super().__init__('aqua_dashboard')
 
         self._pool_status: Dict[int, Optional[PoolStatus]] = {}
         self._robot_status: Dict[int, Optional[RobotStatus]] = {}
+        self._top_cam_image: Dict[int, Optional[Image]] = {}
+        self._under_cam_image: Dict[int, Optional[Image]] = {}
         self._pool_start_clients: Dict[int, object] = {}
+
+        self.on_pool_status: Optional[Callable[[int, PoolStatus], None]] = None
+        self.on_robot_status: Optional[Callable[[int, RobotStatus], None]] = None
+        self.on_top_cam_image: Optional[Callable[[int, Image], None]] = None
+        self.on_under_cam_image: Optional[Callable[[int, Image], None]] = None
 
         for pool_id in pool_ids():
             self._pool_status[pool_id] = None
             self._robot_status[pool_id] = None
+            self._top_cam_image[pool_id] = None
+            self._under_cam_image[pool_id] = None
 
             self.create_subscription(
                 PoolStatus,
@@ -65,6 +93,20 @@ class DashboardNode(Node):
                 partial(self._on_robot_status, pool_id),
                 10
             )
+
+            if subscribe_images:
+                self.create_subscription(
+                    Image,
+                    pool_top_cam_det_topic(pool_id),
+                    partial(self._on_top_cam_image, pool_id),
+                    10
+                )
+                self.create_subscription(
+                    Image,
+                    pool_under_cam_det_topic(pool_id),
+                    partial(self._on_under_cam_image, pool_id),
+                    10
+                )
 
             self._pool_start_clients[pool_id] = self.create_client(
                 Trigger,
@@ -91,6 +133,8 @@ class DashboardNode(Node):
     def _on_pool_status(self, pool_id: int, msg: PoolStatus) -> None:
         """Handle incoming pool status."""
         self._pool_status[pool_id] = msg
+        if self.on_pool_status is not None:
+            self.on_pool_status(pool_id, msg)
 
     def _on_robot_status(self, pool_id: int, msg: RobotStatus) -> None:
         """Handle incoming robot status."""
@@ -100,6 +144,21 @@ class DashboardNode(Node):
         if prev is not None and prev.state != msg.state:
             state_name = ROBOT_STATE_NAMES.get(msg.state, str(msg.state))
             self.get_logger().info(f'Robot {pool_id} state changed to {state_name}')
+
+        if self.on_robot_status is not None:
+            self.on_robot_status(pool_id, msg)
+
+    def _on_top_cam_image(self, pool_id: int, msg: Image) -> None:
+        """Handle incoming top camera image."""
+        self._top_cam_image[pool_id] = msg
+        if self.on_top_cam_image is not None:
+            self.on_top_cam_image(pool_id, msg)
+
+    def _on_under_cam_image(self, pool_id: int, msg: Image) -> None:
+        """Handle incoming under camera image."""
+        self._under_cam_image[pool_id] = msg
+        if self.on_under_cam_image is not None:
+            self.on_under_cam_image(pool_id, msg)
 
     def _log_status(self) -> None:
         """Periodically log current status of all pools."""
@@ -196,6 +255,14 @@ class DashboardNode(Node):
     def get_robot_status(self, pool_id: int) -> Optional[RobotStatus]:
         """Get the latest status for a robot."""
         return self._robot_status.get(pool_id)
+
+    def get_top_cam_image(self, pool_id: int) -> Optional[Image]:
+        """Get the latest top camera image for a pool."""
+        return self._top_cam_image.get(pool_id)
+
+    def get_under_cam_image(self, pool_id: int) -> Optional[Image]:
+        """Get the latest under camera image for a pool."""
+        return self._under_cam_image.get(pool_id)
 
 
 def main(args=None) -> None:

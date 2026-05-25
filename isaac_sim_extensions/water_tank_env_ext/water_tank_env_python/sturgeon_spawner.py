@@ -48,15 +48,19 @@ _FISH_PER_POOL_MAX = 10
 _RADIUS_MIN = 0.6
 _RADIUS_MAX = params.TANK_RADIUS - 1.0  # ≈ 3.0 m, well clear of the wall
 
-# Z spawn range — full water column from 0.30 m up to water surface.
-_SPAWN_Z_MIN = 0.30
-_SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
+# Z spawn positions — matched to sturgeon_animator.py for seamless transition
+# These values should match the animator's z_mid values so fish don't "jump"
+# when simulation starts.
+_Z_MID_ALIVE = 0.55                  # same as animator: (0.30 + 0.80) / 2
+_Z_MID_FLIPPED = params.WATER_LEVEL + 0.025  # same as animator: water surface + 2.5cm
+
+# Legacy random Z range (no longer used, kept for reference)
+# _SPAWN_Z_MIN = 0.30
+# _SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
 
 # ── Flipped (belly-up) sturgeon settings ──────────────────────────────────────
 _FLIP_PROBABILITY = 0.5             # 50% chance each fish is flipped (dead)
 _FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
-# 참고: 죽은 물고기의 정확한 Z 위치는 sturgeon_animator.py에서 관리
-# (수면 위에 둥둥 뜨는 효과 + 출렁임 애니메이션)
 
 # ── Colour palette (dark → near-current) ─────────────────────────────────────
 _COLOR_DARK    = (0.02, 0.02, 0.03)  # near-black
@@ -265,12 +269,15 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             # Determine if this fish is flipped (belly-up, dead/sick).
             is_flipped = rng.random() < _FLIP_PROBABILITY
             if is_flipped:
-                # 초기 Z는 대략 수면 근처 — animator가 즉시 정확한 위치로 조정
-                spawn_z = params.WATER_LEVEL
+                # Spawn at same Z as animator's z_mid for flipped fish
+                # (water surface + 2.5cm, belly-up floating)
+                spawn_z = _Z_MID_FLIPPED
                 roll_deg = _FLIP_ROLL_DEG
                 n_flipped_in_pool += 1
             else:
-                spawn_z = rng.uniform(_SPAWN_Z_MIN, _SPAWN_Z_MAX)
+                # Spawn at same Z as animator's z_mid for alive fish
+                # (fixed depth for consistent appearance)
+                spawn_z = _Z_MID_ALIVE
                 roll_deg = 0.0
 
             sturgeon_xform = UsdGeom.Xform.Define(stage, Sdf.Path(sturgeon_path))

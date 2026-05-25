@@ -48,9 +48,88 @@ def teardown_graph() -> None:
     if not graph_exists():
         return
     try:
+        # 1. Collect render product paths BEFORE deleting the graph
+        rp_paths = _collect_render_product_paths(GRAPH_PATH)
+        
+        # 2. Delete the graph first (stops the rendering pipeline)
         omni.kit.commands.execute("DeletePrims", paths=[GRAPH_PATH])
+        
+        # 3. Schedule render product cleanup after a frame update
+        # This allows Hydra to finish processing before we delete the prims
+        if rp_paths:
+            _schedule_render_product_cleanup(rp_paths)
     except Exception:
         traceback.print_exc()
+
+
+def _schedule_render_product_cleanup(rp_paths: list[str]) -> None:
+    """Schedule render product cleanup after next frame update."""
+    import asyncio
+    import omni.kit.app
+    
+    async def _cleanup_after_frame():
+        # Wait for next frame update
+        await omni.kit.app.get_app().next_update_async()
+        # Now safe to delete render products
+        _destroy_render_products_by_paths(rp_paths)
+    
+    # Run cleanup asynchronously
+    try:
+        asyncio.ensure_future(_cleanup_after_frame())
+    except Exception:
+        # Fallback: try immediate cleanup anyway
+        _destroy_render_products_by_paths(rp_paths)
+
+
+def _collect_render_product_paths(graph_path: str) -> list[str]:
+    """Collect render product paths from IsaacCreateRenderProduct nodes in the graph."""
+    rp_paths = []
+    try:
+        import omni.graph.core as og
+        
+        graph = og.get_graph_by_path(graph_path)
+        if graph is None:
+            return rp_paths
+        
+        for node in graph.get_nodes():
+            node_type = node.get_type_name()
+            if "CreateRenderProduct" in node_type:
+                rp_attr = node.get_attribute("outputs:renderProductPath")
+                if rp_attr is not None:
+                    rp_path = rp_attr.get()
+                    if rp_path:
+                        rp_paths.append(str(rp_path))
+    except Exception:
+        pass
+    return rp_paths
+
+
+def _destroy_render_products_by_paths(rp_paths: list[str]) -> None:
+    """Destroy render product prims by their paths to release GPU memory.
+    
+    Should be called AFTER the OmniGraph is deleted to avoid Hydra errors.
+    """
+    if not rp_paths:
+        return
+        
+    try:
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+            
+        import carb
+        for rp_path in rp_paths:
+            try:
+                prim = stage.GetPrimAtPath(rp_path)
+                if prim and prim.IsValid():
+                    stage.RemovePrim(rp_path)
+                    carb.log_info(f"[top_cam] Destroyed render product: {rp_path}")
+            except Exception as e:
+                carb.log_warn(f"[top_cam] Failed to destroy render product {rp_path}: {e}")
+            
+    except Exception as e:
+        import carb
+        carb.log_warn(f"[top_cam] _destroy_render_products error: {e}")
 
 
 def build_graph(
@@ -153,7 +232,15 @@ def teardown_global_graph() -> None:
     if not global_graph_exists():
         return
     try:
+        # 1. Collect render product paths BEFORE deleting the graph
+        rp_paths = _collect_render_product_paths(GLOBAL_GRAPH_PATH)
+        
+        # 2. Delete the graph first (stops the rendering pipeline)
         omni.kit.commands.execute("DeletePrims", paths=[GLOBAL_GRAPH_PATH])
+        
+        # 3. Schedule render product cleanup after a frame update
+        if rp_paths:
+            _schedule_render_product_cleanup(rp_paths)
     except Exception:
         traceback.print_exc()
 
