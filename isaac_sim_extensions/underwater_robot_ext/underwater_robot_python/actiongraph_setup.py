@@ -64,29 +64,6 @@ def create_cmd_vel_graph(
         carb.log_error("[actiongraph_setup] No stage available")
         return None
 
-    # #region agent log
-    import json, time
-    _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
-    _robot_prim = stage.GetPrimAtPath(robot_prim_path)
-    _robot_valid = _robot_prim.IsValid() if _robot_prim else False
-    _robot_children = [str(c.GetPath()) for c in _robot_prim.GetChildren()][:10] if _robot_valid else []
-    # Check for articulation API
-    _has_articulation = False
-    _articulation_root_path = None
-    if _robot_valid:
-        from pxr import UsdPhysics
-        if _robot_prim.HasAPI(UsdPhysics.ArticulationRootAPI):
-            _has_articulation = True
-            _articulation_root_path = str(_robot_prim.GetPath())
-        else:
-            for p in _robot_prim.GetChildren():
-                if p.HasAPI(UsdPhysics.ArticulationRootAPI):
-                    _has_articulation = True
-                    _articulation_root_path = str(p.GetPath())
-                    break
-    with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"C","location":"actiongraph_setup.py:create_cmd_vel_graph","message":"robot prim for ActionGraph","data":{"robot_prim_path":robot_prim_path,"robot_name":robot_name,"prim_valid":_robot_valid,"children":_robot_children,"has_articulation":_has_articulation,"articulation_root_path":_articulation_root_path},"timestamp":int(time.time()*1000)})+"\n")
-    # #endregion
-
     # Remove existing graph if present
     existing = stage.GetPrimAtPath(graph_path)
     if existing.IsValid():
