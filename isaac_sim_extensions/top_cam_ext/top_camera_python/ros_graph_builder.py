@@ -51,13 +51,27 @@ def teardown_graph() -> None:
         # 1. Collect render product paths BEFORE deleting the graph
         rp_paths = _collect_render_product_paths(GRAPH_PATH)
         
-        # 2. Delete the graph first (stops the rendering pipeline)
+        # 2. Set render product prims inactive immediately to stop Hydra rendering
+        stage = omni.usd.get_context().get_stage()
+        if stage is not None and rp_paths:
+            for rp_path in rp_paths:
+                try:
+                    prim = stage.GetPrimAtPath(rp_path)
+                    if prim and prim.IsValid():
+                        prim.SetActive(False)
+                except Exception:
+                    pass
+        
+        # 3. Delete the graph first (stops the rendering pipeline)
         omni.kit.commands.execute("DeletePrims", paths=[GRAPH_PATH])
         
-        # 3. Schedule render product cleanup after a frame update
+        # 4. Schedule render product cleanup after a frame update
         # This allows Hydra to finish processing before we delete the prims
         if rp_paths:
             _schedule_render_product_cleanup(rp_paths)
+            
+        # 5. Revert camera and light settings back to Stage Light mode
+        revert_camera_and_light_settings()
     except Exception:
         traceback.print_exc()
 
@@ -118,18 +132,154 @@ def _destroy_render_products_by_paths(rp_paths: list[str]) -> None:
             return
             
         import carb
+        
+        # Try to use Replicator's ViewportManager to cleanly destroy the render products first
+        try:
+            from omni.replicator.core.scripts.utils.viewport_manager import ViewportManager
+            vm = ViewportManager()
+        except Exception as e:
+            vm = None
+            carb.log_warn(f"[top_cam] Failed to import Replicator ViewportManager: {e}")
+            
         for rp_path in rp_paths:
-            try:
-                prim = stage.GetPrimAtPath(rp_path)
-                if prim and prim.IsValid():
-                    stage.RemovePrim(rp_path)
-                    carb.log_info(f"[top_cam] Destroyed render product: {rp_path}")
-            except Exception as e:
-                carb.log_warn(f"[top_cam] Failed to destroy render product {rp_path}: {e}")
+            destroyed_by_replicator = False
+            if vm is not None:
+                # Try all available contexts to find and destroy the texture
+                contexts = list(vm._hydra_textures._hydra_textures.keys())
+                if "default" not in contexts:
+                    contexts.append("default")
+                if None not in contexts:
+                    contexts.append(None)
+                    
+                for ctx in contexts:
+                    try:
+                        texture = vm._hydra_textures.get(ctx, rp_path)
+                        if texture is not None:
+                            texture.destroy()
+                            destroyed_by_replicator = True
+                            carb.log_info(f"[top_cam] Cleanly destroyed replicator render product: {rp_path} in context '{ctx}'")
+                            break
+                    except Exception:
+                        pass
+            
+            # Fallback if Replicator couldn't destroy it or wasn't available
+            if not destroyed_by_replicator:
+                try:
+                    prim = stage.GetPrimAtPath(rp_path)
+                    if prim and prim.IsValid():
+                        stage.RemovePrim(rp_path)
+                        carb.log_info(f"[top_cam] Fallback destroyed render product prim: {rp_path}")
+                except Exception as e:
+                    carb.log_warn(f"[top_cam] Failed fallback destroy for {rp_path}: {e}")
             
     except Exception as e:
         import carb
         carb.log_warn(f"[top_cam] _destroy_render_products error: {e}")
+
+
+def apply_camera_and_light_settings() -> None:
+    """Automatically configure stage lighting and camera focal length (20mm) for optimal detection."""
+    try:
+        from pxr import UsdGeom
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+        
+        # 1. Set Viewport Lighting Menu Mode to Camera Light
+        try:
+            omni.kit.commands.execute("SetLightingMenuMode", lighting_mode="camera")
+        except Exception as e:
+            import carb
+            carb.log_warn(f"[top_cam] Failed to set viewport lighting mode to camera: {e}")
+        
+        # 2. Keep parent Xform active but disable stage lights individually via visibility, then enable default camera light
+        stage_light = stage.GetPrimAtPath("/World/Lighting")
+        if stage_light.IsValid():
+            stage_light.SetActive(True)
+            UsdGeom.Imageable(stage_light).MakeVisible()
+            
+        for path in ["/World/Lighting/AmbientDome", "/World/Lighting/CeilingLight"]:
+            prim = stage.GetPrimAtPath(path)
+            if prim.IsValid():
+                prim.SetActive(True)
+                UsdGeom.Imageable(prim).MakeInvisible()
+            
+        cam_light = stage.GetPrimAtPath("/Environment/defaultLight")
+        if cam_light.IsValid():
+            cam_light.SetActive(True)
+            UsdGeom.Imageable(cam_light).MakeVisible()
+            
+        # 3. Disable underwater lights via visibility and set TopCamera zoom to 20.0mm
+        NUM_POOLS = 7
+        for pool_id in range(1, NUM_POOLS + 1):
+            u_light = stage.GetPrimAtPath(f"/World/Pools/Pool_{pool_id}/UnderwaterLight")
+            if u_light.IsValid():
+                u_light.SetActive(True)
+                UsdGeom.Imageable(u_light).MakeInvisible()
+                
+            cam_path = f"/World/Pools/Pool_{pool_id}/TopCamera"
+            cam_prim = stage.GetPrimAtPath(cam_path)
+            if cam_prim.IsValid():
+                camera = UsdGeom.Camera(cam_prim)
+                # Use .Set(20.0) to overwrite any existing authored value
+                camera.CreateFocalLengthAttr().Set(20.0)
+        import carb
+        carb.log_info("[Auto-Setup] Configured camera zoom (20.0mm) and default light successfully via visibility.")
+    except Exception as e:
+        import carb
+        carb.log_warn(f"[Auto-Setup] Failed to configure camera/light: {e}")
+
+
+def revert_camera_and_light_settings() -> None:
+    """Revert lighting to stage light and camera focal length to 15.0mm (original)."""
+    try:
+        from pxr import UsdGeom
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+        
+        # 1. Set Viewport Lighting Menu Mode to Stage Lights
+        try:
+            omni.kit.commands.execute("SetLightingMenuMode", lighting_mode="stage")
+        except Exception as e:
+            import carb
+            carb.log_warn(f"[top_cam] Failed to set viewport lighting mode to stage: {e}")
+        
+        # 2. Enable stage lights individually via visibility and disable default camera light
+        stage_light = stage.GetPrimAtPath("/World/Lighting")
+        if stage_light.IsValid():
+            stage_light.SetActive(True)
+            UsdGeom.Imageable(stage_light).MakeVisible()
+            
+        for path in ["/World/Lighting/AmbientDome", "/World/Lighting/CeilingLight"]:
+            prim = stage.GetPrimAtPath(path)
+            if prim.IsValid():
+                prim.SetActive(True)
+                UsdGeom.Imageable(prim).MakeVisible()
+            
+        cam_light = stage.GetPrimAtPath("/Environment/defaultLight")
+        if cam_light.IsValid():
+            cam_light.SetActive(True)
+            UsdGeom.Imageable(cam_light).MakeInvisible()
+            
+        # 3. Enable underwater lights via visibility and set TopCamera zoom back to 15.0mm
+        NUM_POOLS = 7
+        for pool_id in range(1, NUM_POOLS + 1):
+            u_light = stage.GetPrimAtPath(f"/World/Pools/Pool_{pool_id}/UnderwaterLight")
+            if u_light.IsValid():
+                u_light.SetActive(True)
+                UsdGeom.Imageable(u_light).MakeVisible()
+                
+            cam_path = f"/World/Pools/Pool_{pool_id}/TopCamera"
+            cam_prim = stage.GetPrimAtPath(cam_path)
+            if cam_prim.IsValid():
+                camera = UsdGeom.Camera(cam_prim)
+                camera.CreateFocalLengthAttr().Set(15.0)
+        import carb
+        carb.log_info("[Auto-Setup] Reverted camera zoom (15.0mm) and stage light successfully via visibility.")
+    except Exception as e:
+        import carb
+        carb.log_warn(f"[Auto-Setup] Failed to revert camera/light: {e}")
 
 
 def build_graph(
@@ -149,6 +299,9 @@ def build_graph(
     Returns:
         (success, message) tuple
     """
+    # Configure lighting and zoom before building graph
+    apply_camera_and_light_settings()
+
     import omni.graph.core as og
 
     entries = list(entries)
@@ -235,12 +388,26 @@ def teardown_global_graph() -> None:
         # 1. Collect render product paths BEFORE deleting the graph
         rp_paths = _collect_render_product_paths(GLOBAL_GRAPH_PATH)
         
-        # 2. Delete the graph first (stops the rendering pipeline)
+        # 2. Set render product prims inactive immediately to stop Hydra rendering
+        stage = omni.usd.get_context().get_stage()
+        if stage is not None and rp_paths:
+            for rp_path in rp_paths:
+                try:
+                    prim = stage.GetPrimAtPath(rp_path)
+                    if prim and prim.IsValid():
+                        prim.SetActive(False)
+                except Exception:
+                    pass
+        
+        # 3. Delete the graph first (stops the rendering pipeline)
         omni.kit.commands.execute("DeletePrims", paths=[GLOBAL_GRAPH_PATH])
         
-        # 3. Schedule render product cleanup after a frame update
+        # 4. Schedule render product cleanup after a frame update
         if rp_paths:
             _schedule_render_product_cleanup(rp_paths)
+            
+        # 5. Revert camera and light settings back to Stage Light mode
+        revert_camera_and_light_settings()
     except Exception:
         traceback.print_exc()
 
@@ -262,6 +429,9 @@ def build_global_graph(
     Returns:
         (success, message) tuple
     """
+    # Configure lighting and zoom before building global graph
+    apply_camera_and_light_settings()
+
     import omni.graph.core as og
 
     if entry is None:
