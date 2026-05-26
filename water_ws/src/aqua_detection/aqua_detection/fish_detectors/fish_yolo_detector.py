@@ -95,11 +95,24 @@ class FishYOLODetector(BaseDetector):
         
         model_path = Path(self.model_path)
         if not model_path.exists():
-            # Try relative to package
+            # Try alternative paths
             alt_paths = [
                 Path(__file__).parent.parent.parent / "models" / "yolov8_fish_species.pt",
                 Path.cwd() / "models" / "yolov8_fish_species.pt",
             ]
+            
+            # Search up directory tree for models folder (works from both src and install)
+            current = Path(__file__).resolve()
+            for parent in current.parents:
+                candidate = parent / "models" / "yolov8_fish_species.pt"
+                if candidate.exists():
+                    alt_paths.insert(0, candidate)
+                    break
+                # Also check src/aqua_detection/models for ROS2 install case
+                src_candidate = parent / "src" / "aqua_detection" / "models" / "yolov8_fish_species.pt"
+                if src_candidate.exists():
+                    alt_paths.insert(0, src_candidate)
+                    break
             
             for alt in alt_paths:
                 if alt.exists():
