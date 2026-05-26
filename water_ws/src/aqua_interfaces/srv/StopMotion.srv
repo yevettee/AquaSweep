@@ -1,0 +1,4 @@
+# 모션 정지 요청 (즉시 중단, step 초기화)
+---
+bool success
+string message

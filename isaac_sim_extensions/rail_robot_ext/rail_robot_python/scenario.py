@@ -8,6 +8,10 @@
   3. RAIL_MOVE  : 레일 캐리지 20° 스무스 회전 (코사인 이징)
   4. ARM_RESET  : 홈 자세 → 스윕 시작(하단) 자세로 복귀
   5. 18단계(360°) 완료 후 반복
+
+MotionCommandBridge 연동:
+  - start/stop/pause/resume 서비스 제공
+  - clean_wall_status 토픽으로 진행상황 발행
 """
 
 import math
@@ -62,6 +66,14 @@ class RailRobotScenario:
     이후 실행에서는 캐싱된 테이블을 재사용 (추가 오버헤드 없음).
     """
 
+    # Phase names for status reporting
+    PHASE_CALIBRATE = "calibrate"
+    PHASE_ARM_SWEEP = "arm_sweep"
+    PHASE_ARM_HOME = "arm_home"
+    PHASE_RAIL_MOVE = "rail_move"
+    PHASE_ARM_RESET = "arm_reset"
+    PHASE_DONE = "done"
+
     def __init__(self, pool_idx: int, pool_center: Tuple[float, float] = (0.0, 0.0)):
         self._pool_idx = pool_idx
         self._pool_center = pool_center
@@ -70,10 +82,12 @@ class RailRobotScenario:
         self._carriage_prim_path = ""
         self._joint_drive = None
         self._bridge = None
+        self._motion_bridge = None  # MotionCommandBridge 인스턴스
         self._stage = None
         self._dof_index: dict = {}
 
         self._running = False
+        self._paused = False
         self._phase = _ARM_SWEEP
         self._rail_angle = 0.0
         self._rail_angle_start = 0.0   # 레일 이동 시작 각도
@@ -114,7 +128,40 @@ class RailRobotScenario:
         carb.log_warn(f"{LOG_TAG} pool_{self._pool_idx} initialized @ {carriage_prim_path}")
 
     def set_bridge(self, bridge) -> None:
+        """기존 joint_state_bridge 설정."""
         self._bridge = bridge
+
+    def set_motion_bridge(self, motion_bridge) -> None:
+        """MotionCommandBridge 인스턴스 설정 (ui_builder에서 호출)."""
+        self._motion_bridge = motion_bridge
+        if motion_bridge is not None:
+            motion_bridge.set_scenario_callbacks(
+                on_start=self._on_motion_start,
+                on_stop=self._on_motion_stop,
+                on_pause=self._on_motion_pause,
+                on_resume=self._on_motion_resume,
+            )
+            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} MotionCommandBridge 연결됨")
+
+    def _on_motion_start(self, params: dict) -> None:
+        """MotionCommandBridge에서 start 서비스 호출 시."""
+        self.start()
+
+    def _on_motion_stop(self) -> None:
+        """MotionCommandBridge에서 stop 서비스 호출 시."""
+        self.stop()
+
+    def _on_motion_pause(self) -> int:
+        """MotionCommandBridge에서 pause 서비스 호출 시."""
+        self._paused = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} paused at step {self._rail_step_count}")
+        return self._rail_step_count
+
+    def _on_motion_resume(self) -> int:
+        """MotionCommandBridge에서 resume 서비스 호출 시."""
+        self._paused = False
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} resumed from step {self._rail_step_count}")
+        return self._rail_step_count
 
     def set_joint_drive(self, joint_prim_path: str) -> None:
         if not joint_prim_path or self._stage is None:
@@ -153,14 +200,13 @@ class RailRobotScenario:
 
     def stop(self) -> None:
         self._running = False
+        self._paused = False
         carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} sweep stopped")
 
     # ── physics step 메인 루프 ────────────────────────────────────────────────
 
     def on_physics_step(self, step_size: float) -> None:
-        if not self._running:
-            return
-
+        # 외부 명령(override 모드)은 running 상태와 무관하게 처리
         if self._bridge is not None:
             cmd = self._bridge.get_command()
             if cmd is not None and cmd.get("override"):
@@ -168,6 +214,18 @@ class RailRobotScenario:
                 self.set_arm_joints(cmd["joint_positions"])
                 self._publish_state()
                 return
+
+        if not self._running:
+            # running 아니어도 step_sync는 발행 (aqua_controller 연동용)
+            if self._bridge is not None:
+                self._bridge.publish_step_sync()
+            self._publish_motion_status()
+            return
+
+        # 일시정지 상태 체크
+        if self._paused:
+            self._publish_motion_status()
+            return
 
         if self._phase == _CALIBRATE:
             self._do_calibrate()
@@ -206,6 +264,8 @@ class RailRobotScenario:
                 if self._rail_step_count >= RAIL_STEPS:
                     carb.log_warn(f"{LOG_TAG} pool_{self._pool_idx} 360° 청소 완료 — 정지")
                     self.stop()
+                    if self._motion_bridge is not None:
+                        self._motion_bridge.mark_done()
                     return
                 self._phase = _ARM_RESET
                 self._phase_elapsed = 0.0
@@ -437,7 +497,61 @@ class RailRobotScenario:
     def _publish_state(self) -> None:
         if self._bridge is None:
             return
-        self._bridge.publish_joint_states(self._safe_get_positions())
+        self._bridge.publish_joint_states(self._safe_get_positions(), self._rail_angle)
+        self._bridge.publish_step_sync()
+        self._publish_motion_status()
+
+    def _publish_motion_status(self) -> None:
+        """MotionCommandBridge로 진행상황 발행."""
+        if self._motion_bridge is None:
+            return
+        
+        progress = self._calculate_progress()
+        phase_name = self._get_phase_name()
+        
+        self._motion_bridge.publish_status(
+            progress=progress,
+            current_step=self._rail_step_count,
+            total_steps=RAIL_STEPS,
+            phase=phase_name,
+        )
+
+    def _calculate_progress(self) -> float:
+        """전체 진행률 계산 (0.0 ~ 1.0)."""
+        if RAIL_STEPS == 0:
+            return 1.0
+        
+        # 기본 진행률: 완료된 rail step 수 기준
+        base_progress = self._rail_step_count / RAIL_STEPS
+        
+        # 현재 phase 내 진행률 추가
+        phase_weight = 1.0 / RAIL_STEPS
+        if self._phase == _ARM_SWEEP:
+            phase_progress = min(1.0, self._phase_elapsed / ARM_SWEEP_DURATION)
+        elif self._phase == _ARM_HOME:
+            phase_progress = min(1.0, self._phase_elapsed / ARM_HOME_DURATION)
+        elif self._phase == _RAIL_MOVE:
+            phase_progress = min(1.0, self._phase_elapsed / RAIL_MOVE_DURATION)
+        elif self._phase == _ARM_RESET:
+            phase_progress = min(1.0, self._phase_elapsed / ARM_RESET_DURATION)
+        else:
+            phase_progress = 0.0
+        
+        return min(1.0, base_progress + phase_progress * phase_weight * 0.25)
+
+    def _get_phase_name(self) -> str:
+        """현재 phase 이름 반환."""
+        if self._phase == _CALIBRATE:
+            return self.PHASE_CALIBRATE
+        elif self._phase == _ARM_SWEEP:
+            return self.PHASE_ARM_SWEEP
+        elif self._phase == _ARM_HOME:
+            return self.PHASE_ARM_HOME
+        elif self._phase == _RAIL_MOVE:
+            return self.PHASE_RAIL_MOVE
+        elif self._phase == _ARM_RESET:
+            return self.PHASE_ARM_RESET
+        return self.PHASE_DONE
 
     def _safe_get_positions(self) -> list:
         if self._articulation is None:
@@ -456,3 +570,11 @@ class RailRobotScenario:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    @property
+    def progress(self) -> float:
+        return self._calculate_progress()

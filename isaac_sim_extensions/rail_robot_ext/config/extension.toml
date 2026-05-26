@@ -9,6 +9,7 @@ keywords = ["robot", "cobot", "cleaning", "aquasweep"]
 "omni.kit.uiapp" = {}
 "isaacsim.core.api" = {}
 "isaacsim.gui.components" = {}
+"isaacsim.ros2.bridge" = {}
 
 [[python.module]]
 name = "rail_robot_python"

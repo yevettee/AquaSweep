@@ -1,25 +1,21 @@
-"""CleanFloor action handler — Isaac Sim step_sync 신호 기반 나선 구동.
+"""CleanFloor action handler — Isaac Sim 서비스 모드.
 
-Isaac Sim이 매 physics step 끝마다 /{pool_id}/step_sync 를 발행하면
-이 핸들러가 플래너를 한 스텝 진행하고 cmd_vel을 발행한다.
-
-장점: time.sleep() 대신 물리스텝과 1:1 동기화 → 시뮬레이션이 느려도 나선 궤적 유지.
+Isaac Sim에 서비스 호출 (start_clean_floor)을 통해 청소를 시작하고,
+Isaac Sim 내부 SpiralPlanner가 모션을 실행합니다.
+이 핸들러는 motion_status 토픽으로 진행상황을 모니터링합니다.
 """
 
 import threading
-from typing import TYPE_CHECKING
+import time
 
 from rclpy.node import Node
 from rclpy.action import GoalResponse, CancelResponse
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-from geometry_msgs.msg import Twist
-from std_msgs.msg import Empty
 
 from aqua_interfaces.action import CleanFloor
+from aqua_interfaces.msg import MotionStatus
+from aqua_interfaces.srv import StartMotion, StopMotion, PauseMotion, ResumeMotion
 from .base_handler import BaseHandler
-
-if TYPE_CHECKING:
-    from ..spiral_planner import SpiralPlanner
 
 _be1 = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -30,36 +26,46 @@ _be1 = QoSProfile(
 
 class CleanFloorHandler(BaseHandler):
 
-    def __init__(
-        self,
-        node: Node,
-        planner: 'SpiralPlanner',
-        cmd_vel_publisher,
-        pool_id: str = 'pool_1',
-    ):
+    def __init__(self, node: Node, pool_id: str = 'pool_1'):
         super().__init__(node)
-        self._planner = planner
-        self._cmd_vel_pub = cmd_vel_publisher
         self._pool_id = pool_id
 
         self._cancel_requested = False
-        self._spiral_active = False
-        self._spiral_done = threading.Event()
+        self._active = False
+        self._done_event = threading.Event()
         self._lock = threading.Lock()
 
-        # Isaac Sim 물리스텝 동기 신호 구독
+        self._motion_progress = 0.0
+        self._motion_state = MotionStatus.IDLE
+
+        self._init_service_clients()
+
+    def _init_service_clients(self) -> None:
+        """서비스 클라이언트 및 상태 토픽 구독 초기화."""
+        self._start_client = self._node.create_client(
+            StartMotion, f'/{self._pool_id}/start_clean_floor'
+        )
+        self._stop_client = self._node.create_client(
+            StopMotion, f'/{self._pool_id}/stop_clean_floor'
+        )
+        self._pause_client = self._node.create_client(
+            PauseMotion, f'/{self._pool_id}/pause_clean_floor'
+        )
+        self._resume_client = self._node.create_client(
+            ResumeMotion, f'/{self._pool_id}/resume_clean_floor'
+        )
         self._node.create_subscription(
-            Empty,
-            f'/{pool_id}/step_sync',
-            self._on_step_sync,
+            MotionStatus,
+            f'/{self._pool_id}/clean_floor_status',
+            self._on_motion_status,
             _be1,
         )
-        self.logger.info(f'CleanFloorHandler: step_sync 구독 → /{pool_id}/step_sync')
+        self.logger.info(f'CleanFloorHandler: /{self._pool_id}/start_clean_floor')
 
     @property
     def is_active(self) -> bool:
         with self._lock:
-            return self._spiral_active
+            return self._active
 
     # ------------------------------------------------------------------
     # Action callbacks
@@ -72,74 +78,88 @@ class CleanFloorHandler(BaseHandler):
     def handle_cancel(self, goal_handle) -> CancelResponse:
         self.logger.info('CleanFloor cancel requested')
         self._cancel_requested = True
+        self._call_stop_service()
         return CancelResponse.ACCEPT
 
     def execute(self, goal_handle) -> CleanFloor.Result:
+        """Isaac Sim 서비스 호출 + motion_status 모니터링."""
         self._cancel_requested = False
-        self._planner.reset()
-        self._spiral_done.clear()
+        self._done_event.clear()
+        self._motion_progress = 0.0
 
         with self._lock:
-            self._spiral_active = True
+            self._active = True
 
-        self.logger.info(f'CleanFloor started — Isaac Sim step_sync 대기 중 ({self._pool_id})')
+        if not self._call_start_service():
+            with self._lock:
+                self._active = False
+            result = CleanFloor.Result()
+            result.success = False
+            goal_handle.abort()
+            return result
+
+        self.logger.info(f'CleanFloor started ({self._pool_id})')
 
         feedback = CleanFloor.Feedback()
         result = CleanFloor.Result()
-        total = self._planner.total_segments
 
-        # Isaac Sim step_sync 콜백이 플래너를 구동하는 동안 대기
-        while not self._spiral_done.is_set():
+        while not self._done_event.is_set():
             if goal_handle.is_cancel_requested or self._cancel_requested:
                 with self._lock:
-                    self._spiral_active = False
-                self._publish_zero()
+                    self._active = False
+                self._call_stop_service()
                 goal_handle.canceled()
                 result.success = False
                 return result
 
-            cur = self._planner.current_segment
-            if total > 0:
-                feedback.progress = float(cur) / float(total)
-                self.publish_feedback(goal_handle, feedback)
+            with self._lock:
+                feedback.progress = self._motion_progress
 
-            self._spiral_done.wait(timeout=0.5)
+            self.publish_feedback(goal_handle, feedback)
+            self._done_event.wait(timeout=0.5)
 
         result.success = True
         goal_handle.succeed()
         self.logger.info('CleanFloor complete')
         return result
 
-    # ------------------------------------------------------------------
-    # Step sync callback — Isaac Sim 물리스텝마다 호출됨
-    # ------------------------------------------------------------------
+    def _call_start_service(self) -> bool:
+        """Isaac Sim에 start_clean_floor 서비스 호출."""
+        if not self._start_client.wait_for_service(timeout_sec=2.0):
+            self.logger.error('start_clean_floor 서비스 없음')
+            return False
 
-    def _on_step_sync(self, _msg: Empty) -> None:
-        """Isaac Sim physics step 1회 = 플래너 1스텝 진행 + cmd_vel 발행."""
+        request = StartMotion.Request()
+        request.params.tank_diameter = 8.0
+        request.params.tank_margin = 0.08
+        request.params.robot_footprint = 0.686
+        request.params.linear_speed = 0.55
+        request.params.omega_max = 2.8
+
+        future = self._start_client.call_async(request)
+        for _ in range(20):
+            if future.done():
+                break
+            time.sleep(0.1)
+
+        if future.done() and future.result().success:
+            return True
+        self.logger.error('start_clean_floor 서비스 실패')
+        return False
+
+    def _call_stop_service(self) -> None:
+        """Isaac Sim에 stop_clean_floor 서비스 호출."""
+        if not self._stop_client.wait_for_service(timeout_sec=1.0):
+            return
+        request = StopMotion.Request()
+        self._stop_client.call_async(request)
+
+    def _on_motion_status(self, msg: MotionStatus) -> None:
+        """motion_status 토픽 콜백."""
         with self._lock:
-            if not self._spiral_active:
-                return
+            self._motion_progress = msg.progress
+            self._motion_state = msg.state
 
-            if self._planner.is_done:
-                self._spiral_active = False
-                self._publish_zero()
-                self._spiral_done.set()
-                return
-
-            v, omega = self._planner.next_cmd()
-
-        twist = Twist()
-        twist.linear.x = v
-        twist.angular.z = omega
-        self._cmd_vel_pub.publish(twist)
-
-        with self._lock:
-            if self._planner.is_done:
-                self._spiral_active = False
-                self._publish_zero()
-                self._spiral_done.set()
-
-    # ------------------------------------------------------------------
-
-    def _publish_zero(self) -> None:
-        self._cmd_vel_pub.publish(Twist())
+            if msg.state == MotionStatus.DONE:
+                self._active = False
+                self._done_event.set()

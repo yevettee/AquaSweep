@@ -1,0 +1,5 @@
+# 모션 재개 요청 (일시정지된 step부터 계속)
+---
+bool success
+string message
+uint32 resumed_from_step  # 재개된 step 번호

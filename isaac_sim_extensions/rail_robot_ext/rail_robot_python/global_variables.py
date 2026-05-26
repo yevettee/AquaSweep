@@ -2,10 +2,10 @@ EXTENSION_TITLE = "rail_robot"
 EXTENSION_DESCRIPTION = "수조 벽면 청소용 원형 레일 협동로봇 (Doosan M1013)"
 
 # M1013: 리치 1.3m, 페이로드 10kg — 벽 높이 1.5m 커버에 가장 적합한 physics-ready 모델
-COBOT_USD_PATH = (
-    "/home/rokey/dev_ws/isaac_sim/src/doosan-robot2"
-    "/usd/m1013.usd"
-)
+# 경로는 AquaSweep 리포지토리 기준 상대 경로로 계산
+import os as _os
+_REPO_ROOT = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..", ".."))
+COBOT_USD_PATH = _os.path.join(_REPO_ROOT, "assets", "robot", "m1013.usd")
 
 # Doosan M시리즈 공통 조인트 이름 (M0609·M1013 동일)
 JOINT_NAMES = [

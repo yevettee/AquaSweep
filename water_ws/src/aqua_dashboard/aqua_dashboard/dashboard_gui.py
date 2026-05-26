@@ -44,7 +44,7 @@ from .ros_topics import (
     planner_start_service,
     pool_ids,
     pool_robot_status_topic,
-    pool_start_clean_floor_service,
+    pool_start_clean_wall_service,
     pool_status_topic,
     pool_top_cam_det_topic,
     pool_under_cam_det_topic,
@@ -126,7 +126,7 @@ class DashboardRosNode(Node):
 
             self._pool_start_clients[pool_id] = self.create_client(
                 Trigger,
-                pool_start_clean_floor_service(pool_id)
+                pool_start_clean_wall_service(pool_id)
             )
 
         self._active_pool_id: Optional[int] = None

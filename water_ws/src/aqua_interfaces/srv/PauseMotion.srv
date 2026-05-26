@@ -1,0 +1,5 @@
+# 모션 일시정지 요청 (현재 step 기억)
+---
+bool success
+string message
+uint32 paused_at_step     # 일시정지된 step 번호
