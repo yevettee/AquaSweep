@@ -107,6 +107,9 @@ class UnderwaterSpiralScenario:
         except Exception as e:
             carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 속도 설정 실패: {e}")
 
+        # 물리스텝 완료 — ROS2 컨트롤러에 다음 cmd_vel 요청 신호 발행
+        self._cmd_receiver.publish_step_sync()
+
     @property
     def is_running(self) -> bool:
         return self._running

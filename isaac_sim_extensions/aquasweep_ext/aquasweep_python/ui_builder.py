@@ -403,12 +403,13 @@ class UIBuilder:
         self._cmd_receivers = [None] * _NUM_ROBOTS
         for i in range(_NUM_ROBOTS):
             robot_name = f"under_robot_{i + 1}"
+            pool_id    = f"pool_{i + 1}"
             try:
-                receiver = create_cmd_vel_receiver(robot_name)
+                receiver = create_cmd_vel_receiver(robot_name, pool_id)
                 if receiver is not None:
                     self._ros_executor.add_node(receiver)
                     self._cmd_receivers[i] = receiver
-                    carb.log_warn(f"[aquasweep] robot_{i+1} cmd_vel 구독 시작 → /{robot_name}/cmd_vel")
+                    carb.log_warn(f"[aquasweep] robot_{i+1} cmd_vel 구독 + step_sync 발행 시작 → /{robot_name}/cmd_vel, /{pool_id}/step_sync")
                 else:
                     carb.log_warn(f"[aquasweep] robot_{i+1} receiver 생성 실패: {get_last_ros_import_error()}")
             except Exception as exc:

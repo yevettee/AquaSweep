@@ -58,7 +58,9 @@ class ControllerNode(Node):
         )
 
         # 핸들러 인스턴스 생성
-        self._clean_floor_handler = CleanFloorHandler(self, self._planner, self._cmd_vel_pub)
+        self._clean_floor_handler = CleanFloorHandler(
+            self, self._planner, self._cmd_vel_pub, pool_id=pool_id
+        )
         self._clean_wall_handler  = CleanWallHandler(self)
         self._move_fish_handler   = MoveFishHandler(self)
 
