@@ -64,6 +64,11 @@ class RailRobotScenario:
     첫 번째 RUN 시 약 20 physics 프레임 동안 자동 보정하여
     블레이드 팁이 수조 벽면을 따라 수직 직선 궤적을 그리도록 j3를 최적화.
     이후 실행에서는 캐싱된 테이블을 재사용 (추가 오버헤드 없음).
+    
+    Thread Safety:
+        ROS 콜백(서비스 핸들러)은 PhysX 스레드와 다른 스레드에서 실행됨.
+        USD/Physics 객체 접근은 on_physics_step()에서만 수행하고,
+        ROS 콜백에서는 플래그만 설정하여 race condition 방지.
     """
 
     # Phase names for status reporting
@@ -94,6 +99,11 @@ class RailRobotScenario:
         self._rail_angle_target = 0.0  # 레일 이동 목표 각도
         self._phase_elapsed = 0.0
         self._rail_step_count = 0      # 완료된 레일 이동 횟수
+
+        # Thread-safe 요청 플래그 (ROS 콜백 → Physics 스레드)
+        self._start_requested = False
+        self._stop_requested = False
+        self._pause_requested = False
 
         # IK 테이블 (보정 완료 후 캐싱)
         self._sweep_table: Optional[list] = None
@@ -144,22 +154,37 @@ class RailRobotScenario:
             carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} MotionCommandBridge 연결됨")
 
     def _on_motion_start(self, params: dict) -> None:
-        """MotionCommandBridge에서 start 서비스 호출 시."""
-        self.start()
+        """MotionCommandBridge에서 start 서비스 호출 시 — 시작 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. USD/Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 시작은 on_physics_step()에서 처리.
+        """
+        self._start_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} start requested")
 
     def _on_motion_stop(self) -> None:
-        """MotionCommandBridge에서 stop 서비스 호출 시."""
-        self.stop()
+        """MotionCommandBridge에서 stop 서비스 호출 시 — 정지 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. USD/Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 정지는 on_physics_step()에서 처리.
+        """
+        self._stop_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} stop requested")
 
     def _on_motion_pause(self) -> int:
-        """MotionCommandBridge에서 pause 서비스 호출 시."""
-        self._paused = True
-        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} paused at step {self._rail_step_count}")
+        """MotionCommandBridge에서 pause 서비스 호출 시 — 일시정지 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. USD/Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 정지는 on_physics_step()에서 처리.
+        """
+        self._pause_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} pause requested at step {self._rail_step_count}")
         return self._rail_step_count
 
     def _on_motion_resume(self) -> int:
         """MotionCommandBridge에서 resume 서비스 호출 시."""
         self._paused = False
+        self._pause_requested = False
         carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} resumed from step {self._rail_step_count}")
         return self._rail_step_count
 
@@ -176,11 +201,24 @@ class RailRobotScenario:
     # ── 제어 진입점 ───────────────────────────────────────────────────────────
 
     def start(self) -> None:
+        """시작 요청 (외부에서 호출용 — 플래그만 설정).
+        
+        실제 시작 로직은 _do_start()에서 Physics 스레드 안에서 처리.
+        """
+        self._start_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} start requested (direct)")
+
+    def _do_start(self) -> None:
+        """실제 시작 로직 (Physics 스레드에서만 호출)."""
         self._running = True
         self._rail_angle = 0.0
         self._phase_elapsed = 0.0
         self._rail_step_count = 0
         self.set_rail_angle(self._rail_angle)
+
+        # Bridge 상태를 RUNNING으로 설정 (직접 시작 시에도 상태 동기화)
+        if self._motion_bridge is not None:
+            self._motion_bridge.set_state_running()
 
         if self._sweep_table is None:
             # 첫 실행: 보정 페이즈 진입
@@ -201,11 +239,17 @@ class RailRobotScenario:
     def stop(self) -> None:
         self._running = False
         self._paused = False
+        # Bridge 상태도 리셋
+        if self._motion_bridge is not None:
+            self._motion_bridge.reset()
         carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} sweep stopped")
 
     # ── physics step 메인 루프 ────────────────────────────────────────────────
 
     def on_physics_step(self, step_size: float) -> None:
+        # Thread-safe 요청 처리 (ROS 콜백에서 설정된 플래그)
+        self._process_pending_requests()
+        
         # 외부 명령(override 모드)은 running 상태와 무관하게 처리
         if self._bridge is not None:
             cmd = self._bridge.get_command()
@@ -227,6 +271,37 @@ class RailRobotScenario:
             self._publish_motion_status()
             return
 
+        # 메인 로직 실행
+        self._run_physics_logic(step_size)
+
+    def _process_pending_requests(self) -> None:
+        """ROS 콜백에서 요청된 start/stop/pause를 Physics 스레드에서 안전하게 처리."""
+        # Start 요청 처리 (가장 먼저 — stop/pause보다 우선순위 낮음)
+        if self._start_requested:
+            self._start_requested = False
+            self._do_start()
+            return
+        
+        # Stop 요청 처리
+        if self._stop_requested:
+            self._stop_requested = False
+            self._running = False
+            self._paused = False
+            if self._motion_bridge is not None:
+                self._motion_bridge.reset()
+            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} sweep stopped (deferred)")
+            return
+        
+        # Pause 요청 처리
+        if self._pause_requested:
+            self._pause_requested = False
+            self._paused = True
+            # 현재 위치를 타겟으로 설정하여 즉시 멈춤
+            self.set_rail_angle(self._rail_angle)
+            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} paused at step {self._rail_step_count} (deferred)")
+
+    def _run_physics_logic(self, step_size: float) -> None:
+        """Physics step 메인 로직 (on_physics_step에서 호출)."""
         if self._phase == _CALIBRATE:
             self._do_calibrate()
             return

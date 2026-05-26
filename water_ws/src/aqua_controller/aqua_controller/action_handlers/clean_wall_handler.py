@@ -42,25 +42,28 @@ class CleanWallHandler(BaseHandler):
 
     def _init_service_clients(self) -> None:
         """서비스 클라이언트 및 상태 토픽 구독 초기화."""
+        # Isaac Sim services use /isaac/ prefix to avoid conflict with planner services
+        isaac_prefix = f'/{self._pool_id}/isaac'
         self._start_client = self._node.create_client(
-            StartMotion, f'/{self._pool_id}/start_clean_wall'
+            StartMotion, f'{isaac_prefix}/start_clean_wall'
         )
         self._stop_client = self._node.create_client(
-            StopMotion, f'/{self._pool_id}/stop_clean_wall'
+            StopMotion, f'{isaac_prefix}/stop_clean_wall'
         )
         self._pause_client = self._node.create_client(
-            PauseMotion, f'/{self._pool_id}/pause_clean_wall'
+            PauseMotion, f'{isaac_prefix}/pause_clean_wall'
         )
         self._resume_client = self._node.create_client(
-            ResumeMotion, f'/{self._pool_id}/resume_clean_wall'
+            ResumeMotion, f'{isaac_prefix}/resume_clean_wall'
         )
+        # Status topic remains at pool level (no isaac prefix)
         self._node.create_subscription(
             MotionStatus,
             f'/{self._pool_id}/clean_wall_status',
             self._on_motion_status,
             _be1,
         )
-        self.logger.info(f'CleanWallHandler: /{self._pool_id}/start_clean_wall')
+        self.logger.info(f'CleanWallHandler: {isaac_prefix}/start_clean_wall')
 
     @property
     def is_active(self) -> bool:

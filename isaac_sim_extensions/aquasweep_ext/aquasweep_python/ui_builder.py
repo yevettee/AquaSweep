@@ -29,6 +29,22 @@ if str(_common) not in sys.path:
 
 from ros_isaac_env import configure_isaac_ros_env, AQUA_INTERFACES_INSTALL_HINT  # noqa: E402
 
+# ── 카메라 퍼블리싱 익스텐션 임포트 (optional) ─────────────────────────────────
+try:
+    from top_camera_python import ros_graph_builder as top_graph
+    from top_camera_python.camera_discovery import discover_top_cameras
+    from top_camera_python.global_variables import DEFAULT_RESOLUTION as TOP_CAM_RESOLUTION
+    _TOP_CAM_AVAILABLE = True
+except ImportError:
+    _TOP_CAM_AVAILABLE = False
+
+try:
+    from under_camera_python import ros_graph_builder as under_graph
+    from under_camera_python.camera_discovery import discover_under_cameras
+    _UNDER_CAM_AVAILABLE = True
+except ImportError:
+    _UNDER_CAM_AVAILABLE = False
+
 # ── 각 서브시스템 임포트 ─────────────────────────────────────────────────────
 from water_tank_env_python import scene_builders
 from water_tank_env_python.scenario import WaterTankScenario
@@ -197,6 +213,7 @@ class UIBuilder:
         reset_center_trail_debug()
         self._cleanup_rail_bridges()
         self._cleanup_clean_wall_server()
+        self._cleanup_camera_graphs()
         self._stop_ros()
         for i in range(_NUM_ROBOTS):
             remove_cmd_vel_graph(f"under_robot_{i + 1}")
@@ -217,12 +234,35 @@ class UIBuilder:
             self._clean_wall_server.cleanup()
             self._clean_wall_server = None
 
+    def _cleanup_camera_graphs(self) -> None:
+        """Cleanup camera publishing OmniGraphs."""
+        if _TOP_CAM_AVAILABLE:
+            try:
+                top_graph.teardown_graph()
+            except Exception:
+                pass
+        if _UNDER_CAM_AVAILABLE:
+            try:
+                under_graph.teardown_graph()
+            except Exception:
+                pass
+
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
     def build_ui(self):
-        world_frame = CollapsableFrame("World Controls", collapsed=False)
-        with world_frame:
+        # ── Quick Setup (단계별 버튼) ─────────────────────────────────────────
+        quick_frame = CollapsableFrame("Quick Setup", collapsed=False)
+        with quick_frame:
             with ui.VStack(style=get_style(), spacing=5, height=0):
+                # 안내 텍스트
+                ui.Label(
+                    "순서: LOAD → SPAWN DEBRIS → RUN → PUBLISH CAMS",
+                    style={"color": 0xFF888888, "font_size": 12},
+                    word_wrap=True,
+                )
+                ui.Spacer(height=4)
+
+                # 1. LOAD
                 self._load_btn = LoadButton(
                     "Load Button", "LOAD",
                     setup_scene_fn=self._setup_scene,
@@ -231,17 +271,15 @@ class UIBuilder:
                 self._load_btn.set_world_settings(physics_dt=PHYSICS_DT, rendering_dt=PHYSICS_DT)
                 self.wrapped_ui_elements.append(self._load_btn)
 
-                self._reset_btn = ResetButton(
-                    "Reset Button", "RESET",
-                    pre_reset_fn=self._on_pre_reset,
-                    post_reset_fn=self._on_post_reset,
+                # 2. SPAWN DEBRIS
+                self._spawn_debris_btn = ui.Button(
+                    "SPAWN DEBRIS",
+                    height=36,
+                    clicked_fn=self._on_spawn_debris,
+                    enabled=False,
                 )
-                self._reset_btn.enabled = False
-                self.wrapped_ui_elements.append(self._reset_btn)
 
-        run_frame = CollapsableFrame("Run Scenario", collapsed=False)
-        with run_frame:
-            with ui.VStack(style=get_style(), spacing=5, height=0):
+                # 3. RUN
                 self._scenario_state_btn = StateButton(
                     "Run Scenario", "RUN", "STOP",
                     on_a_click_fn=self._on_run,
@@ -251,7 +289,28 @@ class UIBuilder:
                 self._scenario_state_btn.enabled = False
                 self.wrapped_ui_elements.append(self._scenario_state_btn)
 
-        debris_frame = CollapsableFrame("Debris", collapsed=False)
+                # 4. PUBLISH CAMS
+                self._publish_cams_btn = ui.Button(
+                    "PUBLISH CAMS",
+                    height=36,
+                    clicked_fn=self._on_publish_cams,
+                    style={"background_color": 0xFF1A6B2E},
+                    enabled=False,
+                )
+
+                ui.Spacer(height=4)
+
+                # RESET
+                self._reset_btn = ResetButton(
+                    "Reset Button", "RESET",
+                    pre_reset_fn=self._on_pre_reset,
+                    post_reset_fn=self._on_post_reset,
+                )
+                self._reset_btn.enabled = False
+                self.wrapped_ui_elements.append(self._reset_btn)
+
+        # ── Debris Settings (상세 설정) ───────────────────────────────────────
+        debris_frame = CollapsableFrame("Debris Settings", collapsed=True)
         with debris_frame:
             with ui.VStack(style=get_style(), spacing=5, height=0):
                 with ui.HStack(height=24):
@@ -266,21 +325,21 @@ class UIBuilder:
                     ui.Label("Radius (m)", width=80)
                     self._debris_radius_model = ui.SimpleFloatModel(0.05)
                     ui.FloatDrag(model=self._debris_radius_model, min=0.001, max=0.2, step=0.001)
-                self._spawn_btn = ui.Button(
-                    "SPAWN", height=36, clicked_fn=self._on_spawn_debris,
-                    style={"background_color": 0xFF1A6B2E},
-                )
-                self._clear_btn = ui.Button(
-                    "CLEAR", height=36, clicked_fn=self._on_clear_debris,
+                ui.Button(
+                    "CLEAR DEBRIS", height=36, clicked_fn=self._on_clear_debris,
                     style={"background_color": 0xFF6B1A1A},
                 )
 
-        suction_frame = CollapsableFrame("Suction Status", collapsed=False)
-        with suction_frame:
-            with ui.VStack(style=get_style(), spacing=4, height=0):
-                with ui.HStack(height=22):
-                    ui.Label("수거 완료", width=90)
-                    self._suction_label = ui.Label("0 개")
+        # ── Suction Status (DEBUG_ENABLE_SUCTION이 True일 때만 표시) ──────────
+        if DEBUG_ENABLE_SUCTION:
+            suction_frame = CollapsableFrame("Suction Status", collapsed=True)
+            with suction_frame:
+                with ui.VStack(style=get_style(), spacing=4, height=0):
+                    with ui.HStack(height=22):
+                        ui.Label("수거 완료", width=90)
+                        self._suction_label = ui.Label("0 개")
+        else:
+            self._suction_label = None
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────
 
@@ -513,6 +572,8 @@ class UIBuilder:
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
         self._reset_btn.enabled = True
+        self._spawn_debris_btn.enabled = True
+        self._publish_cams_btn.enabled = True
 
     def _on_pre_reset(self):
         self._timeline.stop()
@@ -526,7 +587,7 @@ class UIBuilder:
         self._water_scenario.setup_scenario(stage=get_current_stage())
         for suction in self._suctions:
             suction.reset()
-        if hasattr(self, "_suction_label"):
+        if hasattr(self, "_suction_label") and self._suction_label is not None:
             self._suction_label.text = "0 개"
         reset_center_trail_debug()
         # 리셋 후 각 로봇 객체를 시나리오에 재동기화
@@ -562,7 +623,7 @@ class UIBuilder:
                         np.asarray(orient, dtype=float),
                         step,
                     )
-                    if newly > 0:
+                    if newly > 0 and self._suction_label is not None:
                         total = sum(s.collected_count for s in self._suctions)
                         self._suction_label.text = f"{total} 개"
             except Exception:
@@ -582,6 +643,34 @@ class UIBuilder:
 
     def _on_clear_debris(self):
         self._debris_scenario.teardown_scenario()
+
+    def _on_publish_cams(self):
+        """Publish all cameras (top + under)."""
+        carb.log_info("[aquasweep] PUBLISH CAMS: starting...")
+
+        # 1. Publish per-pool top cameras
+        if _TOP_CAM_AVAILABLE:
+            entries = discover_top_cameras()
+            if entries:
+                ok, msg = top_graph.build_graph(entries, resolution=TOP_CAM_RESOLUTION)
+                carb.log_info(f"[aquasweep] PUBLISH CAMS: top cameras {'OK' if ok else 'FAIL'} - {msg}")
+            else:
+                carb.log_warn("[aquasweep] PUBLISH CAMS: no top cameras found")
+        else:
+            carb.log_warn("[aquasweep] PUBLISH CAMS: top_cam_ext not available")
+
+        # 2. Publish under cameras
+        if _UNDER_CAM_AVAILABLE:
+            entries = discover_under_cameras()
+            if entries:
+                ok, msg = under_graph.build_graph(entries)
+                carb.log_info(f"[aquasweep] PUBLISH CAMS: under cameras {'OK' if ok else 'FAIL'} - {msg}")
+            else:
+                carb.log_warn("[aquasweep] PUBLISH CAMS: no under cameras found")
+        else:
+            carb.log_warn("[aquasweep] PUBLISH CAMS: under_cam_ext not available")
+
+        carb.log_info("[aquasweep] PUBLISH CAMS: done")
 
     def _start_ros(self) -> None:
         """Isaac Sim 내장 py3.11 rclpy로 cmd_vel 구독자 노드를 생성하고 백그라운드 스핀."""
@@ -722,3 +811,7 @@ class UIBuilder:
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = False
         self._reset_btn.enabled = False
+        if hasattr(self, "_spawn_debris_btn"):
+            self._spawn_debris_btn.enabled = False
+        if hasattr(self, "_publish_cams_btn"):
+            self._publish_cams_btn.enabled = False

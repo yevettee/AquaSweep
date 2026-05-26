@@ -100,8 +100,8 @@ def _build_bridge_class() -> bool:
             status_topic = f"/{pool_id}/{motion_type}_status"
             self._status_pub = self.create_publisher(MotionStatus, status_topic, _qos)
             
-            # 서비스 서버
-            prefix = f"/{pool_id}"
+            # 서비스 서버 (isaac/ prefix로 planner 서비스와 충돌 방지)
+            prefix = f"/{pool_id}/isaac"
             self._start_srv = self.create_service(
                 StartMotion, f"{prefix}/start_{motion_type}", self._handle_start
             )
@@ -171,6 +171,9 @@ def _build_bridge_class() -> bool:
                     self._current_step = 0
                     self._paused_at_step = 0
                 
+                # RUNNING 상태를 즉시 발행하여 Dashboard가 빠르게 UI 업데이트하도록 함
+                self.publish_status(0.0, 0, 0, "starting")
+                
                 response.success = True
                 response.message = f"Started {self._motion_type}"
                 carb.log_info(f"{LOG_TAG} [{self._pool_id}] {self._motion_type} started")
@@ -198,6 +201,9 @@ def _build_bridge_class() -> bool:
                     self._state = self.STATE_IDLE
                     self._current_step = 0
                     self._paused_at_step = 0
+                
+                # IDLE 상태를 토픽에 발행하여 Dashboard가 상태 변경을 인지하도록 함
+                self.publish_status(0.0, 0, 0, "stopped")
                 
                 response.success = True
                 response.message = f"Stopped {self._motion_type}"
@@ -316,13 +322,15 @@ def _build_bridge_class() -> bool:
             self.publish_status(1.0, self._current_step, self._total_steps, "done")
 
         def reset(self) -> None:
-            """상태 초기화."""
+            """상태 초기화 및 IDLE 상태 발행."""
             with self._lock:
                 self._state = self.STATE_IDLE
                 self._current_step = 0
                 self._total_steps = 0
                 self._phase = ""
                 self._paused_at_step = 0
+            # IDLE 상태를 토픽에 발행하여 Dashboard가 상태 변경을 인지하도록 함
+            self.publish_status(0.0, 0, 0, "idle")
 
         @property
         def is_running(self) -> bool:
@@ -338,6 +346,14 @@ def _build_bridge_class() -> bool:
         def state(self) -> int:
             with self._lock:
                 return self._state
+
+        def set_state_running(self) -> None:
+            """시나리오가 직접 시작될 때 상태를 RUNNING으로 설정."""
+            with self._lock:
+                if self._state == self.STATE_IDLE or self._state == self.STATE_DONE:
+                    self._state = self.STATE_RUNNING
+                    self._current_step = 0
+                    self._paused_at_step = 0
 
     _MotionCommandBridge = MotionCommandBridgeImpl
     return True

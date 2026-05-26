@@ -1,14 +1,14 @@
 """Launch one controller_node per robot (under_robot_1 … under_robot_7).
 
 Arguments:
-    use_service_mode (str): 'false'=기존 모드(step_sync), 'true'=서비스 모드(Isaac 내부 플래너)
+    use_service_mode (str): 'true'=서비스 모드(Isaac 내부 플래너, 기본값), 'false'=기존 모드(step_sync)
 
 Usage:
-    # 기존 모드 (기본값)
+    # 서비스 모드 (기본값)
     ros2 launch aqua_controller all_robots.launch.py
 
-    # 서비스 모드
-    ros2 launch aqua_controller all_robots.launch.py use_service_mode:=true
+    # 기존 모드 (step_sync)
+    ros2 launch aqua_controller all_robots.launch.py use_service_mode:=false
 """
 
 from launch import LaunchDescription
@@ -23,7 +23,7 @@ _NUM_ROBOTS = 7
 def generate_launch_description() -> LaunchDescription:
     use_service_mode_arg = DeclareLaunchArgument(
         'use_service_mode',
-        default_value='false',
+        default_value='true',
         description='Use service mode (Isaac internal planner) instead of step_sync mode'
     )
 

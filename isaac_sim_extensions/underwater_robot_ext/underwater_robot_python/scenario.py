@@ -41,6 +41,11 @@ class UnderwaterSpiralScenario:
     외부 모드 (기존 호환):
         - aqua_controller가 cmd_vel 발행
         - step_sync로 동기화
+        
+    Thread Safety:
+        ROS 콜백(서비스 핸들러)은 PhysX 스레드와 다른 스레드에서 실행됨.
+        Physics 객체 접근은 on_physics_step()에서만 수행하고,
+        ROS 콜백에서는 플래그만 설정하여 race condition 방지.
     """
 
     def __init__(self, use_internal_planner: bool = False) -> None:
@@ -52,6 +57,10 @@ class UnderwaterSpiralScenario:
         self._paused: bool = False
         self._debug_tick: int = 0
         self._physics_dt: float = 1.0 / 60.0
+        
+        # Thread-safe 요청 플래그 (ROS 콜백 → Physics 스레드)
+        self._stop_requested: bool = False
+        self._pause_requested: bool = False
         
         # 모드 설정
         self._use_internal_planner = use_internal_planner
@@ -136,27 +145,27 @@ class UnderwaterSpiralScenario:
                 linear_speed=_or_none(params.get("linear_speed")),
                 omega_max=_or_none(params.get("omega_max")),
             )
+        self._running = True  # 물리 활성화 (서비스 호출 시 자동 시작)
         self._cleaning_active = True
         self._paused = False
         carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 시작 (서비스 호출)")
 
     def _on_bridge_stop(self) -> None:
-        """MotionCommandBridge에서 stop 서비스 호출 시 — 청소 정지."""
-        self._cleaning_active = False
-        self._paused = False
-        if self._spiral_planner is not None:
-            self._spiral_planner.reset()
-        if self._robot is not None:
-            try:
-                self._robot.set_linear_velocity(np.zeros(3, dtype=float))
-                self._robot.set_angular_velocity(np.zeros(3, dtype=float))
-            except Exception:
-                pass
-        carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 정지 (서비스 호출)")
+        """MotionCommandBridge에서 stop 서비스 호출 시 — 청소 정지 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 정지는 on_physics_step()에서 처리.
+        """
+        self._stop_requested = True
+        carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 정지 요청됨 (서비스 호출)")
 
     def _on_bridge_pause(self) -> int:
-        """MotionCommandBridge에서 pause 서비스 호출 시."""
-        self._paused = True
+        """MotionCommandBridge에서 pause 서비스 호출 시 — 일시정지 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 정지는 on_physics_step()에서 처리.
+        """
+        self._pause_requested = True
         if self._spiral_planner is not None:
             return self._spiral_planner.pause()
         return 0
@@ -164,6 +173,7 @@ class UnderwaterSpiralScenario:
     def _on_bridge_resume(self) -> int:
         """MotionCommandBridge에서 resume 서비스 호출 시."""
         self._paused = False
+        self._pause_requested = False
         if self._spiral_planner is not None:
             return self._spiral_planner.resume()
         return 0
@@ -177,6 +187,8 @@ class UnderwaterSpiralScenario:
         self._running = False
         self._cleaning_active = False
         self._paused = False
+        self._stop_requested = False
+        self._pause_requested = False
         if self._spiral_planner is not None:
             self._spiral_planner.reset()
 
@@ -225,6 +237,9 @@ class UnderwaterSpiralScenario:
     # ── physics step ────────────────────────────────────────────────────────
 
     def on_physics_step(self, dt: float) -> None:
+        # Thread-safe 요청 처리 (ROS 콜백에서 설정된 플래그)
+        self._process_pending_requests()
+        
         if not self._running or self._robot is None:
             return
         
@@ -238,6 +253,36 @@ class UnderwaterSpiralScenario:
         else:
             # 외부 모드: cmd_vel 수신 시 실행 (기존 동작)
             self._step_external_cmd_vel(dt)
+
+    def _process_pending_requests(self) -> None:
+        """ROS 콜백에서 요청된 stop/pause를 Physics 스레드에서 안전하게 처리."""
+        # Stop 요청 처리
+        if self._stop_requested:
+            self._stop_requested = False
+            self._cleaning_active = False
+            self._paused = False
+            if self._spiral_planner is not None:
+                self._spiral_planner.reset()
+            if self._robot is not None:
+                try:
+                    self._robot.set_linear_velocity(np.zeros(3, dtype=float))
+                    self._robot.set_angular_velocity(np.zeros(3, dtype=float))
+                except Exception:
+                    pass
+            carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 정지 완료")
+            return
+        
+        # Pause 요청 처리
+        if self._pause_requested:
+            self._pause_requested = False
+            self._paused = True
+            if self._robot is not None:
+                try:
+                    self._robot.set_linear_velocity(np.zeros(3, dtype=float))
+                    self._robot.set_angular_velocity(np.zeros(3, dtype=float))
+                except Exception:
+                    pass
+            carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 일시정지 완료")
 
     def _step_internal_planner(self, dt: float) -> None:
         """내부 SpiralPlanner 모드의 physics step."""
