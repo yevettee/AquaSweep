@@ -269,11 +269,6 @@ class UIBuilder:
             )
 
     def _setup_scenario(self):
-        # Re-hide sibling extension windows: their UIs may have been created
-        # after aquasweep's startup hide pass, leaving stale tabs visible.
-        from .extension import _hide_subordinate_windows
-        _hide_subordinate_windows()
-
         scene_builders.enable_gpu_dynamics(get_current_stage())
         for _idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
             prepare_hippo_usd_on_stage(robot_root)
@@ -348,23 +343,19 @@ class UIBuilder:
 
             try:
                 robot = World.instance().scene.get_object(scene_name)
-                if robot is None:
-                    if self._suctions[i]._step_count == 0:
-                        carb.log_warn(f"[aquasweep] suction: robot '{scene_name}' not found in scene")
-                    continue
-                pos, orient = robot.get_world_pose()
-                newly = self._suctions[i].step(
-                    get_current_stage(),
-                    np.asarray(pos, dtype=float),
-                    np.asarray(orient, dtype=float),
-                    step,
-                )
-                if newly > 0:
-                    total = sum(s.collected_count for s in self._suctions)
-                    self._suction_label.text = f"{total} 개"
-            except Exception as e:
-                if self._suctions[i]._step_count <= 3:
-                    carb.log_warn(f"[aquasweep] suction[{i}] 오류: {e}")
+                if robot is not None:
+                    pos, orient = robot.get_world_pose()
+                    newly = self._suctions[i].step(
+                        get_current_stage(),
+                        np.asarray(pos, dtype=float),
+                        np.asarray(orient, dtype=float),
+                        step,
+                    )
+                    if newly > 0:
+                        total = sum(s.collected_count for s in self._suctions)
+                        self._suction_label.text = f"{total} 개"
+            except Exception:
+                pass
 
     def _on_spawn_debris(self):
         if self._debris_scenario.is_spawned():
@@ -447,48 +438,10 @@ class UIBuilder:
         except Exception:
             pass
 
-        self._build_camera_graphs()
-
-        # Re-hide sibling windows in case any reappeared between LOAD and RUN.
-        from .extension import _hide_subordinate_windows
-        _hide_subordinate_windows()
-
         carb.log_warn(f"[aquasweep] RUN — {len(self._scenarios)}개 시나리오 start()")
         for scenario in self._scenarios:
             scenario.start()
         self._timeline.play()
-
-    def _build_camera_graphs(self):
-        """Build top/under camera publishing OmniGraphs if not already present.
-
-        Replaces the manual 'Build & start publishing' step in top_cam_ext /
-        under_cam_ext UIs so users don't need to open those panels.
-
-        Imports are deferred to here because top_cam_ext/under_cam_ext load
-        after aquasweep_ext (module-top import would fail during startup).
-        """
-        try:
-            from top_camera_python import ros_graph_builder as top_cam_graph
-            from top_camera_python.camera_discovery import discover_top_cameras
-            from under_camera_python import ros_graph_builder as under_cam_graph
-            from under_camera_python.camera_discovery import discover_under_cameras
-        except ImportError as exc:
-            carb.log_warn(f"[aquasweep] camera ext not loaded, skip auto-publish: {exc}")
-            return
-
-        if not top_cam_graph.graph_exists():
-            entries = discover_top_cameras()
-            if entries:
-                ok, message = top_cam_graph.build_graph(entries)
-                level = carb.log_info if ok else carb.log_warn
-                level(f"[aquasweep] top camera graph: {message}")
-        if not under_cam_graph.graph_exists():
-            entries = discover_under_cameras()
-            if entries:
-                ok, message = under_cam_graph.build_graph(entries)
-                level = carb.log_info if ok else carb.log_warn
-                level(f"[aquasweep] under camera graph: {message}")
-
 
     def _on_stop(self):
         for scenario in self._scenarios:

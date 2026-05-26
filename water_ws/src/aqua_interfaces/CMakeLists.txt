@@ -18,7 +18,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/RobotStatus.msg"
   "msg/PoolStatus.msg"
   "msg/PoolPhysicalVariables.msg"
-  "msg/FishStatus.msg"
   "action/CleanFloor.action"
   "action/CleanWall.action"
   "action/MoveFish.action"
