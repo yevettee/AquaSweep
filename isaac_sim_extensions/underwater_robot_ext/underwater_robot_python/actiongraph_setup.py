@@ -64,6 +64,7 @@ def create_cmd_vel_graph(
         carb.log_error("[actiongraph_setup] No stage available")
         return None
 
+
     # Remove existing graph if present
     existing = stage.GetPrimAtPath(graph_path)
     if existing.IsValid():
