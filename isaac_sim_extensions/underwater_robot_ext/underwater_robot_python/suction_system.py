@@ -53,9 +53,9 @@ class SuctionSystem:
 
     def __init__(
         self,
-        suction_radius: float = 0.8,
-        collection_radius: float = 0.30,
-        attraction_speed: float = 8.0,
+        suction_radius: float = 1.5,
+        collection_radius: float = 0.8,
+        attraction_speed: float = 15.0,
         nozzle_offset: float = 0.35,
         particles_prim_path: str = DEFAULT_PARTICLES_PRIM_PATH,
     ):
@@ -109,9 +109,16 @@ class SuctionSystem:
         if velocities is None or len(velocities) != count:
             velocities = Vt.Vec3fArray([Gf.Vec3f(0.0, 0.0, 0.0)] * count)
 
-        # 흡입구 위치: 로봇 중심에서 앞쪽(+X)으로 nozzle_offset만큼 이동
+        # 파티클 prim의 풀 중심 오프셋 (월드→로컬 변환)
+        # pos_attr는 풀-로컬 좌표, robot_pos는 월드 좌표이므로 맞춰야 함
+        xform_cache = UsdGeom.XformCache()
+        l2w = xform_cache.GetLocalToWorldTransform(pts.GetPrim())
+        pool_offset = np.array([l2w.ExtractTranslation()[0],
+                                l2w.ExtractTranslation()[1]], dtype=float)
+
+        # 흡입구 위치를 풀-로컬 좌표로 변환
         fwd = _forward_xy(robot_orient)
-        nozzle_xy = robot_pos[:2].astype(float) + fwd * self.nozzle_offset
+        nozzle_xy = robot_pos[:2].astype(float) + fwd * self.nozzle_offset - pool_offset
 
         new_pos        = list(positions)
         new_vel        = list(velocities)
@@ -137,18 +144,18 @@ class SuctionSystem:
                 vel_changed = True
 
             elif dist < self.suction_radius:
-                # ── 인력: 매 스텝 velocities를 로봇 방향으로 덮어씀 ─────
-                # GPU solver가 이 속도를 적분 → 파티클이 로봇 쪽으로 이동
-                # 가까울수록 강하게 (선형: 경계=0, 중심=attraction_speed)
+                # ── 인력: XY + Z 위로 들어올려서 시각적으로 끌려오는 효과 ─────
                 factor    = 1.0 - dist / self.suction_radius
                 direction = diff / (dist + 1e-9)
                 speed     = self.attraction_speed * factor
 
-                cur_v = new_vel[i]
+                # Z: 반경 안쪽으로 들어올수록 위로 들어올림 (바닥에서 떠오르는 연출)
+                lift_z = speed * 0.5
+
                 new_vel[i] = Gf.Vec3f(
                     float(direction[0] * speed),
                     float(direction[1] * speed),
-                    float(cur_v[2]),   # Z 속도는 중력/충돌에 맡김
+                    float(lift_z),
                 )
                 vel_changed = True
 
@@ -159,11 +166,11 @@ class SuctionSystem:
 
         self._collected += newly_collected
 
-        # 최초 10 스텝만 로그 (동작 확인용)
-        if self._step_count <= 10:
-            carb.log_info(
-                f"[suction] step={self._step_count} nozzle_xy={nozzle_xy} "
-                f"particles={count} vel_changed={vel_changed} collected={newly_collected}"
+        # 최초 10 스텝 + 수거 발생 시 로그
+        if self._step_count <= 10 or newly_collected > 0:
+            carb.log_warn(
+                f"[suction] step={self._step_count} path={self.particles_prim_path} "
+                f"particles={count} dist_to_nearest=... collected={newly_collected} total={self._collected}"
             )
 
         return newly_collected

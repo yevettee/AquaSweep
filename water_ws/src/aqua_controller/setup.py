@@ -21,6 +21,7 @@ setup(
     entry_points={
         'console_scripts': [
             'controller_node = aqua_controller.controller_node:main',
+            'orchestrator_node = aqua_controller.orchestrator_node:main',
         ],
     },
 )
