@@ -19,7 +19,7 @@ def pool_top_cam_det_topic(pool_id: int) -> str:
 
 
 def pool_under_cam_det_topic(pool_id: int) -> str:
-    return f"/pool_{pool_id}/under_img_det"
+    return f"/pool_{pool_id}/under_img_raw"
 
 
 def pool_clean_floor_action(pool_id: int) -> str:

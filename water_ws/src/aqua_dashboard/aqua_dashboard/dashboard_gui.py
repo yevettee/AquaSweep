@@ -336,7 +336,7 @@ class PoolPanel(QGroupBox):
         self.top_cam_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right.addWidget(self.top_cam_view, 1)
 
-        under_cam_title = QLabel("Under Camera Detection")
+        under_cam_title = QLabel("Under Camera")
         under_cam_title.setAlignment(Qt.AlignCenter)
         under_cam_title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 4px;")
         right.addWidget(under_cam_title)

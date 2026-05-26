@@ -141,7 +141,7 @@ class UIBuilder:
                         )
 
                     with ui.VStack(width=ui.Fraction(1)):
-                        ui.Label("Under Camera Detection", style={"font_size": 12})
+                        ui.Label("Under Camera", style={"font_size": 12})
                         widgets["under_cam_label"] = ui.Label(
                             "[No Image]",
                             style={"font_size": 10, "color": 0xFF888888},
