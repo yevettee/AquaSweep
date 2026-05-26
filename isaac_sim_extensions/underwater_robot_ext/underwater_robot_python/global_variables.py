@@ -25,7 +25,7 @@ ROBOT_SCENE_NAME = "underwater_robot_v1"
 ROBOT_PRIM_PATH = "/World/Hippo"
 
 # extension/data/hippo_v1.usd — /Root/hippo, VisualWheels 는 base_link 자식.
-HIPPO_USD_FILENAME = "hippo_v1_compressed.usd"
+HIPPO_USD_FILENAME = "hippo_v1_black_eyes.usdz"
 
 # data/hippo_v1.usd 측정값 (wheel_link transforms)
 HIPPO_WHEEL_RADIUS_M = 0.049

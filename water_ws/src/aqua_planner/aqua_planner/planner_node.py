@@ -1,8 +1,9 @@
 """Planner node for AquaSweep - orchestrates cleaning tasks.
 
 Services:
-    /planner/start            - Start cleaning for all eligible pools (fish_count == 0)
-    /planner/pause            - Cancel all current tasks
+    /planner/start               - Start cleaning for all eligible pools (fish_count == 0)
+    /planner/pause               - Cancel all current tasks
+    /planner/status              - Get current status summary
     /{pool_id}/start_clean_floor - Start cleaning for a specific pool
 
 Sturgeon Animation Control:
@@ -19,6 +20,8 @@ from typing import Dict, Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from std_srvs.srv import Trigger
 
 from aqua_interfaces.msg import PoolStatus
@@ -50,6 +53,8 @@ class PlannerNode(Node):
         self._activate_robot_cli: Dict[str, any] = {}
         self._deactivate_robot_cli: Dict[str, any] = {}
 
+        cb = ReentrantCallbackGroup()
+
         for pool_id in self._pool_ids:
             self._executors[pool_id] = TaskExecutor(self, pool_id=pool_id)
             self._pool_status[pool_id] = None
@@ -59,13 +64,15 @@ class PlannerNode(Node):
                 PoolStatus,
                 f'/{pool_id}/status',
                 partial(self._on_pool_status, pool_id),
-                10
+                10,
+                callback_group=cb,
             )
 
             self.create_service(
                 Trigger,
                 f'/{pool_id}/start_clean_floor',
-                partial(self._handle_pool_start, pool_id)
+                partial(self._handle_pool_start, pool_id),
+                callback_group=cb,
             )
 
             # Robot activation service clients for this pool
@@ -77,16 +84,19 @@ class PlannerNode(Node):
             )
 
         self._start_srv = self.create_service(
-            Trigger, '/planner/start', self._handle_global_start
+            Trigger, '/planner/start', self._handle_global_start, callback_group=cb
         )
         self._pause_srv = self.create_service(
-            Trigger, '/planner/pause', self._handle_pause
+            Trigger, '/planner/pause', self._handle_pause, callback_group=cb
+        )
+        self._status_srv = self.create_service(
+            Trigger, '/planner/status', self._handle_status, callback_group=cb
         )
 
         pool_services = ', '.join(f'/{pid}/start_clean_floor' for pid in self._pool_ids)
         self.get_logger().info(
             f'PlannerNode ready | pools={self._pool_ids}\n'
-            f'  global services: /planner/start, /planner/pause\n'
+            f'  global services: /planner/start, /planner/pause, /planner/status\n'
             f'  pool services: {pool_services}'
         )
 
@@ -310,6 +320,19 @@ class PlannerNode(Node):
 
         return response
 
+    def _handle_status(
+        self, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        lines = []
+        for pool_id in self._pool_ids:
+            status = self._pool_status.get(pool_id)
+            running = self._is_running.get(pool_id, False)
+            fish = str(status.fish_count) if status is not None else 'N/A'
+            lines.append(f'{pool_id}: fish={fish} running={running}')
+        response.success = True
+        response.message = ' | '.join(lines)
+        return response
+
     def _on_feedback(self, pool_id: str, feedback) -> None:
         """Handle feedback from action server."""
         self.get_logger().info(f'{pool_id}: Progress {feedback.progress * 100:.1f}%')
@@ -334,8 +357,10 @@ class PlannerNode(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = PlannerNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1] - 2026-05-24
+
+### 변경사항
+- `DEBRIS_RADIUS`: 0.05 → **0.03 m** (직경 10 cm → 6 cm). top camera 시야 기준 픽셀 면적 약 0.36×로 감소
+
+### 후속 검토 필요
+- `aqua_detection/top/detection_node.py`의 debris 면적 필터(15 ≤ area ≤ 500 px @ 3× upscale) — radius 0.05 기준이라 0.03에서 하한 조정 필요 가능
+- PhysX particle contact_offset/rest_offset이 radius에 비례 자동 적용되므로 별도 튜닝 불필요
+
 ## [0.2.0] - 2026-05-22
 
 ### 변경사항
