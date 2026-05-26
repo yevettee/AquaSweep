@@ -131,14 +131,10 @@ class WaterPhysicsApplier:
     """Discovers opted-in rigid bodies on LOAD and applies water forces each
     physics step while RUN is active."""
 
-    # 성능 최적화: N step마다만 물리 적용 (로봇 안정성을 위해 작은 값)
-    UPDATE_INTERVAL = 2  # 2 step마다 적용
-
     def __init__(self):
         self._bodies: List[_Body] = []
         self._stage = None
         self._rediscover_cooldown = 0  # frames remaining before next rediscover attempt
-        self._step_counter = 0
 
     def discover_bodies(self, stage):
         """Scan stage for rigid bodies with ``aquasweep:volume`` attribute set.
@@ -187,8 +183,6 @@ class WaterPhysicsApplier:
             self._bodies.append(body)
 
     def apply(self, dt: float) -> None:
-        self._step_counter += 1
-        
         # underwater_robot_ext가 water_tank_env보다 나중에 LOAD되면 discover_bodies
         # 시점에 로봇이 없어서 _bodies가 비어있을 수 있다. 60프레임마다 재탐색한다.
         if not self._bodies:
@@ -200,10 +194,6 @@ class WaterPhysicsApplier:
                 self._rediscover_cooldown = 60
             if not self._bodies:
                 return
-
-        # 성능 최적화: N step마다만 물리 적용
-        if self._step_counter % self.UPDATE_INTERVAL != 0:
-            return
 
         water_surface_z = params.water_surface_z()
         floor_z = params.TANK_FLOOR_Z

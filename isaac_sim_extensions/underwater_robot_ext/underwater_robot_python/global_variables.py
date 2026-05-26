@@ -41,11 +41,11 @@ ROBOT_SPAWN_Z_M = 0.05
 ROBOT_CONSTRAINT_Z_M = 0.049
 
 # water_tank_env WaterPhysicsApplier — LOAD 시 tag_aquasweep_attrs()가 base_link에 설정
-# 부력 비활성화: 바퀴 마찰 구동을 위해 바닥 접촉 필요 (소프트 바닥 구속 사용)
-ROBOT_VOLUME_M3 = 0.0
-ROBOT_HALF_HEIGHT_M = 0.115  
-DRAG_LINEAR_XY = 5.0
-DRAG_ANGULAR = 5.0
+# 스러스터 방식: 부력 없음(바닥 청소), 항력은 추진력과 균형을 이루도록 설정
+ROBOT_VOLUME_M3 = 0.0       # 부력 비활성화 — 바닥 접촉 청소 모드
+ROBOT_HALF_HEIGHT_M = 0.115
+DRAG_LINEAR_XY = 8.0        # N·s/m — 스러스터 추진과 균형 (0.55m/s @ ~4.4N)
+DRAG_ANGULAR = 6.0          # N·m·s/rad
 
 # 루트 중심 궤적 시각화 (Physics step 샘플)
 DEBUG_CENTER_TRAIL_ENABLED = False
@@ -55,9 +55,7 @@ DEBUG_TRAIL_LINE_WIDTH_WORLD = 0.02
 
 # Physics step 디버그 — False로 끄고 extension reload 후 LOAD → RUN
 DEBUG_ENABLE_WATER_PHYSICS = True
-DEBUG_ENABLE_ROBOT_SPAWN = True       # Robot USD 로드 (DEACTIVATED 상태로)
-DEBUG_ENABLE_WHEELED_ROBOT = True     # True=WheeledRobot(Articulation), False=단일RigidBody(Kinematic)
-DEBUG_ENABLE_STURGEON_SPAWN = True   # Sturgeon USD 로드 비활성화
+DEBUG_ENABLE_STURGEON_SPAWN = True    # Sturgeon USD 로드
 DEBUG_ENABLE_STURGEON_ANIM = True
-DEBUG_ENABLE_WATER_SURFACE_ANIM = False
+DEBUG_ENABLE_WATER_SURFACE_ANIM = True
 DEBUG_ENABLE_SUCTION = True

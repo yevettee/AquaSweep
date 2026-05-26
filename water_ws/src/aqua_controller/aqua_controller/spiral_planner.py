@@ -10,19 +10,14 @@ import math
 from dataclasses import dataclass
 from typing import List, Tuple
 
-# Robot geometry (Dingo-D)
-ROBOT_FOOTPRINT_M = 0.686
+# Defaults (used when no explicit arguments are passed)
+_DEFAULT_ROBOT_FOOTPRINT_M = 0.686
+_DEFAULT_TANK_DIAMETER_M   = 8.0
+_DEFAULT_TANK_MARGIN_M     = 0.08
+_DEFAULT_LINEAR_SPEED_M_S  = 0.55
+_DEFAULT_OMEGA_MAX_RAD_S   = 2.8
 
-# Tank geometry
-TANK_DIAMETER_M = 8.0
-TANK_RADIUS_M = TANK_DIAMETER_M * 0.5
-TANK_MARGIN_M = 0.08
-
-# Speed limits
-ORBIT_LINEAR_M_S = 0.55
-OMEGA_MAX_RAD_S = 2.8
-
-_MERGE_ROUND = 6
+_MERGE_ROUND     = 6
 _MAX_GUARD_STEPS = 5_000_000
 
 
@@ -33,14 +28,21 @@ class Segment:
     num_steps: int
 
 
-def _build_segments(physics_dt: float) -> List[Segment]:
+def _build_segments(
+    physics_dt: float,
+    tank_radius: float,
+    tank_margin: float,
+    robot_footprint: float,
+    linear_speed: float,
+    omega_max: float,
+) -> List[Segment]:
     """Pre-compute all (v, omega) segments for one full spiral pass."""
     if physics_dt <= 0:
         raise ValueError("physics_dt must be positive")
 
-    k = ROBOT_FOOTPRINT_M / (2.0 * math.pi)
-    v = float(ORBIT_LINEAR_M_S)
-    lim = TANK_RADIUS_M - TANK_MARGIN_M
+    k   = robot_footprint / (2.0 * math.pi)
+    v   = float(linear_speed)
+    lim = tank_radius - tank_margin
 
     theta = 0.0
     out: List[Segment] = []
@@ -65,24 +67,24 @@ def _build_segments(physics_dt: float) -> List[Segment]:
             break
 
         c, sn = math.cos(theta), math.sin(theta)
-        px_p = k * c - r * sn
-        py_p = k * sn + r * c
+        px_p  = k * c  - r * sn
+        py_p  = k * sn + r * c
         px_pp = -2.0 * k * sn - r * c
-        py_pp = 2.0 * k * c - r * sn
+        py_pp =  2.0 * k * c  - r * sn
 
-        denom_sq = denom * denom
+        denom_sq    = denom * denom
         dpsi_dtheta = (px_p * py_pp - py_p * px_pp) / max(denom_sq, 1e-18)
 
-        v_allow = OMEGA_MAX_RAD_S * denom / max(abs(dpsi_dtheta), 1e-12)
-        v_eff = min(v, v_allow)
+        v_allow = omega_max * denom / max(abs(dpsi_dtheta), 1e-12)
+        v_eff   = min(v, v_allow)
 
         dtheta_dt = v_eff / denom
-        omega = float(max(-OMEGA_MAX_RAD_S, min(OMEGA_MAX_RAD_S, dpsi_dtheta * dtheta_dt)))
+        omega     = float(max(-omega_max, min(omega_max, dpsi_dtheta * dtheta_dt)))
 
         theta += dtheta_dt * physics_dt
 
         kv = round(v_eff, _MERGE_ROUND)
-        ko = round(omega, _MERGE_ROUND)
+        ko = round(omega,  _MERGE_ROUND)
         if cur_v is None:
             cur_v, cur_omega, cur_n = kv, ko, 1
         elif kv == cur_v and ko == cur_omega:
@@ -102,9 +104,24 @@ def _build_segments(physics_dt: float) -> List[Segment]:
 class SpiralPlanner:
     """Stateful planner — call next_cmd() once per control tick."""
 
-    def __init__(self, physics_dt: float = 1.0 / 60.0) -> None:
-        self._segments = _build_segments(physics_dt)
-        self._seg_idx = 0
+    def __init__(
+        self,
+        physics_dt:      float = 1.0 / 60.0,
+        tank_diameter:   float = _DEFAULT_TANK_DIAMETER_M,
+        tank_margin:     float = _DEFAULT_TANK_MARGIN_M,
+        robot_footprint: float = _DEFAULT_ROBOT_FOOTPRINT_M,
+        linear_speed:    float = _DEFAULT_LINEAR_SPEED_M_S,
+        omega_max:       float = _DEFAULT_OMEGA_MAX_RAD_S,
+    ) -> None:
+        self._segments = _build_segments(
+            physics_dt      = physics_dt,
+            tank_radius     = tank_diameter * 0.5,
+            tank_margin     = tank_margin,
+            robot_footprint = robot_footprint,
+            linear_speed    = linear_speed,
+            omega_max       = omega_max,
+        )
+        self._seg_idx     = 0
         self._step_in_seg = 0
 
     @property
@@ -130,10 +147,10 @@ class SpiralPlanner:
         self._step_in_seg += 1
         if self._step_in_seg >= seg.num_steps:
             self._step_in_seg = 0
-            self._seg_idx += 1
+            self._seg_idx    += 1
 
         return v, omega
 
     def reset(self) -> None:
-        self._seg_idx = 0
+        self._seg_idx     = 0
         self._step_in_seg = 0
