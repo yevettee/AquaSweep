@@ -97,19 +97,6 @@ def prepare_hippo_usd_on_stage(robot_prim_path: str) -> None:
         return
 
     root = stage.GetPrimAtPath(robot_prim_path)
-    # #region agent log
-    import json, time
-    _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
-    _all_children = []
-    _joint_info = []
-    if root and root.IsValid():
-        for p in Usd.PrimRange(root):
-            _all_children.append(str(p.GetPath()))
-            if p.IsA(UsdPhysics.Joint):
-                _joint_info.append({"path": str(p.GetPath()), "name": p.GetName()})
-            if len(_all_children) > 50: break
-    with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"D","location":"hippo_physics_sanitize.py:prepare_hippo_usd_on_stage","message":"robot prim tree and joints","data":{"robot_prim_path":robot_prim_path,"root_valid":root.IsValid() if root else False,"prim_count":len(_all_children),"joint_info":_joint_info[:10]},"timestamp":int(time.time()*1000)})+"\n")
-    # #endregion
     if not root.IsValid():
         carb.log_warn(f"[hippo_usd] robot root invalid: {robot_prim_path}")
         return
@@ -117,9 +104,6 @@ def prepare_hippo_usd_on_stage(robot_prim_path: str) -> None:
     _fix_wheel_collision(root)
 
     visual = _find_visual_wheels_prim(root)
-    # #region agent log
-    with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"D2","location":"hippo_physics_sanitize.py:prepare_hippo_usd_on_stage","message":"VisualWheels check","data":{"robot_prim_path":robot_prim_path,"visual_found":visual is not None and visual.IsValid() if visual else False,"visual_path":str(visual.GetPath()) if visual and visual.IsValid() else None},"timestamp":int(time.time()*1000)})+"\n")
-    # #endregion
     if visual is None or not visual.IsValid():
         carb.log_info("[hippo_usd] VisualWheels not found — skip physics strip")
         return
