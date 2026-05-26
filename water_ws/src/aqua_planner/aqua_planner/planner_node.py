@@ -50,6 +50,8 @@ class PlannerNode(Node):
         self._activate_robot_cli: Dict[str, any] = {}
         self._deactivate_robot_cli: Dict[str, any] = {}
 
+        cb = ReentrantCallbackGroup()
+
         for pool_id in self._pool_ids:
             self._executors[pool_id] = TaskExecutor(self, pool_id=pool_id)
             self._pool_status[pool_id] = None

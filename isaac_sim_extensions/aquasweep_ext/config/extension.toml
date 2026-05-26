@@ -18,6 +18,9 @@ writeTarget.kit = true
 "water_tank_env_ext" = {}
 "debris_env_ext" = {}
 "underwater_robot_ext" = {}
+# top_cam_ext / under_cam_ext are imported lazily inside _build_camera_graphs
+# (RUN time), but declaring them here guarantees load order anyway.
+"top_cam_ext" = {}
 "under_cam_ext" = {}
 "top_cam_ext" = {}
 
