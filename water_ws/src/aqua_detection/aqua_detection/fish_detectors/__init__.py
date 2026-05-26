@@ -12,6 +12,7 @@ from .base import (
 from .fish_opencv_detector import FishOpenCVDetector
 from .fish_sam2_detector import FishSAM2Detector, FishSAM2VideoDetector
 from .fish_yolo_detector import FishYOLODetector
+from .fish_yolo_world_detector import FishYOLOWorldDetector
 
 __all__ = [
     'BaseDetector',
@@ -25,4 +26,5 @@ __all__ = [
     'FishSAM2Detector',
     'FishSAM2VideoDetector',
     'FishYOLODetector',
+    'FishYOLOWorldDetector',
 ]

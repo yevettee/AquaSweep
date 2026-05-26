@@ -46,7 +46,9 @@ from aqua_detection.fish_detectors import (
     FishOpenCVDetector,
     FishSAM2Detector,
     FishYOLODetector,
+    FishYOLOWorldDetector,
 )
+from aqua_detection.fish_detectors.vlm_validator import VLMValidator
 from aqua_detection.fish_detectors.base import DetectionResult
 from aqua_detection.fish_analyzers import FishVelocityEstimator, SimpleFishStatusClassifier
 from aqua_detection.fish_utils.fish_visualization import draw_detection_result
@@ -130,6 +132,7 @@ class FishDetectionNode(Node):
         
         # Declare parameters
         self.declare_parameter('detector_type', 'yolo')
+        self.declare_parameter('use_vlm', True)
         self.declare_parameter('num_pools', NUM_POOLS)
         self.declare_parameter('debug_visualization', True)
         self.declare_parameter('image_qos_reliability', 'best_effort')
@@ -152,6 +155,7 @@ class FishDetectionNode(Node):
         
         # Get parameters
         detector_type = self.get_parameter('detector_type').value
+        self.use_vlm = self.get_parameter('use_vlm').value
         self.num_pools = self.get_parameter('num_pools').value
         self.debug_viz = self.get_parameter('debug_visualization').value
         self.use_global_camera = self.get_parameter('use_global_camera').value
@@ -192,6 +196,9 @@ class FishDetectionNode(Node):
         # Initialize detector
         self.detector = self._create_detector(detector_type)
         self.get_logger().info(f"Using detector: {self.detector.get_name()}")
+        
+        # Initialize VLM Validator
+        self.vlm_validator = VLMValidator() if self.use_vlm else None
         
         # ROS2 components
         self.bridge = CvBridge()
@@ -277,6 +284,16 @@ class FishDetectionNode(Node):
                 )
             except Exception as e:
                 self.get_logger().warn(f"SAM2 init failed: {e}, falling back to OpenCV")
+                return FishOpenCVDetector()
+        elif detector_type == 'yolo_world':
+            try:
+                detector = FishYOLOWorldDetector(
+                    model_id="yolov8s-world.pt",
+                    device="cuda"
+                )
+                return detector
+            except Exception as e:
+                self.get_logger().warn(f"YOLO-World init failed: {e}, falling back to OpenCV")
                 return FishOpenCVDetector()
         elif detector_type == 'yolo':
             try:
@@ -481,6 +498,21 @@ class FishDetectionNode(Node):
         
         # Run detection
         detection_result = self.detector.detect(cv_image)
+        
+        # VLM Validation for debris
+        if self.vlm_validator:
+            validated_debris = []
+            for det in detection_result.debris_detections:
+                x, y, w, h = det.bbox
+                margin = 15
+                y1, y2 = max(0, y - margin), min(cv_image.shape[0], y + h + margin)
+                x1, x2 = max(0, x - margin), min(cv_image.shape[1], x + w + margin)
+                if y2 > y1 and x2 > x1:
+                    crop = cv_image[y1:y2, x1:x2]
+                    if self.vlm_validator.is_debris(crop):
+                        validated_debris.append(det)
+            detection_result.debris_detections = validated_debris
+
         detection_result.frame_id = state.frame_count
         state.last_detection = detection_result
         
@@ -567,6 +599,14 @@ class FishDetectionNode(Node):
         status_msg.fish_count_suspicious = smoothed_suspicious
         self.pub_status[pool_id].publish(status_msg)
         
+        # Collect debris positions
+        debris_positions = []
+        for det in detection_result.debris_detections:
+            x, y, w, h = det.bbox
+            center_x = x + w // 2
+            center_y = y + h // 2
+            debris_positions.append([center_x, center_y])
+
         # Publish JSON status
         try:
             status_str_msg = String()
@@ -578,6 +618,7 @@ class FishDetectionNode(Node):
                 "fish_type": "sturgeon",
                 "debris_count": debris_count,
                 "max_debris": int(max_debris),
+                "debris_positions": debris_positions,
                 "detector": self.detector.get_name(),
                 "camera_mode": "global" if self.use_global_camera else "per_pool"
             })
