@@ -35,21 +35,63 @@ RAIL_CENTER_R = TANK_RADIUS + WALL_THICKNESS + RAIL_W * 0.5  # = 4.07 m
 RAIL_MOUNT_Z = TANK_INNER_Z + RAIL_H * 0.5  # = 1.53 m
 
 # ── 자율 청소 궤적 파라미터 ──────────────────────────────────────────────────
-RAIL_STEPS = 36          # 360° ÷ 36 = 10° 단위 이동
-ARM_SWEEP_DURATION = 8.0 # 팔이 상단→하단 쓸기까지 걸리는 시간 (초)
-RAIL_MOVE_DURATION = 1.5 # 다음 각도 위치로 이동하는 시간 (초)
+RAIL_STEPS = 18          # 360° ÷ 18 = 20° 단위 이동
+ARM_SWEEP_DURATION = 2.0 # 팔이 상단→하단 쓸기까지 걸리는 시간 (초)
+ARM_HOME_DURATION  = 0.5 # 스윕 완료 후 홈 자세로 이동하는 시간 (초)
+ARM_RESET_DURATION = 0.5 # 홈 자세에서 스윕 시작 자세로 복귀하는 시간 (초)
+RAIL_MOVE_DURATION = 0.4 # 다음 각도 위치로 이동하는 시간 (초)
 
-# 벽면을 향한 기본 자세 (joint 각도, 단위: radian)
-# M1013은 M0609보다 링크가 길어 같은 각도에서 더 멀리 도달
+# 레일 이동 전후 홈 자세 [j1=0, j2=0, j3=90°, j4=0, j5=90°, j6=0]
+ARM_HOME_JOINTS = {
+    "joint_1": 0.0,
+    "joint_2": 0.0,
+    "joint_3": 1.5708,  # 90°
+    "joint_4": 0.0,
+    "joint_5": 1.5708,  # 90°
+    "joint_6": 0.0,
+}
+
+# 벽면을 향한 기본 자세 — SWEEP_J*_TOP 과 동일하게 유지 (일관성)
+# 레일(z=1.53m) 위 로봇이 수조 안쪽 벽을 긁으려면 joint_2가
+# 충분히 음수여야 팔이 벽 위를 넘어 안으로 들어갈 수 있음
+# 초기 자세: [j1=0, j2=0, j3=90°, j4=0, j5=90°, j6=0] (사용자 확인값)
+# 스윕은 아래(j2=1.8) → 위(j2=0.0) 방향
+# joint_3을 1.571→1.40으로 줄여 블레이드가 벽면 표면에만 닿고 뚫지 않도록
 WALL_REACH_JOINTS = {
-    "joint_2": -1.0,    # shoulder: 앞으로 내림
-    "joint_3":  1.5,    # elbow: 굽힘
+    "joint_2":  0.0,    # = SWEEP_J2_TOP  (벽면 상단)
+    "joint_3":  1.40,   # 90°→80° 로 줄여 penetration 방지
     "joint_4":  0.0,
-    "joint_5":  0.5,    # wrist: 벽면 수직
+    "joint_5":  1.571,  # 90° = π/2 유지
     "joint_6":  0.0,
 }
 
-# 스윕 시 joint_2 범위 (상단→하단)
-# M1013 링크 길이가 더 길므로 joint_2 범위를 넓게 잡음
-SWEEP_J2_TOP    = -1.3  # 벽면 상단 (mount 높이에서 위로 약간)
-SWEEP_J2_BOTTOM = -0.2  # 벽면 하단 (바닥 근처까지)
+# 스윕 방향: 아래(BOTTOM) → 위(TOP)
+# joint_2: 양수 클수록 팔이 안쪽/아래, 0에 가까울수록 위쪽
+SWEEP_J2_TOP    =  0.0   # 벽면 상단 (스윕 종료 위치)
+SWEEP_J2_BOTTOM =  1.8   # 벽면 하단 (스윕 시작 위치, 필요 시 조정)
+
+# 상단 자세 보정
+SWEEP_J3_TOP    =  1.40   # 80° (penetration 방지)
+SWEEP_J5_TOP    =  1.571  # 90°
+
+# 하단 자세 보정
+SWEEP_J3_BOTTOM =  1.40   # 동일하게 유지 (일정한 벽 거리)
+SWEEP_J5_BOTTOM =  1.0    # wrist 각도 보정
+
+# ── 스크레이퍼(긁개) 도구 ────────────────────────────────────────────────────
+# M1013 USD default prim이 "m1013" 컨테이너이므로 상대 경로로 지정
+SCRAPER_ATTACH_LINK = "m1013/link_6"
+
+# 블레이드 치수 (m)
+SCRAPER_BLADE_WIDTH  = 0.20   # Y 방향 (벽면 수평 폭)
+SCRAPER_BLADE_HEIGHT = 0.15   # Z 방향 (벽면 수직 높이)
+SCRAPER_BLADE_THICK  = 0.012  # X 방향 (블레이드 두께)
+
+# ── 벽면 스윕 IK 런타임 보정 파라미터 ────────────────────────────────────────
+# 블레이드 팁 ~ link_6 원점 간 거리 (link_6 로컬 +Z 방향, 단위 m)
+# 넥 300mm + 팬플레이트 56mm + 블레이드 15mm 끝단 = 371mm ≈ 0.378m
+SCRAPER_TOOL_Z = 0.378
+
+# 런타임 보정 샘플 수 (물리 프레임 기준, 프레임당 1샘플 읽기)
+# 23 = 3(부호 탐침) + 20(샘플) → 60fps 기준 약 0.4초
+IK_CAL_N_SAMPLES = 20

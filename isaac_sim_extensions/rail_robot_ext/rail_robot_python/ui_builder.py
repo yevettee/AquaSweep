@@ -22,7 +22,7 @@ from .global_variables import (
 )
 from .scenario import RailRobotScenario
 from .joint_state_bridge import create_bridge
-from .rail_builder import build_rails, build_hinge_bracket, build_revolute_joint
+from .rail_builder import build_rails, build_hinge_bracket, build_revolute_joint, build_scraper_tool
 
 PHYSICS_DT = 1.0 / 60.0
 POOLS_ROOT = "/World/Pools"
@@ -133,9 +133,6 @@ class UIBuilder:
                 xf = UsdGeom.Xform.Define(stage, pool_path)
                 UsdGeom.Xformable(xf).AddTranslateOp().Set(Gf.Vec3d(cx, cy, 0.0))
 
-        if not stage.GetPrimAtPath("/World/Tank").IsValid():
-            World.instance().scene.add_default_ground_plane()
-
         # 수조 상단 원형 레일 메시 생성 (수조 벽 상단에 설치)
         build_rails(stage, POOLS_ROOT)
 
@@ -196,6 +193,9 @@ class UIBuilder:
             joint_path = build_revolute_joint(stage, pool_path, i)
             if joint_path:
                 scenario.set_joint_drive(joint_path)
+
+            # Articulation 로드 완료 후 엔드 이펙터에 스크레이퍼 장착
+            build_scraper_tool(stage, cpath, i, articulation=articulation)
 
             bridge = create_bridge(f"rail_robot_{i}")
             if bridge is not None:

@@ -26,9 +26,24 @@ import math
 
 from pxr import Gf, Sdf, UsdGeom, UsdPhysics, UsdShade
 
+
+def _make_cylinder(stage, path: str, center: tuple, radius: float, height: float,
+                   axis: str = "Z", collision: bool = False) -> UsdGeom.Cylinder:
+    cyl = UsdGeom.Cylinder.Define(stage, path)
+    cyl.CreateRadiusAttr(radius)
+    cyl.CreateHeightAttr(height)
+    cyl.CreateAxisAttr(axis)
+    xf = UsdGeom.Xformable(cyl)
+    xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(*center))
+    if collision:
+        UsdPhysics.CollisionAPI.Apply(cyl.GetPrim())
+    return cyl
+
 from .global_variables import (
     TANK_INNER_Z, TANK_RADIUS, WALL_THICKNESS,
     RAIL_W, RAIL_H, RAIL_CENTER_R, RAIL_MOUNT_Z,
+    SCRAPER_ATTACH_LINK, SCRAPER_BLADE_WIDTH, SCRAPER_BLADE_HEIGHT, SCRAPER_BLADE_THICK,
 )
 
 # ── 레일 메시 파라미터 ────────────────────────────────────────────────────────
@@ -195,72 +210,175 @@ def build_hinge_bracket(stage, carriage_path: str, pool_idx: int) -> None:
 # ── RevoluteJoint 경첩 조인트 ────────────────────────────────────────────────
 
 def build_revolute_joint(stage, pool_path: str, pool_idx: int) -> str:
-    """레일 중심축(Z)을 pivot으로 하는 RevoluteJoint를 생성한다.
+    """레일 회전 제어 — kinematic Xform 방식 사용.
 
-    구조:
-      world (body0 미설정 = world anchor)
-          ↕  RevoluteJoint (Z축)
-      RailRobot/Carriage  (pool-local RAIL_CENTER_R 위치, dynamic rigid body)
-
-    body0를 static/kinematic RigidBody로 지정하면 articulation body1과 함께
-    "cannot create joint between static bodies" 오류가 발생하므로 body0는 미설정.
-    DriveAPI 실패 시 scenario.set_rail_angle() kinematic fallback이 동작한다.
-
-    Returns:
-        joint_prim_path (str)  — 없으면 빈 문자열
+    Carriage 안에 M1013 ArticulationRootAPI가 있어 외부 RevoluteJoint와
+    body 충돌이 발생하므로 Joint를 생성하지 않는다.
+    캐리지 이동은 scenario.set_rail_angle()의 kinematic Xform 설정으로 처리.
     """
-    joint_path  = f"{pool_path}/RailHinge"
-    pivot_path  = f"{pool_path}/RailPivot"
-    carriage_path = f"{pool_path}/RailRobot/Carriage"
+    return ""
 
-    if stage.GetPrimAtPath(joint_path).IsValid():
-        return joint_path
 
-    if not stage.GetPrimAtPath(carriage_path).IsValid():
-        return ""
+# ── Toolspar 스타일 스크레이퍼 ───────────────────────────────────────────────
+# link_6 로컬 프레임: +Z = 벽 방향 (날 끝), +Y = 수평, +X = 수직
+#
+# 구조:
+#   -Z: 검정 고무 캡 + 딤플 그립 핸들
+#    0: 크롬 칼라 (link_6 플랜지)
+#   +Z: 짧은 넥 → 부채꼴 알루미늄 플레이트(넥 쪽 좁고 날 쪽 넓음) → 쐐기 블레이드
 
-    # ── RailPivot: pool-local 원점(z=RAIL_MOUNT_Z), 순수 Xform (world anchor) ─
-    # RigidBodyAPI를 붙이지 않음 — kinematic body + articulation 조합이면
-    # PhysX가 "cannot create joint between static bodies" 오류를 냄.
-    # body0Rel 미설정 → PhysX가 world 고정으로 처리함.
-    pivot_prim = stage.DefinePrim(pivot_path, "Xform")
-    xf = UsdGeom.Xformable(pivot_prim)
-    xf.ClearXformOpOrder()
-    xf.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, RAIL_MOUNT_Z))
+_BLACK   = (0.06, 0.06, 0.06)   # 검정 고무 핸들
+_CHROME  = (0.78, 0.78, 0.81)   # 크롬 금속
+_SILVER  = (0.74, 0.74, 0.76)   # 알루미늄 헤드 플레이트
+_BLADE_C = (0.88, 0.88, 0.90)   # 광택 블레이드 (은색)
 
-    # ── RevoluteJoint ─────────────────────────────────────────────────────────
-    joint = UsdPhysics.RevoluteJoint.Define(stage, joint_path)
-    joint.CreateAxisAttr("Z")
 
-    # body0 미설정 = world anchor, body1 = Carriage (회전체)
-    joint.CreateBody1Rel().SetTargets([carriage_path])
+def build_scraper_tool(stage, carriage_path: str, pool_idx: int, articulation=None) -> None:
+    """link_6 엔드 이펙터에 Toolspar 스타일 스크레이퍼를 장착한다.
 
-    # Joint frame 위치:
-    #   body0 (world): pool-local 원점에서 z=RAIL_MOUNT_Z
-    #   body1 local: 캐리지 중심에서 레일 반경만큼 pivot 방향
-    #                yaw=0 일 때 캐리지는 world (+RAIL_CENTER_R, 0, RAIL_MOUNT_Z)
-    #                → body1 local offset = (-RAIL_CENTER_R, 0, 0)
-    joint.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, RAIL_MOUNT_Z))
-    joint.CreateLocalPos1Attr().Set(Gf.Vec3f(-RAIL_CENTER_R, 0.0, 0.0))
-    joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
-    joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0, 0.0, 0.0, 0.0))
+    구조 (+Z = 벽 방향):
+      ●   ← 검정 고무 캡
+      ║║║ ← 딤플 그립 (검정 고무, 6개 텍스처 링)
+      ╠   ← 크롬 칼라 (광택)
+      ║   ← 넥 (크롬)
+      ◁▷  ← 부채꼴 알루미늄 플레이트 (트라페조이드, 넥 쪽 좁음 → 날 쪽 넓음)
+      ○   ← 검정 조임 노브 (플레이트 면에 돌출)
+      ═   ← 쐐기형 블레이드 (은색, collision ON)
+    """
+    import carb
 
-    # 회전 한계 없음 (360° 자유)
-    joint.CreateLowerLimitAttr(-1e10)
-    joint.CreateUpperLimitAttr( 1e10)
+    candidates = [SCRAPER_ATTACH_LINK, "m1013/tool0", "m1013/link_6", "m1013/link_5"]
+    attach_path = None
+    for name in candidates:
+        path = f"{carriage_path}/{name}"
+        if stage.GetPrimAtPath(path).IsValid():
+            attach_path = path
+            carb.log_warn(f"[rail_robot] pool_{pool_idx} 스크레이퍼 장착: {path}")
+            break
+    if attach_path is None:
+        carb.log_warn(f"[rail_robot] pool_{pool_idx} 링크 탐색 실패 — carriage fallback")
+        attach_path = carriage_path
 
-    # ── Angular Position Drive (각도 목표값으로 제어) ──────────────────────────
-    try:
-        drive = UsdPhysics.DriveAPI.Apply(joint.GetPrim(), "angular")
-        drive.CreateTypeAttr("position")
-        drive.CreateTargetPositionAttr(0.0)   # 초기 각도 0°
-        drive.CreateStiffnessAttr(1e5)        # 위치 강성
-        drive.CreateDampingAttr(1e3)          # 댐핑
-        drive.CreateMaxForceAttr(5e3)
-    except Exception:
-        pass  # DriveAPI 미지원 환경에서도 조인트 자체는 유지
+    tool_root = f"{attach_path}/ScraperTool"
+    if stage.GetPrimAtPath(tool_root).IsValid():
+        return
 
-    return joint_path
+    stage.DefinePrim(tool_root, "Xform")
+    pool_path = "/".join(carriage_path.split("/")[:-2])
+    _ensure_materials_scope(stage, pool_path)
+
+    def _cyl(name, center, radius, height, color, roughness=0.35, metallic=0.05, axis="Z"):
+        p = _make_cylinder(stage, f"{tool_root}/{name}", center, radius, height, axis)
+        _bind_material(stage, p.GetPrim(),
+                       f"{pool_path}/Materials/Sc{name}_{pool_idx}",
+                       color, roughness, metallic)
+
+    # ── 1. 검정 고무 캡 (둥근 끝) ─────────────────────────────────────────────
+    _cyl("Cap", center=(0.0, 0.0, -0.192), radius=0.023, height=0.028,
+         color=_BLACK, roughness=0.65, metallic=0.0)
+
+    # ── 2. 그립 핸들 본체 (검정 고무) ────────────────────────────────────────
+    _cyl("Grip", center=(0.0, 0.0, -0.100), radius=0.018, height=0.150,
+         color=_BLACK, roughness=0.75, metallic=0.0)
+
+    # 딤플 밴드 — 그립 텍스처 표현 (6개 링, 미세 돌출)
+    for i, gz in enumerate([-0.168, -0.138, -0.108, -0.078, -0.048, -0.018]):
+        _cyl(f"Ring{i}", center=(0.0, 0.0, gz), radius=0.0205, height=0.006,
+             color=_BLACK, roughness=0.80, metallic=0.0)
+
+    # ── 3. 크롬 칼라 (손잡이→헤드, 광택 금속) ────────────────────────────────
+    _cyl("Collar", center=(0.0, 0.0, -0.006), radius=0.026, height=0.022,
+         color=_CHROME, roughness=0.06, metallic=0.96)
+
+    # ── 4. 넥 30cm (크롬, 칼라→플레이트 연결) ───────────────────────────────
+    # 칼라 끝 z ≈ 0.005 → 넥 중심 = 0.005 + 0.150 = 0.155, 끝 = 0.305
+    _cyl("Neck", center=(0.0, 0.0, 0.155), radius=0.012, height=0.300,
+         color=_CHROME, roughness=0.10, metallic=0.90)
+
+    # ── 5. 부채꼴 알루미늄 플레이트 (트라페조이드 메시) ───────────────────────
+    # 좌표계: +Z = 벽(날 방향), +Y = 수평, +X = 수직
+    # 플레이트는 X 방향으로 얇고, Z 방향으로 깊이가 있으며,
+    # Y 방향으로 넥 쪽(z_near)은 좁고 날 쪽(z_far)은 넓다.
+    z_near  = 0.307   # 플레이트 시작 (넥 끝, 칼라 z0.005 + 넥 0.300 + 2mm 여유)
+    z_far   = 0.363   # 플레이트 끝 (날 부착 면, 56mm 깊이 유지)
+    hx      = 0.004   # 판 두께 반값 (총 8mm)
+    hy_near = 0.022   # 넥 쪽 Y 반폭 (4.4cm)
+    hy_far  = 0.180   # 날 쪽 Y 반폭 (36cm)
+
+    # 트라페조이드 프리즘 8 정점 (+X/-X 면 각 4개)
+    plate_pts = [
+        Gf.Vec3f(+hx, -hy_near, z_near),  # 0
+        Gf.Vec3f(+hx, +hy_near, z_near),  # 1
+        Gf.Vec3f(+hx, -hy_far,  z_far),   # 2
+        Gf.Vec3f(+hx, +hy_far,  z_far),   # 3
+        Gf.Vec3f(-hx, -hy_near, z_near),  # 4
+        Gf.Vec3f(-hx, +hy_near, z_near),  # 5
+        Gf.Vec3f(-hx, -hy_far,  z_far),   # 6
+        Gf.Vec3f(-hx, +hy_far,  z_far),   # 7
+    ]
+    plate_fvc = [4, 4, 4, 4, 4, 4]
+    plate_fvi = [
+        0, 2, 3, 1,   # +X 면 (한쪽 평면)
+        4, 5, 7, 6,   # -X 면 (반대 평면)
+        0, 1, 5, 4,   # z_near 면 (좁은 끝, 넥 쪽)
+        2, 6, 7, 3,   # z_far 면 (넓은 끝, 날 쪽)
+        0, 4, 6, 2,   # -Y 경사 측면
+        1, 3, 7, 5,   # +Y 경사 측면
+    ]
+    plate_mesh = UsdGeom.Mesh.Define(stage, f"{tool_root}/Plate")
+    plate_mesh.CreatePointsAttr().Set(plate_pts)
+    plate_mesh.CreateFaceVertexCountsAttr().Set(plate_fvc)
+    plate_mesh.CreateFaceVertexIndicesAttr().Set(plate_fvi)
+    plate_mesh.CreateDoubleSidedAttr().Set(False)
+    plate_mesh.CreateSubdivisionSchemeAttr().Set("none")
+    UsdGeom.Xformable(plate_mesh).ClearXformOpOrder()
+    _bind_material(stage, plate_mesh.GetPrim(),
+                   f"{pool_path}/Materials/ScPlate_{pool_idx}",
+                   _SILVER, 0.15, 0.88)
+
+    # ── 6. 검정 조임 노브 (플레이트 +X 면에 돌출) ────────────────────────────
+    knob_z = z_near + (z_far - z_near) * 0.28   # 플레이트 앞쪽 28% 위치
+    _cyl("Knob", center=(hx + 0.006, 0.0, knob_z), radius=0.013, height=0.012,
+         color=_BLACK, roughness=0.60, metallic=0.0, axis="X")
+
+    # ── 7. 쐐기형 블레이드 (날 끝으로 수렴, collision ON) ────────────────────
+    # 플레이트 z_far 면에서 z_tip 으로 X 두께 ±hx_b → ±t 로 수렴
+    z_b  = z_far
+    z_t  = z_far + 0.015   # 15mm 돌출
+    hx_b = hx + 0.002      # 블레이드 기저 X 반값 (판보다 약간 큼)
+    hy_b = hy_far + 0.005  # 블레이드 Y 반폭
+    t    = 0.0015          # 날 끝 X 반두께
+
+    blade_pts = [
+        Gf.Vec3f(+hx_b, -hy_b, z_b),  # 0
+        Gf.Vec3f(+hx_b, +hy_b, z_b),  # 1
+        Gf.Vec3f(-hx_b, -hy_b, z_b),  # 2
+        Gf.Vec3f(-hx_b, +hy_b, z_b),  # 3
+        Gf.Vec3f(+t,    -hy_b, z_t),  # 4
+        Gf.Vec3f(+t,    +hy_b, z_t),  # 5
+        Gf.Vec3f(-t,    -hy_b, z_t),  # 6
+        Gf.Vec3f(-t,    +hy_b, z_t),  # 7
+    ]
+    blade_fvc = [4, 4, 4, 4, 4, 4]
+    blade_fvi = [
+        2, 0, 1, 3,   # 뒷면 (플레이트 부착)
+        0, 4, 5, 1,   # +X 경사면
+        2, 3, 7, 6,   # -X 경사면
+        4, 6, 7, 5,   # 날 끝 면 (얇음)
+        0, 2, 6, 4,   # -Y 캡
+        1, 5, 7, 3,   # +Y 캡
+    ]
+    blade_mesh = UsdGeom.Mesh.Define(stage, f"{tool_root}/Blade")
+    blade_mesh.CreatePointsAttr().Set(blade_pts)
+    blade_mesh.CreateFaceVertexCountsAttr().Set(blade_fvc)
+    blade_mesh.CreateFaceVertexIndicesAttr().Set(blade_fvi)
+    blade_mesh.CreateDoubleSidedAttr().Set(False)
+    blade_mesh.CreateSubdivisionSchemeAttr().Set("none")
+    UsdGeom.Xformable(blade_mesh).ClearXformOpOrder()
+    UsdPhysics.CollisionAPI.Apply(blade_mesh.GetPrim())
+    _bind_material(stage, blade_mesh.GetPrim(),
+                   f"{pool_path}/Materials/ScBlade_{pool_idx}",
+                   _BLADE_C, 0.08, 0.92)
 
 
 # ── 일괄 빌더 ─────────────────────────────────────────────────────────────────
