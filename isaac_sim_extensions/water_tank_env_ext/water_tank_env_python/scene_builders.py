@@ -332,7 +332,8 @@ def _build_underwater_light(stage, pool_path: str) -> None:
     
     # 수조 형태에 맞춘 원형 조명 (DiskLight)
     light = UsdLux.DiskLight.Define(stage, light_path)
-    light.CreateIntensityAttr(200.0)             # 밝은 조명
+    light.CreateIntensityAttr(90.0)
+    light.CreateExposureAttr(1.0)
     light.CreateColorAttr(Gf.Vec3f(0.95, 0.98, 1.0))  # 차가운 흰색 (수중 느낌)
     light.CreateRadiusAttr(params.TANK_RADIUS)  # 수조 반경에 맞춤
     
@@ -717,9 +718,9 @@ def add_lighting(stage, root: str = "/World/Lighting") -> None:
     ceiling_path = f"{root}/CeilingLight"
     if not stage.GetPrimAtPath(ceiling_path).IsValid():
         ceiling = UsdLux.RectLight.Define(stage, ceiling_path)
-        ceiling.CreateIntensityAttr(1000.0)
+        ceiling.CreateIntensityAttr(100.0)
         ceiling.CreateExposureAttr(1.0)
-        ceiling.CreateColorAttr(cool_white)
+        ceiling.CreateColorTemperatureAttr(500.0)
         ceiling.CreateWidthAttr(params.BUILDING_X * 0.9)
         ceiling.CreateHeightAttr(params.BUILDING_Y * 0.9)
         UsdGeom.Xformable(ceiling).AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 3.0))

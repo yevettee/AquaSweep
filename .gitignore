@@ -53,5 +53,9 @@ Thumbs.db
 water_ws/src/aqua_detection/runs/
 water_ws/src/aqua_detection/dataset_replicator/
 water_ws/src/aqua_detection/dataset/
+runs/
+water_ws/src/aqua_detection/dataset_replicator_seg/
+yolo26n.pt
+yolov8n-seg.pt
 
 # Keep: models/*.pt (final trained models like yolov8_fish_species.pt)

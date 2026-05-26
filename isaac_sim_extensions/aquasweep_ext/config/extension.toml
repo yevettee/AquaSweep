@@ -22,6 +22,7 @@ writeTarget.kit = true
 # (RUN time), but declaring them here guarantees load order anyway.
 "top_cam_ext" = {}
 "under_cam_ext" = {}
+"top_cam_ext" = {}
 
 [[python.module]]
 name = "aquasweep_python"
