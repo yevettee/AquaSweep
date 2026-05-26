@@ -287,8 +287,13 @@ class FishDetectionNode(Node):
                     imgsz=640,
                     half=True,
                     use_tracking=False,  # Disabled - slow rendering breaks tracking
+                    debris_min_area=3,    # OpenCV blob detector
+                    debris_max_area=8,
+                    debris_debug=True,    # Print debris keypoint info for tuning
                 )
                 detector.warmup()
+                if not detector._initialized:
+                    raise RuntimeError("YOLO model components not installed or model file missing")
                 return detector
             except Exception as e:
                 self.get_logger().warn(f"YOLO init failed: {e}, falling back to OpenCV")

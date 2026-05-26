@@ -19,6 +19,7 @@ writeTarget.kit = true
 "debris_env_ext" = {}
 "underwater_robot_ext" = {}
 "under_cam_ext" = {}
+"top_cam_ext" = {}
 
 [[python.module]]
 name = "aquasweep_python"

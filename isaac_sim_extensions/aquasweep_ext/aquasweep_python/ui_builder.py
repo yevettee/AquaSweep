@@ -298,7 +298,7 @@ class UIBuilder:
             suction.reset()
         reset_center_trail_debug()
 
-        _set_viewport_lighting_mode("camera")
+        _set_viewport_lighting_mode("stage")
 
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True

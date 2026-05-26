@@ -1,10 +1,13 @@
-"""YOLOv8-based fish/debris detector.
+"""YOLOv8-based fish detector with OpenCV debris detection.
 
-Track B: Learned species classification.
-Uses trained YOLOv8 model for fish species detection.
-Does NOT classify alive/dead - that's handled by DINOv2.
+Hybrid approach:
+- Fish detection: YOLO model (yolov8_fish_species.pt) for sturgeon/salmon
+- Debris detection: OpenCV SimpleBlobDetector for small particles
+
+Alive/suspicious classification is handled by contrast-based analysis.
 """
 
+import cv2
 import numpy as np
 from typing import List, Optional, Tuple
 from pathlib import Path
@@ -33,44 +36,83 @@ def _load_yolo():
     return _yolo_available
 
 
-class FishYOLODetector(BaseDetector):
-    """YOLOv8-based fish/debris detector.
+def _find_model_path(model_name: str) -> Optional[Path]:
+    """Find model file in common locations."""
+    direct = Path(model_name)
+    if direct.exists():
+        return direct
     
-    Trained to classify fish species (sturgeon, salmon, debris).
-    Does NOT classify alive/dead - use DINOv2 for status.
+    # Common search locations
+    search_paths = [
+        Path(__file__).parent.parent.parent / "models" / model_name,
+        Path.cwd() / "models" / model_name,
+    ]
+    
+    # Search up directory tree
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        candidate = parent / "models" / model_name
+        if candidate.exists():
+            return candidate
+        src_candidate = parent / "src" / "aqua_detection" / "models" / model_name
+        if src_candidate.exists():
+            return src_candidate
+    
+    for path in search_paths:
+        if path.exists():
+            return path
+    
+    return None
+
+
+class FishYOLODetector(BaseDetector):
+    """Hybrid detector: YOLO for fish + OpenCV for debris.
+    
+    - Fish detection: YOLO model for sturgeon/salmon bbox
+    - Debris detection: OpenCV SimpleBlobDetector for small particles
+    
+    Alive/suspicious classification uses contrast-based analysis.
     
     Requirements:
         pip install ultralytics
-        Trained model at: models/yolov8_fish_species.pt
+        Model at: models/yolov8_fish_species.pt
     """
     
-    # Class mapping (must match training)
-    CLASS_NAMES = {
+    # Fish model class mapping
+    FISH_CLASS_NAMES = {
         0: "sturgeon",
         1: "salmon",
-        2: "debris",
+        2: "debris",  # ignored, use OpenCV instead
     }
     
     def __init__(
         self,
         model_path: str = "models/yolov8_fish_species.pt",
+        debris_model_path: str = None,  # deprecated, kept for compatibility
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
         device: str = "cuda",
         imgsz: int = 640,
         half: bool = True,
         use_tracking: bool = True,
+        debris_min_area: int = 3,
+        debris_max_area: int = 8,
+        debris_debug: bool = False,
     ):
-        """Initialize YOLO detector.
+        """Initialize hybrid YOLO+OpenCV detector.
         
         Args:
-            model_path: Path to trained YOLOv8 model
+            model_path: Path to fish detection model
+            debris_model_path: Deprecated, ignored (OpenCV used instead)
             confidence_threshold: Detection confidence threshold
             iou_threshold: NMS IoU threshold
             device: "cuda" or "cpu"
-            imgsz: Inference image size (should match training)
-            half: Use FP16 inference for faster speed
+            imgsz: Inference image size
+            half: Use FP16 inference
             use_tracking: Use ByteTrack for persistent fish IDs
+            debris_min_area: Minimum blob area for debris (pixels)
+            debris_max_area: Maximum blob area for debris (pixels)
+            debris_debug: Print debris detection details for tuning
         """
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
@@ -79,81 +121,214 @@ class FishYOLODetector(BaseDetector):
         self.imgsz = imgsz
         self.half = half
         self.use_tracking = use_tracking
+        self.debris_min_area = debris_min_area
+        self.debris_max_area = debris_max_area
+        self.debris_debug = debris_debug
         
-        self._model = None
+        self._fish_model = None
+        self._blob_detector = None
         self._initialized = False
         self._warmed_up = False
     
     def _initialize(self) -> bool:
-        """Lazy initialization of YOLO model."""
+        """Lazy initialization of YOLO fish model and OpenCV blob detector."""
         if self._initialized:
             return True
+        
+        global _yolo_available
+        if _yolo_available is False:
+            return False
         
         if not _load_yolo():
             print("YOLO (ultralytics) not available. Install with: pip install ultralytics")
             return False
         
-        model_path = Path(self.model_path)
-        if not model_path.exists():
-            # Try alternative paths
-            alt_paths = [
-                Path(__file__).parent.parent.parent / "models" / "yolov8_fish_species.pt",
-                Path.cwd() / "models" / "yolov8_fish_species.pt",
-            ]
-            
-            # Search up directory tree for models folder (works from both src and install)
-            current = Path(__file__).resolve()
-            for parent in current.parents:
-                candidate = parent / "models" / "yolov8_fish_species.pt"
-                if candidate.exists():
-                    alt_paths.insert(0, candidate)
-                    break
-                # Also check src/aqua_detection/models for ROS2 install case
-                src_candidate = parent / "src" / "aqua_detection" / "models" / "yolov8_fish_species.pt"
-                if src_candidate.exists():
-                    alt_paths.insert(0, src_candidate)
-                    break
-            
-            for alt in alt_paths:
-                if alt.exists():
-                    model_path = alt
-                    break
-        
-        if not model_path.exists():
-            print(f"YOLO model not found at {self.model_path}")
-            print("Train a model first with: ./scripts/fish_one_click_train.sh")
+        # Load fish model
+        fish_path = _find_model_path(Path(self.model_path).name)
+        if fish_path is None:
+            print(f"Fish YOLO model not found: {self.model_path}")
             return False
         
         try:
-            self._model = _YOLO(str(model_path))
-            self._model.to(self.device)
+            self._fish_model = _YOLO(str(fish_path))
+            self._fish_model.to(self.device)
+            print(f"Loaded fish model: {fish_path}")
+            
+            # Initialize blob detector for debris (tuned for low contrast)
+            self._blob_detector = self._create_blob_detector()
+            print(f"OpenCV blob detector (area: {self.debris_min_area}-{self.debris_max_area}px)")
+            
             self._initialized = True
             return True
         except Exception as e:
-            print(f"Failed to load YOLO model: {e}")
+            print(f"Failed to initialize detector: {e}")
             return False
     
+    def _create_blob_detector(self) -> cv2.SimpleBlobDetector:
+        """Create blob detector for debris detection.
+        
+        Narrow threshold range (10-30) focuses on subtle differences.
+        """
+        params = cv2.SimpleBlobDetector_Params()
+        
+        # Threshold settings - narrow range for subtle contrast
+        params.minThreshold = 10
+        params.maxThreshold = 30
+        params.thresholdStep = 5
+        
+        # Filter by area
+        params.filterByArea = True
+        params.minArea = self.debris_min_area
+        params.maxArea = self.debris_max_area
+        
+        # Disable other filters
+        params.filterByCircularity = False
+        params.filterByConvexity = False
+        params.filterByInertia = False
+        params.filterByColor = False
+        
+        return cv2.SimpleBlobDetector_create(params)
+    
     def get_name(self) -> str:
-        return "yolo"
+        return "yolo_opencv_hybrid"
     
     def warmup(self):
-        """Warmup model with dummy inference to avoid first-frame latency."""
+        """Warmup YOLO model with dummy inference."""
         if self._warmed_up:
             return
         if not self._initialize():
             return
         try:
             dummy = np.zeros((self.imgsz, self.imgsz, 3), dtype=np.uint8)
-            self._model(dummy, imgsz=self.imgsz, half=self.half, verbose=False)
+            self._fish_model(dummy, imgsz=self.imgsz, half=self.half, verbose=False)
             self._warmed_up = True
-            print(f"YOLO model warmed up (imgsz={self.imgsz}, half={self.half})")
+            print(f"YOLO+OpenCV hybrid detector warmed up (imgsz={self.imgsz})")
         except Exception as e:
             print(f"YOLO warmup failed: {e}")
     
-    def detect(self, image: np.ndarray) -> DetectionResult:
-        """Detect fish and debris using YOLOv8.
+    def _run_fish_model(self, image: np.ndarray, tracking: bool = False, persist: bool = True) -> List[FishDetection]:
+        """Run fish model and extract fish detections only."""
+        fish_detections = []
         
-        If use_tracking is enabled, uses ByteTrack for persistent IDs.
+        try:
+            if tracking:
+                results = self._fish_model.track(
+                    image,
+                    conf=self.confidence_threshold,
+                    iou=self.iou_threshold,
+                    imgsz=self.imgsz,
+                    half=self.half,
+                    persist=persist,
+                    verbose=False,
+                )
+            else:
+                results = self._fish_model(
+                    image,
+                    conf=self.confidence_threshold,
+                    iou=self.iou_threshold,
+                    imgsz=self.imgsz,
+                    half=self.half,
+                    verbose=False,
+                )
+        except Exception as e:
+            print(f"Fish model inference failed: {e}")
+            return fish_detections
+        
+        for result in results:
+            boxes = result.boxes
+            if boxes is None:
+                continue
+            
+            for i in range(len(boxes)):
+                xyxy = boxes.xyxy[i].cpu().numpy()
+                x1, y1, x2, y2 = map(int, xyxy)
+                w, h = x2 - x1, y2 - y1
+                
+                class_id = int(boxes.cls[i].cpu().numpy())
+                confidence = float(boxes.conf[i].cpu().numpy())
+                class_name = self.FISH_CLASS_NAMES.get(class_id, "unknown")
+                
+                # Skip debris class from fish model (use debris model instead)
+                if class_name == "debris":
+                    continue
+                
+                det = FishDetection(
+                    bbox=(x1, y1, w, h),
+                    species=class_name,
+                    confidence=confidence,
+                )
+                
+                # Get tracking ID if available
+                if tracking and boxes.id is not None:
+                    det._track_id = int(boxes.id[i].cpu().numpy())
+                
+                fish_detections.append(det)
+        
+        return fish_detections
+    
+    def _run_debris_opencv(self, image: np.ndarray, debug: bool = False) -> List[DebrisDetection]:
+        """Detect debris using SimpleBlobDetector.
+        
+        Args:
+            image: BGR image from camera
+            debug: If True, print keypoint details for tuning
+            
+        Returns:
+            List of DebrisDetection objects
+        """
+        debris_detections = []
+        
+        if self._blob_detector is None:
+            return debris_detections
+        
+        try:
+            # Convert to grayscale
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            
+            # Light blur to reduce noise
+            blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+            
+            # Detect blobs
+            keypoints = self._blob_detector.detect(blurred)
+            
+            if debug and keypoints:
+                print(f"[Debris] Found {len(keypoints)} blobs:")
+                for i, kp in enumerate(keypoints[:10]):  # Show first 10
+                    # Get pixel value at keypoint location
+                    px, py = int(kp.pt[0]), int(kp.pt[1])
+                    if 0 <= py < gray.shape[0] and 0 <= px < gray.shape[1]:
+                        pixel_val = gray[py, px]
+                        # Get local background (5x5 neighborhood mean)
+                        y1, y2 = max(0, py-5), min(gray.shape[0], py+6)
+                        x1, x2 = max(0, px-5), min(gray.shape[1], px+6)
+                        bg_val = np.mean(gray[y1:y2, x1:x2])
+                        contrast = abs(float(pixel_val) - bg_val)
+                        print(f"  [{i}] pos=({px},{py}) size={kp.size:.1f} "
+                              f"pixel={pixel_val} bg={bg_val:.1f} contrast={contrast:.1f}")
+            
+            # Convert keypoints to DebrisDetection
+            for kp in keypoints:
+                x, y = int(kp.pt[0]), int(kp.pt[1])
+                size = max(int(kp.size), 4)  # minimum 4px for visibility
+                
+                # Create bounding box centered on keypoint
+                x1 = max(0, x - size // 2)
+                y1 = max(0, y - size // 2)
+                
+                debris_detections.append(DebrisDetection(
+                    bbox=(x1, y1, size, size),
+                    confidence=0.7,
+                ))
+        except Exception as e:
+            print(f"OpenCV debris detection failed: {e}")
+        
+        return debris_detections
+    
+    def detect(self, image: np.ndarray) -> DetectionResult:
+        """Detect fish (YOLO) and debris (OpenCV).
+        
+        - Fish: YOLO model for sturgeon/salmon detection
+        - Debris: OpenCV blob detection for small particles
         
         Args:
             image: BGR image from camera
@@ -161,62 +336,15 @@ class FishYOLODetector(BaseDetector):
         Returns:
             DetectionResult with fish and debris detections
         """
-        # Use tracking mode for persistent IDs
         if self.use_tracking:
             return self.detect_with_tracking(image)
         
         if not self._initialize():
             return DetectionResult()
         
-        # Run inference with optimized parameters
-        try:
-            results = self._model(
-                image,
-                conf=self.confidence_threshold,
-                iou=self.iou_threshold,
-                imgsz=self.imgsz,
-                half=self.half,
-                verbose=False,
-            )
-        except Exception as e:
-            print(f"YOLO inference failed: {e}")
-            return DetectionResult()
-        
-        fish_detections = []
-        debris_detections = []
-        
-        # Process results
-        for result in results:
-            boxes = result.boxes
-            
-            if boxes is None:
-                continue
-            
-            for i in range(len(boxes)):
-                # Get box coordinates (xyxy format)
-                xyxy = boxes.xyxy[i].cpu().numpy()
-                x1, y1, x2, y2 = map(int, xyxy)
-                w, h = x2 - x1, y2 - y1
-                
-                # Get class and confidence
-                class_id = int(boxes.cls[i].cpu().numpy())
-                confidence = float(boxes.conf[i].cpu().numpy())
-                
-                # Map class ID to name
-                class_name = self.CLASS_NAMES.get(class_id, "unknown")
-                
-                if class_name == "debris":
-                    debris_detections.append(DebrisDetection(
-                        bbox=(x1, y1, w, h),
-                        confidence=confidence,
-                    ))
-                else:
-                    # Fish detection (sturgeon, salmon, etc.)
-                    fish_detections.append(FishDetection(
-                        bbox=(x1, y1, w, h),
-                        species=class_name,
-                        confidence=confidence,
-                    ))
+        # YOLO for fish, OpenCV for debris
+        fish_detections = self._run_fish_model(image, tracking=False)
+        debris_detections = self._run_debris_opencv(image, debug=self.debris_debug)
         
         return DetectionResult(
             fish_detections=fish_detections,
@@ -228,9 +356,7 @@ class FishYOLODetector(BaseDetector):
         image: np.ndarray,
         persist: bool = True
     ) -> DetectionResult:
-        """Detect with built-in YOLO tracking.
-        
-        Uses ByteTrack or BoT-SORT for tracking.
+        """Detect with tracking for fish, OpenCV for debris.
         
         Args:
             image: BGR image
@@ -242,58 +368,9 @@ class FishYOLODetector(BaseDetector):
         if not self._initialize():
             return DetectionResult()
         
-        try:
-            results = self._model.track(
-                image,
-                conf=self.confidence_threshold,
-                iou=self.iou_threshold,
-                imgsz=self.imgsz,
-                half=self.half,
-                persist=persist,
-                verbose=False,
-            )
-        except Exception as e:
-            print(f"YOLO tracking failed: {e}")
-            return self.detect(image)
-        
-        fish_detections = []
-        debris_detections = []
-        
-        for result in results:
-            boxes = result.boxes
-            
-            if boxes is None:
-                continue
-            
-            for i in range(len(boxes)):
-                xyxy = boxes.xyxy[i].cpu().numpy()
-                x1, y1, x2, y2 = map(int, xyxy)
-                w, h = x2 - x1, y2 - y1
-                
-                class_id = int(boxes.cls[i].cpu().numpy())
-                confidence = float(boxes.conf[i].cpu().numpy())
-                class_name = self.CLASS_NAMES.get(class_id, "unknown")
-                
-                # Get tracking ID if available
-                track_id = None
-                if boxes.id is not None:
-                    track_id = int(boxes.id[i].cpu().numpy())
-                
-                if class_name == "debris":
-                    debris_detections.append(DebrisDetection(
-                        bbox=(x1, y1, w, h),
-                        confidence=confidence,
-                    ))
-                else:
-                    det = FishDetection(
-                        bbox=(x1, y1, w, h),
-                        species=class_name,
-                        confidence=confidence,
-                    )
-                    # Store track ID in detection for later use
-                    if track_id is not None:
-                        det._track_id = track_id
-                    fish_detections.append(det)
+        # YOLO with tracking for fish, OpenCV for debris
+        fish_detections = self._run_fish_model(image, tracking=True, persist=persist)
+        debris_detections = self._run_debris_opencv(image, debug=self.debris_debug)
         
         return DetectionResult(
             fish_detections=fish_detections,
