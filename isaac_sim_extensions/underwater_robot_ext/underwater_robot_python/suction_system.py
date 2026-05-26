@@ -53,11 +53,12 @@ class SuctionSystem:
 
     def __init__(
         self,
-        suction_radius: float = 0.8,
-        collection_radius: float = 0.30,
+        suction_radius: float = 3.0,
+        collection_radius: float = 0.5,
         attraction_speed: float = 8.0,
         nozzle_offset: float = 0.35,
         particles_prim_path: str = DEFAULT_PARTICLES_PRIM_PATH,
+        pool_center: tuple = (0.0, 0.0),
     ):
         """
         Args:
@@ -67,12 +68,15 @@ class SuctionSystem:
             nozzle_offset     : 로봇 중심에서 앞쪽 흡입구까지 오프셋 (m)
             particles_prim_path : 흡입 대상 파티클 Points prim 경로
                                   (per-pool refactor 이후 Pool 별로 별도 경로)
+            pool_center       : 수조 월드 위치 (x, y). GPU 파티클 위치가 로컬 프레임으로
+                                기록되므로 로봇 월드 위치와 비교하려면 이 값을 더해야 함.
         """
         self.suction_radius    = suction_radius
         self.collection_radius = collection_radius
         self.attraction_speed  = attraction_speed
         self.nozzle_offset     = nozzle_offset
         self.particles_prim_path = particles_prim_path
+        self.pool_center       = (float(pool_center[0]), float(pool_center[1]))
         self._collected        = 0
         self._step_count       = 0
 
@@ -124,7 +128,9 @@ class SuctionSystem:
             if pos[2] < _HIDDEN_Z * 0.5:
                 continue
 
-            p_xy  = np.array([pos[0], pos[1]], dtype=float)
+            # GPU 파티클 위치는 로컬 프레임 → 월드 좌표로 변환
+            p_xy  = np.array([pos[0] + self.pool_center[0],
+                              pos[1] + self.pool_center[1]], dtype=float)
             diff  = nozzle_xy - p_xy
             dist  = float(np.linalg.norm(diff))
 

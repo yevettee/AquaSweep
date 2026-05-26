@@ -231,7 +231,10 @@ class UIBuilder:
         self._debris_scenario = DebrisScenario()
         # Each pool has its own debris particles path
         self._suctions = [
-            SuctionSystem(particles_prim_path=f"/World/Pools/Pool_{i+1}/Debris/Particles")
+            SuctionSystem(
+                particles_prim_path=f"/World/Pools/Pool_{i+1}/Debris/Particles",
+                pool_center=_POOL_CENTERS[i],
+            )
             for i in range(_NUM_ROBOTS)
         ]
         # Per-robot thruster scenarios (initialized in _setup_scenario)
