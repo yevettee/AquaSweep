@@ -47,7 +47,7 @@ class FishYOLODetector(BaseDetector):
     # Class mapping (must match training)
     CLASS_NAMES = {
         0: "sturgeon",
-        1: "salmon",
+        1: "dead_sturgeon",
         2: "debris",
     }
     
@@ -88,6 +88,10 @@ class FishYOLODetector(BaseDetector):
         """Lazy initialization of YOLO model."""
         if self._initialized:
             return True
+        
+        global _yolo_available
+        if _yolo_available is False:
+            return False
         
         if not _load_yolo():
             print("YOLO (ultralytics) not available. Install with: pip install ultralytics")

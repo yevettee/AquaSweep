@@ -52,6 +52,7 @@ from top_camera_python.ros_graph_builder import (
     build_graph as build_top_cam_graph,
     teardown_graph as teardown_top_cam_graph,
     graph_exists as top_cam_graph_exists,
+    revert_camera_and_light_settings,
 )
 from top_camera_python.camera_discovery import discover_top_cameras
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
@@ -430,6 +431,7 @@ class UIBuilder:
         reset_center_trail_debug()
 
         _set_viewport_lighting_mode("stage")  # 고정된 Stage 조명 사용 (Camera Light 비활성화)
+        revert_camera_and_light_settings()
 
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
@@ -448,6 +450,7 @@ class UIBuilder:
     def _on_post_reset(self):
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
+        revert_camera_and_light_settings()
         for suction in self._suctions:
             suction.reset()
         if hasattr(self, "_suction_label"):

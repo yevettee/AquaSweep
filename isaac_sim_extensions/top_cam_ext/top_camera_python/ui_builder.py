@@ -163,6 +163,7 @@ class UIBuilder:
             self._set_status("FAIL: No pools selected.")
             return
         
+        # Automatically apply camera 20mm and Camera Light setting (handled in ros_graph_builder.build_graph)
         ok, message = ros_graph_builder.build_graph(
             self._entries,
             resolution=self._resolution,
@@ -180,6 +181,8 @@ class UIBuilder:
         if self._global_entry is None:
             self._set_global_status("FAIL: GlobalTopCamera not found. Run LOAD first.")
             return
+        
+        # Automatically apply camera 20mm and Camera Light setting (handled in ros_graph_builder.build_global_graph)
         ok, message = ros_graph_builder.build_global_graph(
             self._global_entry, resolution=GLOBAL_RESOLUTION
         )

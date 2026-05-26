@@ -434,7 +434,7 @@ def build_pools(stage, root: str = POOLS_ROOT) -> None:
 
 
 # ── Top-view cameras (one per pool) ──────────────────────────────────────────
-_TOPCAM_HEIGHT = 10.0           # m above pool floor
+_TOPCAM_HEIGHT = 12.0           # m above pool floor
 _TOPCAM_FOCAL_LENGTH = 15.0    # mm — wide enough to frame an 8 m pool
 _TOPCAM_H_APERTURE = 20.955    # mm — Isaac Sim default 16:9 sensor
 _TOPCAM_V_APERTURE = 15.291    # mm

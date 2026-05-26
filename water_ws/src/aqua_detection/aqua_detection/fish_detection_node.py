@@ -289,6 +289,8 @@ class FishDetectionNode(Node):
                     use_tracking=False,  # Disabled - slow rendering breaks tracking
                 )
                 detector.warmup()
+                if not detector._initialized:
+                    raise RuntimeError("YOLO model components not installed or model file missing")
                 return detector
             except Exception as e:
                 self.get_logger().warn(f"YOLO init failed: {e}, falling back to OpenCV")

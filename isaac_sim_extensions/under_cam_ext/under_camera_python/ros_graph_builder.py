@@ -56,10 +56,21 @@ def teardown_graph() -> None:
         # 1. Collect render product paths BEFORE deleting the graph
         rp_paths = _collect_render_product_paths(GRAPH_PATH)
         
-        # 2. Delete the graph first (stops the rendering pipeline)
+        # 2. Set render product prims inactive immediately to stop Hydra rendering
+        stage = omni.usd.get_context().get_stage()
+        if stage is not None and rp_paths:
+            for rp_path in rp_paths:
+                try:
+                    prim = stage.GetPrimAtPath(rp_path)
+                    if prim and prim.IsValid():
+                        prim.SetActive(False)
+                except Exception:
+                    pass
+        
+        # 3. Delete the graph first (stops the rendering pipeline)
         omni.kit.commands.execute("DeletePrims", paths=[GRAPH_PATH])
         
-        # 3. Schedule render product cleanup after a frame update
+        # 4. Schedule render product cleanup after a frame update
         if rp_paths:
             _schedule_render_product_cleanup(rp_paths)
     except Exception:
@@ -122,14 +133,45 @@ def _destroy_render_products_by_paths(rp_paths: list[str]) -> None:
             return
             
         import carb
+        
+        # Try to use Replicator's ViewportManager to cleanly destroy the render products first
+        try:
+            from omni.replicator.core.scripts.utils.viewport_manager import ViewportManager
+            vm = ViewportManager()
+        except Exception as e:
+            vm = None
+            carb.log_warn(f"[under_cam] Failed to import Replicator ViewportManager: {e}")
+            
         for rp_path in rp_paths:
-            try:
-                prim = stage.GetPrimAtPath(rp_path)
-                if prim and prim.IsValid():
-                    stage.RemovePrim(rp_path)
-                    carb.log_info(f"[under_cam] Destroyed render product: {rp_path}")
-            except Exception as e:
-                carb.log_warn(f"[under_cam] Failed to destroy render product {rp_path}: {e}")
+            destroyed_by_replicator = False
+            if vm is not None:
+                # Try all available contexts to find and destroy the texture
+                contexts = list(vm._hydra_textures._hydra_textures.keys())
+                if "default" not in contexts:
+                    contexts.append("default")
+                if None not in contexts:
+                    contexts.append(None)
+                    
+                for ctx in contexts:
+                    try:
+                        texture = vm._hydra_textures.get(ctx, rp_path)
+                        if texture is not None:
+                            texture.destroy()
+                            destroyed_by_replicator = True
+                            carb.log_info(f"[under_cam] Cleanly destroyed replicator render product: {rp_path} in context '{ctx}'")
+                            break
+                    except Exception:
+                        pass
+            
+            # Fallback if Replicator couldn't destroy it or wasn't available
+            if not destroyed_by_replicator:
+                try:
+                    prim = stage.GetPrimAtPath(rp_path)
+                    if prim and prim.IsValid():
+                        stage.RemovePrim(rp_path)
+                        carb.log_info(f"[under_cam] Fallback destroyed render product prim: {rp_path}")
+                except Exception as e:
+                    carb.log_warn(f"[under_cam] Failed fallback destroy for {rp_path}: {e}")
             
     except Exception as e:
         import carb
