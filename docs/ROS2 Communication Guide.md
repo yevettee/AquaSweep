@@ -177,9 +177,9 @@ world/
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| state | string | `IDLE`, `RUNNING`, `PAUSED`, `DISCHARGED` 등 |
-| battery_level | float | 배터리 잔량 (0.0 ~ 1.0) |
-| collision_force | float | 충돌 힘 (N) |
+| state | uint8 | 상태 코드: `IDLE=0`, `RUNNING=1`, `PAUSED=2`, `DISCHARGED=3` |
+| battery_level | float32 | 배터리 잔량 (0.0 ~ 1.0) |
+| collision_force | float32 | 충돌 힘 (N) |
 
 ---
 
@@ -282,27 +282,29 @@ world/
 
 ### 4.4 모션 제어 인터페이스
 
-> Isaac Sim 내부 플래너를 사용하는 서비스 기반 아키텍처입니다.
+> Isaac Sim 내부 플래너(SpiralPlanner)를 사용하는 서비스 기반 아키텍처입니다.
 > Controller는 Isaac Sim에 모션 시작/정지 서비스를 호출하고, motion_status 토픽으로 진행상황을 모니터링합니다.
 
 #### Services (Controller → Isaac Sim)
 
+> **중요**: Isaac Sim 서비스는 `/isaac/` prefix를 사용하여 Planner 서비스와 구분됩니다.
+
 | Service | 타입 | 설명 |
 | --- | --- | --- |
-| `/{pool_id}/start_clean_floor` | StartMotion | 바닥 청소 시작 (파라미터 포함) |
-| `/{pool_id}/stop_clean_floor` | StopMotion | 바닥 청소 정지 |
-| `/{pool_id}/pause_clean_floor` | PauseMotion | 바닥 청소 일시정지 |
-| `/{pool_id}/resume_clean_floor` | ResumeMotion | 바닥 청소 재개 |
-| `/{pool_id}/start_clean_wall` | StartMotion | 벽면 청소 시작 |
-| `/{pool_id}/stop_clean_wall` | StopMotion | 벽면 청소 정지 |
-| `/{pool_id}/pause_clean_wall` | PauseMotion | 벽면 청소 일시정지 |
-| `/{pool_id}/resume_clean_wall` | ResumeMotion | 벽면 청소 재개 |
+| `/{pool_id}/isaac/start_clean_floor` | StartMotion | 바닥 청소 시작 (파라미터 포함) |
+| `/{pool_id}/isaac/stop_clean_floor` | StopMotion | 바닥 청소 정지 |
+| `/{pool_id}/isaac/pause_clean_floor` | PauseMotion | 바닥 청소 일시정지 |
+| `/{pool_id}/isaac/resume_clean_floor` | ResumeMotion | 바닥 청소 재개 |
+| `/{pool_id}/isaac/start_clean_wall` | StartMotion | 벽면 청소 시작 |
+| `/{pool_id}/isaac/stop_clean_wall` | StopMotion | 벽면 청소 정지 |
+| `/{pool_id}/isaac/pause_clean_wall` | PauseMotion | 벽면 청소 일시정지 |
+| `/{pool_id}/isaac/resume_clean_wall` | ResumeMotion | 벽면 청소 재개 |
 
 #### Topics (Isaac Sim → Controller)
 
 | Topic | 타입 | 설명 |
 | --- | --- | --- |
-| `/{pool_id}/clean_floor_status` | MotionStatus | 바닥 청소 진행상황 |
+| `/{pool_id}/clean_floor_status` | MotionStatus | 바닥 청소 진행상황 (state, progress, phase) |
 | `/{pool_id}/clean_wall_status` | MotionStatus | 벽면 청소 진행상황 |
 
 ---
@@ -318,17 +320,25 @@ aqua_interfaces/
 │   ├── CleanWall.action
 │   └── MoveFish.action
 ├── msg/
-│   ├── RobotStatus.msg
+│   ├── RobotStatus.msg               # 로봇 상태 (state: uint8 상수)
 │   ├── PoolStatus.msg
 │   ├── PoolPhysicalVariables.msg
-│   ├── MotionParams.msg              # 모션 파라미터 (서비스 모드용)
-│   └── MotionStatus.msg              # 모션 상태 (서비스 모드용)
+│   ├── MotionParams.msg              # 모션 파라미터 (SpiralPlanner용)
+│   └── MotionStatus.msg              # 모션 상태 (state: uint8 상수)
 └── srv/
-    ├── StartMotion.srv               # 모션 시작 (파라미터 포함)
+    ├── StartMotion.srv               # 모션 시작 (MotionParams 포함)
     ├── StopMotion.srv                # 모션 정지
     ├── PauseMotion.srv               # 모션 일시정지
     └── ResumeMotion.srv              # 모션 재개
 ```
+
+**MotionStatus 상태 코드:**
+| 상수 | 값 | 설명 |
+| --- | --- | --- |
+| IDLE | 0 | 대기 중 |
+| RUNNING | 1 | 모션 실행 중 |
+| PAUSED | 2 | 일시정지 |
+| DONE | 3 | 완료 |
 
 ### 5.2 aqua_planner
 
