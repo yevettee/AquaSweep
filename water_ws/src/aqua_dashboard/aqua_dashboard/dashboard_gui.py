@@ -259,38 +259,11 @@ class PoolPanel(QGroupBox):
         self._retitle()
 
     def _setup_ui(self):
-        outer = QHBoxLayout(self)
-        outer.setSpacing(20)
+        outer = QVBoxLayout(self)
+        outer.setSpacing(12)
         outer.setContentsMargins(16, 24, 16, 16)
 
-        left = QVBoxLayout()
-        left.setSpacing(6)
-
-        self.pool_status_title = QLabel("Pool Status")
-        self.pool_status_title.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 4px;")
-        left.addWidget(self.pool_status_title)
-
-        self.pollution_label = QLabel("Pollution: —")
-        self.fish_type_label = QLabel("Fish type: —")
-        self.fish_count_label = QLabel("Fish count: —")
-        self.fish_suspicious_label = QLabel("Suspicious fish: —")
-        for label in [self.pollution_label, self.fish_type_label, self.fish_count_label, self.fish_suspicious_label]:
-            label.setStyleSheet("font-size: 16px; padding-left: 12px;")
-            left.addWidget(label)
-
-        self.robot_status_title = QLabel("Robot Status")
-        self.robot_status_title.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 12px;")
-        left.addWidget(self.robot_status_title)
-
-        self.robot_state_label = QLabel("Robot state: —")
-        self.battery_label = QLabel("Battery: —")
-        self.collision_label = QLabel("Collision: —")
-        self.clean_progress_label = QLabel("Clean progress: —")
-        for label in [self.robot_state_label, self.battery_label, self.collision_label, self.clean_progress_label]:
-            label.setStyleSheet("font-size: 16px; padding-left: 12px;")
-            left.addWidget(label)
-
-        left.addSpacing(16)
+        # Row 1: START button (full width) + error label
         self.start_button = QPushButton("START POOL")
         self.start_button.setStyleSheet("""
             QPushButton {
@@ -310,48 +283,82 @@ class PoolPanel(QGroupBox):
                 color: #888;
             }
         """)
-        left.addWidget(self.start_button)
+        outer.addWidget(self.start_button)
 
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #ff6b6b; font-size: 14px;")
         self.error_label.setWordWrap(True)
-        left.addWidget(self.error_label)
+        outer.addWidget(self.error_label)
 
-        left.addStretch()
+        # Row 2: two columns — left (Pool + Top Cam), right (Robot + Under Cam)
+        cols = QHBoxLayout()
+        cols.setSpacing(20)
 
-        right = QVBoxLayout()
-        right.setSpacing(10)
+        left = QVBoxLayout()
+        left.setSpacing(6)
+
+        self.pool_status_title = QLabel("Pool Status")
+        self.pool_status_title.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 4px;")
+        left.addWidget(self.pool_status_title)
+
+        self.pollution_label = QLabel("Pollution: —")
+        self.fish_type_label = QLabel("Fish type: —")
+        self.fish_count_label = QLabel("Fish count: —")
+        self.fish_suspicious_label = QLabel("Suspicious fish: —")
+        for label in [self.pollution_label, self.fish_type_label, self.fish_count_label, self.fish_suspicious_label]:
+            label.setStyleSheet("font-size: 16px; padding-left: 12px;")
+            left.addWidget(label)
+
+        left.addSpacing(12)
 
         top_cam_title = QLabel("Top Camera Detection")
         top_cam_title.setAlignment(Qt.AlignCenter)
         top_cam_title.setStyleSheet("font-size: 16px; font-weight: bold;")
-        right.addWidget(top_cam_title)
+        left.addWidget(top_cam_title)
 
         self.top_cam_view = QLabel("Loading...")
         self.top_cam_view.setAlignment(Qt.AlignCenter)
-        self.top_cam_view.setMinimumSize(480, 320)
+        self.top_cam_view.setMinimumSize(480, 360)  # 4:3 (640×480 source)
         self.top_cam_view.setStyleSheet(
             "background-color: #2a2a2a; color: #888; font-size: 16px; border: 1px solid #444; border-radius: 4px;"
         )
         self.top_cam_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        right.addWidget(self.top_cam_view, 1)
+        left.addWidget(self.top_cam_view, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(6)
+
+        self.robot_status_title = QLabel("Robot Status")
+        self.robot_status_title.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 4px;")
+        right.addWidget(self.robot_status_title)
+
+        self.robot_state_label = QLabel("Robot state: —")
+        self.battery_label = QLabel("Battery: —")
+        self.collision_label = QLabel("Collision: —")
+        self.clean_progress_label = QLabel("Clean progress: —")
+        for label in [self.robot_state_label, self.battery_label, self.collision_label, self.clean_progress_label]:
+            label.setStyleSheet("font-size: 16px; padding-left: 12px;")
+            right.addWidget(label)
+
+        right.addSpacing(12)
 
         under_cam_title = QLabel("Under Camera")
         under_cam_title.setAlignment(Qt.AlignCenter)
-        under_cam_title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 4px;")
+        under_cam_title.setStyleSheet("font-size: 16px; font-weight: bold;")
         right.addWidget(under_cam_title)
 
         self.under_cam_view = QLabel("Loading...")
         self.under_cam_view.setAlignment(Qt.AlignCenter)
-        self.under_cam_view.setMinimumSize(480, 320)
+        self.under_cam_view.setMinimumSize(640, 360)  # 16:9 (1280×720 source)
         self.under_cam_view.setStyleSheet(
             "background-color: #2a2a2a; color: #888; font-size: 16px; border: 1px solid #444; border-radius: 4px;"
         )
         self.under_cam_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         right.addWidget(self.under_cam_view, 1)
 
-        outer.addLayout(left, 1)
-        outer.addLayout(right, 2)
+        cols.addLayout(left, 3)   # 4:3 aspect — narrower
+        cols.addLayout(right, 4)  # 16:9 aspect — wider
+        outer.addLayout(cols, 1)
 
     def _retitle(self):
         self.setTitle(f"Pool {self.pool_id} + Robot {self.pool_id}")
