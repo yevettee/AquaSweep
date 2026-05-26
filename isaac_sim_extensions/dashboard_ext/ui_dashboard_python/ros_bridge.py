@@ -1,7 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ROS2 bridge for dashboard_ext: subscribes to tank telemetry, camera images, and sends start commands."""
+"""ROS2 bridge for dashboard_ext: subscribes to tank telemetry, camera images, and sends start commands.
+
+WARNING: This module creates its own rclpy node inside Isaac Sim, which can conflict with
+Isaac Sim's internal isaacsim.ros2.bridge extension context. If you see errors like
+"must be of type rclpy node" when calling services, use the external dashboard instead:
+
+    ros2 run aqua_dashboard dashboard_gui
+
+The external dashboard runs in a separate process with its own clean rclpy context,
+avoiding the context conflict issue entirely.
+"""
 
 from __future__ import annotations
 
@@ -243,7 +253,8 @@ class RosBridge:
             return "Task already running"
 
         client = self._node._planner_start_client
-        if not client.wait_for_service(timeout_sec=0.5):
+        # Non-blocking service check
+        if not client.service_is_ready():
             return f"Planner start service not available: {planner_start_service()}"
 
         request = Trigger.Request()
@@ -271,7 +282,8 @@ class RosBridge:
         if action_client is None:
             return f"No action client for pool {pool_id}"
 
-        if not action_client.wait_for_server(timeout_sec=0.5):
+        # Non-blocking server check
+        if not action_client.server_is_ready():
             msg = f"CleanFloor action server not available: {pool_clean_floor_action(pool_id)}"
             self._set_error(pool_id, msg)
             return msg

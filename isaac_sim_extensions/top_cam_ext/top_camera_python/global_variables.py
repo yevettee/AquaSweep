@@ -16,7 +16,14 @@ GRAPH_PATH = "/top_cam_graph"
 
 TOPIC_TEMPLATE = "/pool_{pool_id}/top_img_raw"
 FRAME_ID_TEMPLATE = "pool_{pool_id}_top_cam_{pool_id}"
-DEFAULT_RESOLUTION = (1280, 720)
+DEFAULT_RESOLUTION = (640, 480)  # 낮춤: 렌더링 속도 향상, YOLO imgsz=640과 동일
+
+# ── Global camera settings (single camera for all pools) ─────────────────────
+GLOBAL_CAM_PATH = "/World/GlobalTopCamera"
+GLOBAL_GRAPH_PATH = "/global_cam_graph"
+GLOBAL_TOPIC = "/global/top_img_raw"
+GLOBAL_FRAME_ID = "global_top_cam"
+GLOBAL_RESOLUTION = (2560, 1920)  # 4:3 ratio, ~640x640 per pool region (matches per-pool camera)
 
 # Selection — opposite polarity from under_cam_ext: we *require* a "top"
 # token in the path and reject anything that looks like an under-water
@@ -25,6 +32,7 @@ INCLUDE_TOKENS = (
     "topcamera",
     "top_cam",
     "top_camera",
+    "globaltopcamera",  # global camera support
 )
 EXCLUDE_TOKENS = (
     "under_cam",

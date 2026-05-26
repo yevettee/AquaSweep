@@ -11,7 +11,11 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
-    install_requires=['setuptools'],
+    install_requires=[
+        'setuptools',
+        'PyQt5',
+        'numpy',
+    ],
     zip_safe=True,
     maintainer='woody',
     maintainer_email='woody.myung@gmail.com',
@@ -25,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'dashboard_node = aqua_dashboard.dashboard_node:main',
+            'dashboard_gui = aqua_dashboard.dashboard_gui:main',
         ],
     },
 )

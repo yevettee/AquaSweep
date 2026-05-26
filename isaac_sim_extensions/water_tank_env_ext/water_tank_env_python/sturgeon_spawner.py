@@ -23,7 +23,7 @@ import random
 from typing import Optional
 
 import carb
-from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade, UsdSkel
 
 from . import params
 from .scene_builders import POOLS_ROOT
@@ -39,25 +39,28 @@ _STURGEON_USD = os.path.normpath(
 # ── Spawn-time tunables ──────────────────────────────────────────────────────
 TARGET_LENGTH_M = 1.0                # 1 m sturgeon (was 0.90)
 
-_EMPTY_POOLS_MIN = 1
+_EMPTY_POOLS_MIN = 2      # 모든 풀에 상어 spawn (빈 풀 없음)
 _EMPTY_POOLS_MAX = 3
-_FISH_PER_POOL_MIN = 5
-_FISH_PER_POOL_MAX = 10
+_FISH_PER_POOL_MIN = 5    # 풀당 5~7마리
+_FISH_PER_POOL_MAX = 7
 
 # Initial XY pose around pool centre — kept inside the inner radius with margin.
 _RADIUS_MIN = 0.6
 _RADIUS_MAX = params.TANK_RADIUS - 1.0  # ≈ 3.0 m, well clear of the wall
 
-# Z spawn range — full water column from 0.30 m up to water surface.
-_SPAWN_Z_MIN = 0.30
-_SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
+# Z spawn positions — matched to sturgeon_animator.py for seamless transition
+# These values should match the animator's z_mid values so fish don't "jump"
+# when simulation starts.
+_Z_MID_ALIVE = 0.55                  # same as animator: (0.30 + 0.80) / 2
+_Z_MID_FLIPPED = params.WATER_LEVEL + 0.025  # same as animator: water surface + 2.5cm
+
+# Legacy random Z range (no longer used, kept for reference)
+# _SPAWN_Z_MIN = 0.30
+# _SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
 
 # ── Flipped (belly-up) sturgeon settings ──────────────────────────────────────
-_FLIP_PROBABILITY = 0.5             # 25% chance each fish is flipped
-_FLIPPED_Z_MIN = params.WATER_LEVEL - 0.07  # slightly below surface
-_FLIPPED_Z_MAX = params.WATER_LEVEL - 0.05  # nearly at surface (floating)
+_FLIP_PROBABILITY = 0.2             # 20% chance each fish is flipped (dead) - 풀당 최대 ~1마리
 _FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
-_FLIP_Z_OFFSET = 0.15                # compensate for pivot offset when flipped
 
 # ── Colour palette (dark → near-current) ─────────────────────────────────────
 _COLOR_DARK    = (0.02, 0.02, 0.03)  # near-black
@@ -102,10 +105,15 @@ def _is_proxy_box_mesh(prim) -> bool:
 def _disable_proxy_prims(stage, prim_path: str) -> dict:
     """Deactivate proxy/preview prims bundled inside a sturgeon reference.
 
-    Handles bounding cubes, embedded cameras, and preview lights so they don't
-    pollute the bbox calculation or leak into the scene.
+    Handles bounding cubes, embedded cameras, preview lights, and skeleton
+    animations so they don't pollute the bbox calculation, leak into the scene,
+    or cause unnecessary GPU/CPU overhead.
+    
+    [PERF] SkelAnimation 비활성화가 핵심 - USD 내장 스켈레톤 수영 애니메이션이
+    30개 인스턴스에서 실행되면 엄청난 오버헤드 발생.
+    우리는 Xform 기반 sturgeon_animator.py로 이동을 처리하므로 SkelAnimation 불필요.
     """
-    counts = {"cubes": 0, "cameras": 0, "lights": 0}
+    counts = {"cubes": 0, "cameras": 0, "lights": 0, "skelanims": 0}
     root = stage.GetPrimAtPath(prim_path)
     if not root.IsValid():
         return counts
@@ -121,6 +129,11 @@ def _disable_proxy_prims(stage, prim_path: str) -> dict:
         elif any(prim.IsA(t) for t in _LIGHT_TYPES):
             prim.SetActive(False)
             counts["lights"] += 1
+        elif prim.IsA(UsdSkel.Animation):
+            # [PERF] SkelAnimation 비활성화 - 스켈레톤 기반 수영 애니메이션 OFF
+            # 이것이 FPS 하락의 주요 원인! (30마리 × skinning 연산)
+            prim.SetActive(False)
+            counts["skelanims"] += 1
     return counts
 
 
@@ -191,11 +204,23 @@ def _bind_random_palette_material(stage, prim, palette_paths: list[str], rng: ra
 
 
 def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
-    """Place 5–10 sturgeons into a random subset of pools (1–3 left empty).
+    """Place 5–10 sturgeons into specified or random subset of pools.
+
+    If params.STURGEON_SPAWN_POOLS is set (list of 1-indexed pool numbers),
+    only those pools will have sturgeons. Otherwise, random selection is used.
 
     Returns the total number of sturgeons placed. Each sturgeon gets a unique
     name ``Sturgeon_<m>`` under its pool.
     """
+    # [DEBUG] Sturgeon spawn 비활성화 - FPS 영향 테스트
+    try:
+        from underwater_robot_python.global_variables import DEBUG_ENABLE_STURGEON_SPAWN
+        if not DEBUG_ENABLE_STURGEON_SPAWN:
+            carb.log_info("[sturgeon_spawner] DEBUG_ENABLE_STURGEON_SPAWN=False, skipping spawn")
+            return 0
+    except ImportError:
+        pass  # 플래그 없으면 정상 spawn
+
     asset_url = _resolve_asset_url()
     if asset_url is None:
         carb.log_warn(
@@ -211,17 +236,29 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
     rng = random.Random()           # fresh entropy each call → different layout per LOAD
     palette = _ensure_palette(stage)
 
-    # Decide which pools are empty (robot only). Always leave at least one
-    # pool occupied even if there are fewer pools than the default range.
     n_pools = len(pool_paths)
-    n_empty = min(rng.randint(_EMPTY_POOLS_MIN, _EMPTY_POOLS_MAX), n_pools - 1)
-    empty_indices = set(rng.sample(range(n_pools), n_empty))
-    occupied = [i for i in range(n_pools) if i not in empty_indices]
-    carb.log_info(
-        f"[sturgeon_spawner] {n_pools} pools total, "
-        f"{len(empty_indices)} left empty: {sorted(i + 1 for i in empty_indices)}; "
-        f"{len(occupied)} occupied: {sorted(i + 1 for i in occupied)}"
-    )
+    
+    # Check if specific pools are configured for spawning
+    spawn_pools = getattr(params, 'STURGEON_SPAWN_POOLS', None)
+    
+    if spawn_pools is not None and len(spawn_pools) > 0:
+        # Use configured pool list (1-indexed → 0-indexed)
+        occupied = [p - 1 for p in spawn_pools if 1 <= p <= n_pools]
+        empty_indices = set(i for i in range(n_pools) if i not in occupied)
+        carb.log_info(
+            f"[sturgeon_spawner] {n_pools} pools total, "
+            f"configured spawn pools: {spawn_pools} (0-indexed: {occupied})"
+        )
+    else:
+        # Random selection: leave 1-3 pools empty
+        n_empty = min(rng.randint(_EMPTY_POOLS_MIN, _EMPTY_POOLS_MAX), n_pools - 1)
+        empty_indices = set(rng.sample(range(n_pools), n_empty))
+        occupied = [i for i in range(n_pools) if i not in empty_indices]
+        carb.log_info(
+            f"[sturgeon_spawner] {n_pools} pools total, "
+            f"{len(empty_indices)} left empty: {sorted(i + 1 for i in empty_indices)}; "
+            f"{len(occupied)} occupied: {sorted(i + 1 for i in occupied)}"
+        )
 
     scale_factor: Optional[float] = None
     total_placed = 0
@@ -244,15 +281,18 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             local_y = radius * math.sin(angle)
             yaw_deg = rng.uniform(0.0, 360.0)
 
-            # Determine if this fish is flipped (belly-up, floating near surface).
+            # Determine if this fish is flipped (belly-up, dead/sick).
             is_flipped = rng.random() < _FLIP_PROBABILITY
             if is_flipped:
-                # Add Z offset to compensate for pivot point shift after RotateX(180)
-                spawn_z = rng.uniform(_FLIPPED_Z_MIN, _FLIPPED_Z_MAX) + _FLIP_Z_OFFSET
+                # Spawn at same Z as animator's z_mid for flipped fish
+                # (water surface + 2.5cm, belly-up floating)
+                spawn_z = _Z_MID_FLIPPED
                 roll_deg = _FLIP_ROLL_DEG
                 n_flipped_in_pool += 1
             else:
-                spawn_z = rng.uniform(_SPAWN_Z_MIN, _SPAWN_Z_MAX)
+                # Spawn at same Z as animator's z_mid for alive fish
+                # (fixed depth for consistent appearance)
+                spawn_z = _Z_MID_ALIVE
                 roll_deg = 0.0
 
             sturgeon_xform = UsdGeom.Xform.Define(stage, Sdf.Path(sturgeon_path))
@@ -266,8 +306,8 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
                 carb.log_info(
                     f"[sturgeon_spawner] mesh-only length={natural:.3f} m → "
                     f"scale={scale_factor:.4f} (target {target_length_m * 100:.1f} cm; "
-                    f"proxies disabled — cubes={proxies['cubes']}, "
-                    f"cameras={proxies['cameras']}, lights={proxies['lights']})"
+                    f"disabled — cubes={proxies['cubes']}, cameras={proxies['cameras']}, "
+                    f"lights={proxies['lights']}, skelanims={proxies['skelanims']})"
                 )
 
             xf = UsdGeom.Xformable(sturgeon_xform)

@@ -4,6 +4,14 @@ Services:
     /planner/start            - Start cleaning for all eligible pools (fish_count == 0)
     /planner/pause            - Cancel all current tasks
     /{pool_id}/start_clean_floor - Start cleaning for a specific pool
+
+Sturgeon Animation Control:
+    - Automatically pauses sturgeon animation when cleaning starts
+    - Resumes animation when all cleaning tasks complete
+
+Robot Activation Control:
+    - Automatically activates robot (creates ActionGraph) before cleaning starts
+    - Deactivates robot after cleaning completes (optional)
 """
 
 from functools import partial
@@ -32,6 +40,15 @@ class PlannerNode(Node):
         self._pool_status: Dict[str, Optional[PoolStatus]] = {}
         self._is_running: Dict[str, bool] = {}
         self._global_task_active = False
+        self._sturgeon_paused = False
+
+        # Sturgeon animation control service clients
+        self._sturgeon_pause_cli = self.create_client(Trigger, '/sturgeon/pause')
+        self._sturgeon_resume_cli = self.create_client(Trigger, '/sturgeon/resume')
+
+        # Robot activation control service clients (per pool)
+        self._activate_robot_cli: Dict[str, any] = {}
+        self._deactivate_robot_cli: Dict[str, any] = {}
 
         for pool_id in self._pool_ids:
             self._executors[pool_id] = TaskExecutor(self, pool_id=pool_id)
@@ -49,6 +66,14 @@ class PlannerNode(Node):
                 Trigger,
                 f'/{pool_id}/start_clean_floor',
                 partial(self._handle_pool_start, pool_id)
+            )
+
+            # Robot activation service clients for this pool
+            self._activate_robot_cli[pool_id] = self.create_client(
+                Trigger, f'/{pool_id}/activate_robot'
+            )
+            self._deactivate_robot_cli[pool_id] = self.create_client(
+                Trigger, f'/{pool_id}/deactivate_robot'
             )
 
         self._start_srv = self.create_service(
@@ -152,6 +177,13 @@ class PlannerNode(Node):
         if executor is None:
             return False
 
+        # Pause sturgeon animation before cleaning starts (performance optimization)
+        if not self._sturgeon_paused:
+            self._call_sturgeon_pause()
+
+        # Activate robot ActionGraph before cleaning starts
+        self._call_activate_robot(pool_id)
+
         success = executor.send_clean_floor_goal(
             feedback_callback=partial(self._on_feedback, pool_id),
             done_callback=partial(self._on_done, pool_id)
@@ -161,6 +193,96 @@ class PlannerNode(Node):
             self._is_running[pool_id] = True
 
         return success
+
+    def _call_sturgeon_pause(self) -> None:
+        """Call /sturgeon/pause service (non-blocking)."""
+        if not self._sturgeon_pause_cli.service_is_ready():
+            self.get_logger().warn('Sturgeon pause service not available, skipping')
+            return
+        
+        future = self._sturgeon_pause_cli.call_async(Trigger.Request())
+        future.add_done_callback(self._on_sturgeon_pause_done)
+
+    def _on_sturgeon_pause_done(self, future) -> None:
+        """Handle sturgeon pause service response."""
+        try:
+            result = future.result()
+            if result.success:
+                self._sturgeon_paused = True
+                self.get_logger().info(f'Sturgeon animation paused: {result.message}')
+            else:
+                self.get_logger().warn(f'Sturgeon pause failed: {result.message}')
+        except Exception as e:
+            self.get_logger().error(f'Sturgeon pause service error: {e}')
+
+    def _call_sturgeon_resume(self) -> None:
+        """Call /sturgeon/resume service (non-blocking)."""
+        if not self._sturgeon_resume_cli.service_is_ready():
+            self.get_logger().warn('Sturgeon resume service not available, skipping')
+            return
+        
+        future = self._sturgeon_resume_cli.call_async(Trigger.Request())
+        future.add_done_callback(self._on_sturgeon_resume_done)
+
+    def _on_sturgeon_resume_done(self, future) -> None:
+        """Handle sturgeon resume service response."""
+        try:
+            result = future.result()
+            if result.success:
+                self._sturgeon_paused = False
+                self.get_logger().info(f'Sturgeon animation resumed: {result.message}')
+            else:
+                self.get_logger().warn(f'Sturgeon resume failed: {result.message}')
+        except Exception as e:
+            self.get_logger().error(f'Sturgeon resume service error: {e}')
+
+    def _call_activate_robot(self, pool_id: str) -> None:
+        """Call /{pool_id}/activate_robot service (non-blocking)."""
+        cli = self._activate_robot_cli.get(pool_id)
+        if cli is None:
+            self.get_logger().warn(f'No activate_robot client for {pool_id}')
+            return
+        if not cli.service_is_ready():
+            self.get_logger().warn(f'{pool_id}/activate_robot service not available, skipping')
+            return
+        
+        future = cli.call_async(Trigger.Request())
+        future.add_done_callback(partial(self._on_activate_robot_done, pool_id))
+
+    def _on_activate_robot_done(self, pool_id: str, future) -> None:
+        """Handle activate_robot service response."""
+        try:
+            result = future.result()
+            if result.success:
+                self.get_logger().info(f'{pool_id} robot activated: {result.message}')
+            else:
+                self.get_logger().warn(f'{pool_id} robot activation failed: {result.message}')
+        except Exception as e:
+            self.get_logger().error(f'{pool_id} activate_robot service error: {e}')
+
+    def _call_deactivate_robot(self, pool_id: str) -> None:
+        """Call /{pool_id}/deactivate_robot service (non-blocking)."""
+        cli = self._deactivate_robot_cli.get(pool_id)
+        if cli is None:
+            self.get_logger().warn(f'No deactivate_robot client for {pool_id}')
+            return
+        if not cli.service_is_ready():
+            self.get_logger().warn(f'{pool_id}/deactivate_robot service not available, skipping')
+            return
+        
+        future = cli.call_async(Trigger.Request())
+        future.add_done_callback(partial(self._on_deactivate_robot_done, pool_id))
+
+    def _on_deactivate_robot_done(self, pool_id: str, future) -> None:
+        """Handle deactivate_robot service response."""
+        try:
+            result = future.result()
+            if result.success:
+                self.get_logger().info(f'{pool_id} robot deactivated: {result.message}')
+            else:
+                self.get_logger().warn(f'{pool_id} robot deactivation failed: {result.message}')
+        except Exception as e:
+            self.get_logger().error(f'{pool_id} deactivate_robot service error: {e}')
 
     def _handle_pause(
         self, request: Trigger.Request, response: Trigger.Response
@@ -204,6 +326,9 @@ class PlannerNode(Node):
         if not any(self._is_running.values()):
             self._global_task_active = False
             self.get_logger().info('All pool tasks completed')
+            # Resume sturgeon animation after all cleaning tasks complete
+            if self._sturgeon_paused:
+                self._call_sturgeon_resume()
 
 
 def main(args=None) -> None:

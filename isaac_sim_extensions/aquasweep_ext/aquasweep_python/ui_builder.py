@@ -33,13 +33,11 @@ from underwater_robot_python.hippo_physics_sanitize import (
     tag_aquasweep_attrs,
     add_planar_constraint,
 )
-from underwater_robot_python.actiongraph_setup import (
-    create_cmd_vel_graph,
-    remove_cmd_vel_graph,
-    graph_exists,
-)
+from underwater_robot_python.actiongraph_setup import remove_cmd_vel_graph
 from underwater_robot_python.suction_system import SuctionSystem
 from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_center_trail_debug
+from .sturgeon_animation_service import SturgeonAnimationService
+from .robot_activation_service import RobotActivationService, RobotSpec
 from underwater_robot_python.global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
     DEBUG_ENABLE_SUCTION,
@@ -48,12 +46,20 @@ from underwater_robot_python.global_variables import (
     HIPPO_WHEEL_RADIUS_M,
     ROBOT_SPAWN_Z_M,
 )
+
+# Top Camera integration (per-pool publishing)
+from top_camera_python.ros_graph_builder import (
+    build_graph as build_top_cam_graph,
+    teardown_graph as teardown_top_cam_graph,
+    graph_exists as top_cam_graph_exists,
+)
+from top_camera_python.camera_discovery import discover_top_cameras
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
 # we redefine them below as aliases of the PRIMARY_ROBOT_* constants so the
 # multi-robot spawn (7 hippos, one nested under each /World/Pools/Pool_<n>)
 # can address the FSM-driven primary robot explicitly.
 
-PHYSICS_DT = 1.0 / 60.0
+PHYSICS_DT = 1.0 / 24.0
 _ROBOT_USD_PATH = (
     Path(__file__).resolve().parents[2]
     / "underwater_robot_ext" / "data" / HIPPO_USD_FILENAME
@@ -63,6 +69,37 @@ _ROBOT_USD_PATH = (
 from water_tank_env_python import params as _params  # noqa: E402
 _POOL_CENTERS: list[tuple[float, float]] = list(getattr(_params, "POOL_CENTERS", []))
 _NUM_ROBOTS = len(_POOL_CENTERS)
+
+
+def _apply_viewport_performance_settings() -> None:
+    """뷰포트 렌더링 성능 최적화 - ROS 카메라 품질은 유지."""
+    try:
+        import carb.settings
+        settings = carb.settings.get_settings()
+        
+        # 뷰포트 해상도 스케일 50%로 낮춤
+        settings.set("/app/renderer/resolution/scaleFactor", 0.5)
+        
+        # 추가 최적화 옵션
+        settings.set("/rtx/post/aa/op", 0)  # AA 비활성화
+        settings.set("/rtx/ambientOcclusion/enabled", False)  # AO 비활성화
+        settings.set("/rtx/post/motionBlur/enabled", False)  # Motion Blur 비활성화 (상어 궤적 번짐 제거)
+        
+        # DLSS Performance 모드 (0=Performance, 1=Balanced, 2=Quality, 3=Auto)
+        # Auto(3)는 720p 이하에서 Quality를 선택하여 성능 저하 → Performance 강제
+        settings.set("/rtx/post/dlss/execMode", 0)
+        
+        # RTX 추가 최적화 - 수조 렌더링에 불필요한 기능 비활성화
+        settings.set("/rtx/reflections/enabled", False)  # 반사 비활성화
+        # NOTE: translucency는 반드시 켜져있어야 함 - 수조 벽면과 물이 반투명(opacity<1.0)
+        settings.set("/rtx/indirectDiffuse/enabled", False)  # GI 비활성화
+        
+        # Auto-Exposure 비활성화 - 풀 개수에 따른 밝기 변화 방지
+        settings.set("/rtx/post/tonemap/autoExposure/enabled", False)
+        
+        carb.log_info("[aquasweep] Viewport performance settings applied (DLSS Performance, RTX optimized, Auto-Exposure off)")
+    except Exception as e:
+        carb.log_warn(f"[aquasweep] Failed to apply viewport settings: {e}")
 
 
 def _set_viewport_lighting_mode(mode: str) -> None:
@@ -144,10 +181,19 @@ class UIBuilder:
         # Remove ActionGraphs for all robots
         for i in range(_NUM_ROBOTS):
             remove_cmd_vel_graph(f"under_robot_{i + 1}")
+        # Stop sturgeon animation ROS2 service
+        if self._sturgeon_service is not None:
+            self._sturgeon_service.stop()
+            self._sturgeon_service = None
+        # Stop robot activation ROS2 service
+        if self._robot_activation_service is not None:
+            self._robot_activation_service.stop()
+            self._robot_activation_service = None
 
     # ── UI 빌드 ───────────────────────────────────────────────────────────────
 
     def build_ui(self):
+        # ── 1. World Controls ─────────────────────────────────────────────────
         world_frame = CollapsableFrame("World Controls", collapsed=False)
         with world_frame:
             with ui.VStack(style=get_style(), spacing=5, height=0):
@@ -167,18 +213,7 @@ class UIBuilder:
                 self._reset_btn.enabled = False
                 self.wrapped_ui_elements.append(self._reset_btn)
 
-        run_frame = CollapsableFrame("Run Scenario", collapsed=False)
-        with run_frame:
-            with ui.VStack(style=get_style(), spacing=5, height=0):
-                self._scenario_state_btn = StateButton(
-                    "Run Scenario", "RUN", "STOP",
-                    on_a_click_fn=self._on_run,
-                    on_b_click_fn=self._on_stop,
-                    physics_callback_fn=self._update_scenario,
-                )
-                self._scenario_state_btn.enabled = False
-                self.wrapped_ui_elements.append(self._scenario_state_btn)
-
+        # ── 2. Debris (토글 스타일) ────────────────────────────────────────────
         debris_frame = CollapsableFrame("Debris", collapsed=False)
         with debris_frame:
             with ui.VStack(style=get_style(), spacing=5, height=0):
@@ -194,21 +229,100 @@ class UIBuilder:
                     ui.Label("Radius (m)", width=80)
                     self._debris_radius_model = ui.SimpleFloatModel(0.05)
                     ui.FloatDrag(model=self._debris_radius_model, min=0.001, max=0.2, step=0.001)
-                self._spawn_btn = ui.Button(
-                    "SPAWN", height=36, clicked_fn=self._on_spawn_debris,
+                self._debris_toggle_btn = ui.Button(
+                    "SPAWN", height=36, clicked_fn=self._on_debris_toggle_click,
                     style={"background_color": 0xFF1A6B2E},
                 )
-                self._clear_btn = ui.Button(
-                    "CLEAR", height=36, clicked_fn=self._on_clear_debris,
-                    style={"background_color": 0xFF6B1A1A},
-                )
 
-        suction_frame = CollapsableFrame("Suction Status", collapsed=False)
+        # ── 3. Run Scenario ────────────────────────────────────────────────────
+        run_frame = CollapsableFrame("Run Scenario", collapsed=False)
+        with run_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                self._scenario_state_btn = StateButton(
+                    "Run Scenario", "RUN", "STOP",
+                    on_a_click_fn=self._on_run,
+                    on_b_click_fn=self._on_stop,
+                    physics_callback_fn=self._update_scenario,
+                )
+                self._scenario_state_btn.enabled = False
+                self.wrapped_ui_elements.append(self._scenario_state_btn)
+
+        # ── 4. Sturgeon Animation (토글 스타일) ─────────────────────────────────
+        sturgeon_frame = CollapsableFrame("Sturgeon Animation", collapsed=False)
+        with sturgeon_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                with ui.HStack(height=28):
+                    ui.Label("상태:", width=50)
+                    self._sturgeon_status_label = ui.Label("Paused", width=80,
+                        style={"color": 0xFF8B4513})
+                self._sturgeon_toggle_btn = ui.Button(
+                    "RESUME", height=32, clicked_fn=self._on_sturgeon_toggle_click,
+                    style={"background_color": 0xFF2E8B57},
+                )
+                self._sturgeon_toggle_btn.enabled = False  # RUN 전까지 비활성화
+                ui.Label("CLI: ros2 service call /sturgeon/resume std_srvs/srv/Trigger",
+                         style={"font_size": 10, "color": 0xFF888888})
+
+        # ── 5. Robot Activation (개별 토글) ────────────────────────────────────
+        robot_frame = CollapsableFrame("Robot Activation", collapsed=False)
+        with robot_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                ui.Label("Toggle to activate/deactivate each robot:", style={"font_size": 11})
+                
+                # Robot toggles (row 1: 1-4)
+                self._robot_toggle_btns: dict[int, ui.Button] = {}
+                with ui.HStack(spacing=4, height=32):
+                    for pool_id in range(1, 5):
+                        btn = ui.Button(
+                            f"Pool {pool_id}", height=28, width=65,
+                            clicked_fn=lambda pid=pool_id: self._on_robot_toggle_click(pid),
+                            style={"background_color": 0xFF555555},  # OFF state (gray)
+                        )
+                        btn.enabled = False  # RUN 전까지 비활성화
+                        self._robot_toggle_btns[pool_id] = btn
+                
+                # Robot toggles (row 2: 5-7)
+                with ui.HStack(spacing=4, height=32):
+                    for pool_id in range(5, _NUM_ROBOTS + 1):
+                        btn = ui.Button(
+                            f"Pool {pool_id}", height=28, width=65,
+                            clicked_fn=lambda pid=pool_id: self._on_robot_toggle_click(pid),
+                            style={"background_color": 0xFF555555},  # OFF state (gray)
+                        )
+                        btn.enabled = False  # RUN 전까지 비활성화
+                        self._robot_toggle_btns[pool_id] = btn
+                
+                ui.Label("(Green = Active, Gray = Inactive)", 
+                         style={"font_size": 10, "color": 0xFF888888})
+                ui.Label("CLI: ros2 service call /pool_1/activate_robot std_srvs/srv/Trigger",
+                         style={"font_size": 10, "color": 0xFF888888})
+
+        # ── 6. Suction Status ──────────────────────────────────────────────────
+        suction_frame = CollapsableFrame("Suction Status", collapsed=True)
         with suction_frame:
             with ui.VStack(style=get_style(), spacing=4, height=0):
                 with ui.HStack(height=22):
                     ui.Label("수거 완료", width=90)
                     self._suction_label = ui.Label("0 개")
+
+        # ── 7. Top Camera (per-pool) ───────────────────────────────────────────
+        topcam_frame = CollapsableFrame("Top Camera", collapsed=False)
+        with topcam_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                ui.Label("Per-pool cameras (~8fps each)", style={"font_size": 11})
+                ui.Label("Topics: /pool_1/top_img_raw, /pool_2/top_img_raw, ...", 
+                         style={"font_size": 10, "color": 0xFF888888})
+                with ui.HStack(height=28):
+                    ui.Label("상태:", width=50)
+                    self._topcam_status_label = ui.Label("Idle", width=100,
+                        style={"color": 0xFF888888})
+                self._topcam_toggle_btn = ui.Button(
+                    "START PUBLISHING", height=32, clicked_fn=self._on_topcam_toggle_click,
+                    style={"background_color": 0xFF2E8B57},
+                )
+                self._topcam_toggle_btn.enabled = False  # RUN 전까지 비활성화
+                ui.Label("CLI: (Extension) top_cam_ext → Build selected cameras",
+                         style={"font_size": 10, "color": 0xFF888888})
 
     # ── 내부 헬퍼 ─────────────────────────────────────────────────────────────
 
@@ -220,10 +334,22 @@ class UIBuilder:
             SuctionSystem(particles_prim_path=f"/World/Pools/Pool_{i+1}/Debris/Particles")
             for i in range(_NUM_ROBOTS)
         ]
-        # ActionGraph creation is deferred to _on_run() to avoid timing issues
-        self._graphs_created = False
+        self._sturgeon_service: SturgeonAnimationService | None = None
+        self._robot_activation_service: RobotActivationService | None = None
+        
+        # Robot activation state tracking (per-robot toggle state)
+        self._robot_toggle_models: dict[int, ui.SimpleBoolModel] = {
+            pool_id: ui.SimpleBoolModel(False) for pool_id in range(1, _NUM_ROBOTS + 1)
+        }
+        
+        # Top camera state
+        self._topcam_publishing = False
+        
+        # Simulation running state (for UI enable/disable)
+        self._is_running = False
 
     def _setup_scene(self):
+        _apply_viewport_performance_settings()
         stage = get_current_stage()
         UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
         scene_builders.enable_gpu_dynamics(stage)
@@ -231,13 +357,24 @@ class UIBuilder:
         scene_builders.build_building(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
+        scene_builders.build_global_top_camera(stage)  # 전체 수조를 보는 단일 글로벌 카메라
         scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
+
+        # [DEBUG] Robot spawn 비활성화 - FPS 영향 테스트
+        try:
+            from underwater_robot_python.global_variables import DEBUG_ENABLE_ROBOT_SPAWN
+            if not DEBUG_ENABLE_ROBOT_SPAWN:
+                carb.log_info("[aquasweep] DEBUG_ENABLE_ROBOT_SPAWN=False, skipping robot spawn")
+                return
+        except ImportError:
+            pass  # 플래그 없으면 정상 spawn
 
         if not _ROBOT_USD_PATH.is_file():
             carb.log_error(f"[aquasweep] Robot USD not found: {_ROBOT_USD_PATH}")
             return
 
+        # WheeledRobot으로 직접 로드 (기존 방식)
         for _idx, scene_name, spawn_path, _robot_root, position in _robot_specs():
             World.instance().scene.add(
                 WheeledRobot(
@@ -252,26 +389,54 @@ class UIBuilder:
 
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())
-        for _idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
+
+        # Physics 설정 적용
+        for _idx, scene_name, spawn_path, robot_root, _pos in _robot_specs():
             prepare_hippo_usd_on_stage(robot_root)
             tag_aquasweep_attrs(robot_root)
             add_planar_constraint(robot_root)
 
-        # ActionGraph creation is deferred to _on_run() to ensure all OmniGraph
-        # node types are fully registered (avoids timing issues during extension load)
-
         self._water_scenario.teardown_scenario()
         self._water_scenario.setup_scenario(stage=get_current_stage())
+
+        # Sturgeon animation ROS2 service 시작
+        if self._sturgeon_service is None:
+            self._sturgeon_service = SturgeonAnimationService(
+                self._water_scenario.sturgeon_animator
+            )
+        self._sturgeon_service.start()
+
+        # Robot activation ROS2 service 시작
+        if self._robot_activation_service is None:
+            robot_specs = {
+                f"pool_{idx}": RobotSpec(
+                    idx=idx,
+                    scene_name=scene_name,
+                    spawn_path=spawn_path,
+                    robot_root_path=robot_root,
+                    wheel_radius=HIPPO_WHEEL_RADIUS_M,
+                    wheel_base=HIPPO_WHEEL_BASE_M,
+                )
+                for idx, scene_name, spawn_path, robot_root, _pos in _robot_specs()
+            }
+            self._robot_activation_service = RobotActivationService(robot_specs)
+        self._robot_activation_service.start()
+
+        # Sturgeon 기본 상태: Paused (성능 최적화)
+        self._sturgeon_service.pause()
 
         for suction in self._suctions:
             suction.reset()
         reset_center_trail_debug()
 
-        _set_viewport_lighting_mode("camera")
+        _set_viewport_lighting_mode("stage")  # 고정된 Stage 조명 사용 (Camera Light 비활성화)
 
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
         self._reset_btn.enabled = True
+        
+        # RUN 전까지 컨트롤 비활성화 상태 유지
+        self._is_running = False
 
     def _on_pre_reset(self):
         self._timeline.stop()
@@ -288,10 +453,13 @@ class UIBuilder:
         if hasattr(self, "_suction_label"):
             self._suction_label.text = "0 개"
         reset_center_trail_debug()
-        # Reset graph flag so they can be recreated on next RUN if needed
-        self._graphs_created = False
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
+        
+        # Reset debris state on RESET button click
+        if hasattr(self, "_debris_toggle_btn"):
+            self._debris_scenario = DebrisScenario()
+            self._sync_debris_button_state()
 
     def _update_scenario(self, step: float):
         """매 physics step마다 흡입 시스템을 실행.
@@ -323,16 +491,30 @@ class UIBuilder:
             except Exception:
                 pass
 
-    def _on_spawn_debris(self):
+    def _on_debris_toggle_click(self):
+        """Toggle debris spawn/clear."""
+        try:
+            if self._debris_scenario.is_spawned():
+                self._debris_scenario.teardown_scenario()
+            else:
+                lo = self._debris_count_min_model.get_value_as_int()
+                hi = self._debris_count_max_model.get_value_as_int()
+                radius = self._debris_radius_model.get_value_as_float()
+                self._debris_scenario.setup_scenario(count_range=(lo, hi), radius=radius)
+        except Exception as e:
+            carb.log_error(f"[aquasweep] debris toggle error: {e}")
+        
+        # Always sync button state with actual scenario state
+        self._sync_debris_button_state()
+    
+    def _sync_debris_button_state(self):
+        """Sync debris button UI with actual scenario state."""
         if self._debris_scenario.is_spawned():
-            return
-        lo = self._debris_count_min_model.get_value_as_int()
-        hi = self._debris_count_max_model.get_value_as_int()
-        radius = self._debris_radius_model.get_value_as_float()
-        self._debris_scenario.setup_scenario(count_range=(lo, hi), radius=radius)
-
-    def _on_clear_debris(self):
-        self._debris_scenario.teardown_scenario()
+            self._debris_toggle_btn.text = "CLEAR"
+            self._debris_toggle_btn.set_style({"background_color": 0xFF6B1A1A})
+        else:
+            self._debris_toggle_btn.text = "SPAWN"
+            self._debris_toggle_btn.set_style({"background_color": 0xFF1A6B2E})
 
     def _on_run(self):
         # Clear selection to prevent PhysX UI errors during simulation
@@ -345,58 +527,142 @@ class UIBuilder:
         except Exception:
             pass
 
-        # Create ActionGraphs on first RUN (deferred from _setup_scenario to avoid timing issues)
-        if not self._graphs_created:
-            self._create_action_graphs()
-        self._timeline.play()
+        # ActionGraph creation is now handled by RobotActivationService
+        # via /{pool_id}/activate_robot service call from planner
+        # (no longer auto-created on RUN button click)
 
-    def _create_action_graphs(self):
-        """Create ActionGraph for each robot's cmd_vel control."""
-        # #region agent log
-        import json, time
-        _log_path = "/home/woody/AquaSweep/.cursor/debug-acdc9b.log"
-        # #endregion
-        success_count = 0
-        for idx, _scene_name, _spawn_path, robot_root, _pos in _robot_specs():
-            robot_name = f"under_robot_{idx}"
-            # #region agent log
-            stage = get_current_stage()
-            _prim = stage.GetPrimAtPath(robot_root) if stage else None
-            _prim_valid = _prim.IsValid() if _prim else False
-            _joint_names = []
-            if _prim_valid:
-                from pxr import UsdPhysics, Usd
-                for p in Usd.PrimRange(_prim):
-                    if p.IsA(UsdPhysics.Joint):
-                        _joint_names.append(str(p.GetPath()))
-            with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"A","location":"ui_builder.py:_create_action_graphs","message":"robot prim and joints before graph creation","data":{"idx":idx,"robot_name":robot_name,"robot_root":robot_root,"prim_valid":_prim_valid,"joint_names":_joint_names[:10]},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
-            # Skip if graph already exists
-            if graph_exists(robot_name):
-                carb.log_info(f"[aquasweep] ActionGraph already exists for {robot_name}")
-                success_count += 1
-                continue
-            graph_path = create_cmd_vel_graph(
-                robot_prim_path=robot_root,
-                robot_name=robot_name,
-                wheel_radius=HIPPO_WHEEL_RADIUS_M,
-                wheel_base=HIPPO_WHEEL_BASE_M,
-            )
-            # #region agent log
-            with open(_log_path, "a") as _f: _f.write(json.dumps({"sessionId":"acdc9b","hypothesisId":"B","location":"ui_builder.py:_create_action_graphs","message":"graph creation result","data":{"idx":idx,"robot_name":robot_name,"graph_path":graph_path,"success":graph_path is not None},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
-            if graph_path:
-                carb.log_info(f"[aquasweep] ActionGraph created: {graph_path} for {robot_name}")
-                success_count += 1
-            else:
-                carb.log_warn(f"[aquasweep] Failed to create ActionGraph for {robot_name}")
+        self._timeline.play()
         
-        if success_count == _NUM_ROBOTS:
-            self._graphs_created = True
-            carb.log_info(f"[aquasweep] All {_NUM_ROBOTS} ActionGraphs created successfully")
+        # 시뮬레이션 시작 → 컨트롤 활성화
+        self._is_running = True
+        self._enable_runtime_controls(True)
 
     def _on_stop(self):
         self._timeline.pause()
+        
+        # 시뮬레이션 정지 → 컨트롤 비활성화
+        self._is_running = False
+        self._enable_runtime_controls(False)
+
+    # ── 런타임 컨트롤 활성화/비활성화 ─────────────────────────────────────────
+
+    def _enable_runtime_controls(self, enabled: bool):
+        """Enable/disable controls that require simulation to be running."""
+        # Sturgeon toggle
+        if hasattr(self, "_sturgeon_toggle_btn"):
+            self._sturgeon_toggle_btn.enabled = enabled
+        
+        # Robot toggles
+        if hasattr(self, "_robot_toggle_btns"):
+            for btn in self._robot_toggle_btns.values():
+                btn.enabled = enabled
+        
+        # Top camera toggle
+        if hasattr(self, "_topcam_toggle_btn"):
+            self._topcam_toggle_btn.enabled = enabled
+
+    # ── ROS2 서비스 UI 핸들러 ─────────────────────────────────────────────────
+
+    def _on_sturgeon_toggle_click(self):
+        """Toggle sturgeon animation pause/resume."""
+        if not self._is_running:
+            carb.log_warn("[aquasweep] Simulation not running")
+            return
+        if self._sturgeon_service is None or not self._sturgeon_service.available:
+            carb.log_warn("[aquasweep] Sturgeon service not available")
+            return
+        
+        if self._sturgeon_service.is_paused:
+            # Currently paused → Resume
+            success, message = self._sturgeon_service.resume()
+            if success:
+                self._sturgeon_status_label.text = "Running"
+                self._sturgeon_status_label.set_style({"color": 0xFF2E8B57})
+                self._sturgeon_toggle_btn.text = "PAUSE"
+                self._sturgeon_toggle_btn.set_style({"background_color": 0xFF8B4513})
+                carb.log_info(f"[aquasweep] {message}")
+        else:
+            # Currently running → Pause
+            success, message = self._sturgeon_service.pause()
+            if success:
+                self._sturgeon_status_label.text = "Paused"
+                self._sturgeon_status_label.set_style({"color": 0xFF8B4513})
+                self._sturgeon_toggle_btn.text = "RESUME"
+                self._sturgeon_toggle_btn.set_style({"background_color": 0xFF2E8B57})
+                carb.log_info(f"[aquasweep] {message}")
+
+    # ── Robot Activation 핸들러 (개별 토글) ────────────────────────────────────
+
+    def _on_robot_toggle_click(self, pool_id: int):
+        """Toggle a single robot's activation state."""
+        if not self._is_running:
+            carb.log_warn("[aquasweep] Simulation not running")
+            return
+        if self._robot_activation_service is None or not self._robot_activation_service.available:
+            carb.log_warn("[aquasweep] Robot activation service not available")
+            return
+        
+        pool_key = f"pool_{pool_id}"
+        is_active = self._robot_toggle_models[pool_id].get_value_as_bool()
+        btn = self._robot_toggle_btns[pool_id]
+        
+        if is_active:
+            # Currently active → Deactivate
+            success, message = self._robot_activation_service.deactivate(pool_key)
+            if success:
+                self._robot_toggle_models[pool_id].set_value(False)
+                btn.set_style({"background_color": 0xFF555555})  # Gray (inactive)
+                carb.log_info(f"[aquasweep] {message}")
+            else:
+                carb.log_warn(f"[aquasweep] {message}")
+        else:
+            # Currently inactive → Activate
+            success, message = self._robot_activation_service.activate(pool_key)
+            if success:
+                self._robot_toggle_models[pool_id].set_value(True)
+                btn.set_style({"background_color": 0xFF2E8B57})  # Green (active)
+                carb.log_info(f"[aquasweep] {message}")
+            else:
+                carb.log_warn(f"[aquasweep] {message}")
+
+    # ── Top Camera 핸들러 (per-pool) ───────────────────────────────────────────
+
+    def _on_topcam_toggle_click(self):
+        """Toggle top camera publishing (per-pool cameras)."""
+        if not self._is_running:
+            carb.log_warn("[aquasweep] Simulation not running")
+            return
+        
+        if self._topcam_publishing:
+            # Currently publishing → Stop
+            teardown_top_cam_graph()
+            self._topcam_publishing = False
+            self._topcam_status_label.text = "Stopped"
+            self._topcam_status_label.set_style({"color": 0xFF888888})
+            self._topcam_toggle_btn.text = "START PUBLISHING"
+            self._topcam_toggle_btn.set_style({"background_color": 0xFF2E8B57})
+            carb.log_info("[aquasweep] Top camera publishing stopped")
+        else:
+            # Currently stopped → Start (per-pool cameras)
+            entries = discover_top_cameras()
+            if not entries:
+                carb.log_warn("[aquasweep] No top cameras found. Run LOAD first.")
+                self._topcam_status_label.text = "Error: No cameras found"
+                self._topcam_status_label.set_style({"color": 0xFFFF4444})
+                return
+            
+            success, message = build_top_cam_graph(entries)
+            if success:
+                self._topcam_publishing = True
+                self._topcam_status_label.text = f"Publishing {len(entries)} cameras"
+                self._topcam_status_label.set_style({"color": 0xFF2E8B57})
+                self._topcam_toggle_btn.text = "STOP PUBLISHING"
+                self._topcam_toggle_btn.set_style({"background_color": 0xFF8B4513})
+                carb.log_info(f"[aquasweep] {message}")
+            else:
+                carb.log_warn(f"[aquasweep] {message}")
+                self._topcam_status_label.text = f"Error: {message}"
+                self._topcam_status_label.set_style({"color": 0xFFFF4444})
 
     def _reset_extension(self):
         self._on_init()
@@ -406,3 +672,7 @@ class UIBuilder:
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = False
         self._reset_btn.enabled = False
+        
+        # Reset debris button to match fresh DebrisScenario state
+        if hasattr(self, "_debris_toggle_btn"):
+            self._sync_debris_button_state()

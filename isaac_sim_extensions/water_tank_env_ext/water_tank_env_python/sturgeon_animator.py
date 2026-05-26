@@ -40,10 +40,11 @@ _ROLL_FREQ_MIN = 3                   # 최소 흔들림 주파수 (Hz)
 _ROLL_FREQ_MAX = 5                   # 최대 흔들림 주파수 (Hz)
 
 # ── Motion bounds for FLIPPED (dead/sick) sturgeons ───────────────────────────
-_Z_MIN_FLIPPED = params.WATER_LEVEL - 0.15   # 수면 아래 15cm
-_Z_MAX_FLIPPED = params.WATER_LEVEL - 0.05   # 수면 아래 5cm (거의 떠있음)
+# 죽은 물고기는 수면에 둥둥 떠있어야 함 (등이 살짝 노출)
+_Z_MIN_FLIPPED = params.WATER_LEVEL + 0.02   # 수면 위 2cm
+_Z_MAX_FLIPPED = params.WATER_LEVEL + 0.03   # 수면 위 3cm
 _Z_MID_FLIPPED = (_Z_MIN_FLIPPED + _Z_MAX_FLIPPED) / 2.0
-_Z_AMP_FLIPPED = 0.03                # ±3cm 출렁임
+_Z_AMP_FLIPPED = 0.01                # ±1cm 출렁임 (물결에 따라 살짝 오르내림)
 
 _OMEGA_MIN_FLIPPED = 0.05            # rad/s ≈ 3°/s, 한 바퀴 ~2분 (느린 표류)
 _OMEGA_MAX_FLIPPED = 0.1             # rad/s ≈ 6°/s, 한 바퀴 ~1분
@@ -126,16 +127,52 @@ def _params_from_path(prim_path_str: str, is_flipped: bool) -> dict:
 
 
 class SturgeonAnimator:
+    # 성능 최적화: N step마다만 실제 업데이트 실행
+    UPDATE_INTERVAL = 2  # 2 step마다 업데이트 (60fps → 30Hz 애니메이션)
+
     def __init__(self):
         self._t = 0.0
         self._sturgeons: list[_SturgeonCache] | None = None
+        self._step_counter = 0
+        self._enabled = True
+
+    @property
+    def enabled(self) -> bool:
+        """상어 애니메이션 활성화 여부."""
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """상어 애니메이션 활성화/비활성화.
+        
+        Args:
+            enabled: True면 애니메이션 실행, False면 일시정지
+        
+        Note:
+            pause 시 USD prim 캐시를 해제하여 렌더링 부하를 완전히 제거.
+            resume 시 _discover()가 다시 호출되어 캐시 재구성 (1회성 비용).
+        """
+        self._enabled = enabled
+        if not enabled:
+            # Release USD prim references to fully eliminate rendering overhead
+            self._sturgeons = None
+        carb.log_info(f"[sturgeon_animator] animation {'enabled' if enabled else 'disabled'}")
 
     def reset(self) -> None:
         self._t = 0.0
         self._sturgeons = None
+        self._step_counter = 0
 
     def step(self, dt: float) -> None:
+        if not self._enabled:
+            return
+        
         self._t += dt
+        self._step_counter += 1
+        
+        # 성능 최적화: N step마다만 transform 업데이트
+        if self._step_counter % self.UPDATE_INTERVAL != 0:
+            return
+        
         stage = get_current_stage()
         if not stage:
             return
@@ -161,7 +198,8 @@ class SturgeonAnimator:
             )
             x = radius * math.cos(angle)
             y = radius * math.sin(angle)
-            z = p["z_mid"] + p["z_amp"] * math.sin(t * p["z_freq"] + p["z_phase"])
+            # Bobbing 제거: z 고정 (수직 oscillation 비활성화)
+            z = p["z_mid"]
 
             # Yaw aligned with the orbit tangent — sign comes from omega so
             # CCW and CW swimmers both face forward.

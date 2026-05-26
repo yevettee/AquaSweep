@@ -31,6 +31,11 @@ POOL_CENTERS: list[tuple[float, float]] = [
 
 EQUIPMENT_CENTER: tuple[float, float] = (12.75, 5.0)
 
+# ── Sturgeon spawn settings ──────────────────────────────────────────────────
+# 상어 spawn할 풀 번호 (1-indexed). None이면 랜덤 선택 유지
+# 예: [2, 5, 7] → Pool_2, Pool_5, Pool_7에만 상어 spawn
+STURGEON_SPAWN_POOLS: list[int] | None = [2, 5, 7]
+
 # ── Physical constants ────────────────────────────────────────────────────────
 WATER_DENSITY = 1000.0
 GRAVITY = 9.81
