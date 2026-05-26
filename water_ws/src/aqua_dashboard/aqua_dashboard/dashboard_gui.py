@@ -4,8 +4,9 @@
 
 """PyQt5 GUI dashboard for AquaSweep - external process to avoid Isaac Sim rclpy conflicts.
 
-This standalone application provides a graphical interface for monitoring pool and robot
-status, viewing camera feeds, and controlling cleaning operations via ROS2 services.
+Single-pool view with a dropdown to switch between pools. Only the active pool's
+camera streams are subscribed; pool/robot status feeds for all pools stay live so
+switching is instant from cached state.
 
 Usage:
     ros2 run aqua_dashboard dashboard_gui
@@ -20,17 +21,15 @@ import rclpy
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, Qt, QTimer
-from PyQt5.QtGui import QImage, QPixmap, QFont
+from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
-    QFrame,
-    QGridLayout,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -41,7 +40,6 @@ from std_srvs.srv import Trigger
 from aqua_interfaces.msg import PoolStatus, RobotStatus
 
 from .ros_topics import (
-    POOL_COUNT,
     planner_pause_service,
     planner_start_service,
     pool_ids,
@@ -94,7 +92,12 @@ class RosSpinThread(QThread):
 
 
 class DashboardRosNode(Node):
-    """ROS2 node for the dashboard with Qt signal integration."""
+    """ROS2 node for the dashboard with Qt signal integration.
+
+    Status feeds for every pool stay subscribed so cached values are available on
+    pool switch. Camera image feeds are tied to a single active pool and are
+    rebuilt by set_active_pool().
+    """
 
     def __init__(self, signal_emitter: SignalEmitter):
         super().__init__('aqua_dashboard_gui')
@@ -120,23 +123,15 @@ class DashboardRosNode(Node):
                 partial(self._on_robot_status, pool_id),
                 10
             )
-            self.create_subscription(
-                Image,
-                pool_top_cam_det_topic(pool_id),
-                partial(self._on_top_cam_image, pool_id),
-                10
-            )
-            self.create_subscription(
-                Image,
-                pool_under_cam_det_topic(pool_id),
-                partial(self._on_under_cam_image, pool_id),
-                10
-            )
 
             self._pool_start_clients[pool_id] = self.create_client(
                 Trigger,
                 pool_start_clean_floor_service(pool_id)
             )
+
+        self._active_pool_id: Optional[int] = None
+        self._top_cam_sub = None
+        self._under_cam_sub = None
 
         self._planner_start_client = self.create_client(
             Trigger,
@@ -149,6 +144,32 @@ class DashboardRosNode(Node):
 
         self.get_logger().info(
             f'DashboardRosNode (GUI) ready | pools={list(pool_ids())}'
+        )
+
+    def set_active_pool(self, pool_id: int) -> None:
+        if self._active_pool_id == pool_id:
+            return
+
+        if self._top_cam_sub is not None:
+            self.destroy_subscription(self._top_cam_sub)
+            self._top_cam_sub = None
+        if self._under_cam_sub is not None:
+            self.destroy_subscription(self._under_cam_sub)
+            self._under_cam_sub = None
+
+        self._active_pool_id = pool_id
+
+        self._top_cam_sub = self.create_subscription(
+            Image,
+            pool_top_cam_det_topic(pool_id),
+            partial(self._on_top_cam_image, pool_id),
+            10
+        )
+        self._under_cam_sub = self.create_subscription(
+            Image,
+            pool_under_cam_det_topic(pool_id),
+            partial(self._on_under_cam_image, pool_id),
+            10
         )
 
     def _on_pool_status(self, pool_id: int, msg: PoolStatus) -> None:
@@ -226,54 +247,51 @@ class DashboardRosNode(Node):
 
 
 class PoolPanel(QGroupBox):
-    """Panel widget for displaying a single pool's status and controls."""
+    """Single-pool panel: left column status+button, right column stacked cameras.
+
+    The panel can be retargeted to any pool via set_pool().
+    """
 
     def __init__(self, pool_id: int, parent=None):
-        super().__init__(f"Pool {pool_id} + Robot {pool_id}", parent)
+        super().__init__(parent)
         self.pool_id = pool_id
         self._setup_ui()
+        self._retitle()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        outer = QHBoxLayout(self)
+        outer.setSpacing(20)
+        outer.setContentsMargins(16, 24, 16, 16)
 
-        top_cam_label = QLabel("Top Camera")
-        top_cam_label.setAlignment(Qt.AlignCenter)
-        top_cam_label.setStyleSheet("font-size: 16px; font-weight: bold;")
-        layout.addWidget(top_cam_label)
+        left = QVBoxLayout()
+        left.setSpacing(6)
 
-        self.top_cam_view = QLabel("[No Image]")
-        self.top_cam_view.setAlignment(Qt.AlignCenter)
-        self.top_cam_view.setMinimumSize(500, 500)
-        self.top_cam_view.setStyleSheet("background-color: #2a2a2a; color: #888; font-size: 16px;")
-        layout.addWidget(self.top_cam_view)
-
-        pool_status_label = QLabel(f"Pool {self.pool_id} Status")
-        pool_status_label.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 12px;")
-        layout.addWidget(pool_status_label)
+        self.pool_status_title = QLabel("Pool Status")
+        self.pool_status_title.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 4px;")
+        left.addWidget(self.pool_status_title)
 
         self.pollution_label = QLabel("Pollution: —")
         self.fish_type_label = QLabel("Fish type: —")
         self.fish_count_label = QLabel("Fish count: —")
         self.fish_suspicious_label = QLabel("Suspicious fish: —")
-
         for label in [self.pollution_label, self.fish_type_label, self.fish_count_label, self.fish_suspicious_label]:
             label.setStyleSheet("font-size: 16px; padding-left: 12px;")
-            layout.addWidget(label)
+            left.addWidget(label)
 
-        robot_status_label = QLabel(f"Robot {self.pool_id} Status")
-        robot_status_label.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 12px;")
-        layout.addWidget(robot_status_label)
+        self.robot_status_title = QLabel("Robot Status")
+        self.robot_status_title.setStyleSheet("font-weight: bold; font-size: 18px; margin-top: 12px;")
+        left.addWidget(self.robot_status_title)
 
         self.robot_state_label = QLabel("Robot state: —")
         self.battery_label = QLabel("Battery: —")
         self.collision_label = QLabel("Collision: —")
         self.clean_progress_label = QLabel("Clean progress: —")
-
         for label in [self.robot_state_label, self.battery_label, self.collision_label, self.clean_progress_label]:
             label.setStyleSheet("font-size: 16px; padding-left: 12px;")
-            layout.addWidget(label)
+            left.addWidget(label)
 
-        self.start_button = QPushButton(f"START POOL {self.pool_id}")
+        left.addSpacing(16)
+        self.start_button = QPushButton("START POOL")
         self.start_button.setStyleSheet("""
             QPushButton {
                 background-color: #4a90d9;
@@ -292,14 +310,75 @@ class PoolPanel(QGroupBox):
                 color: #888;
             }
         """)
-        layout.addWidget(self.start_button)
+        left.addWidget(self.start_button)
 
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #ff6b6b; font-size: 14px;")
         self.error_label.setWordWrap(True)
-        layout.addWidget(self.error_label)
+        left.addWidget(self.error_label)
 
-        layout.addStretch()
+        left.addStretch()
+
+        right = QVBoxLayout()
+        right.setSpacing(10)
+
+        top_cam_title = QLabel("Top Camera Detection")
+        top_cam_title.setAlignment(Qt.AlignCenter)
+        top_cam_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        right.addWidget(top_cam_title)
+
+        self.top_cam_view = QLabel("Loading...")
+        self.top_cam_view.setAlignment(Qt.AlignCenter)
+        self.top_cam_view.setMinimumSize(480, 320)
+        self.top_cam_view.setStyleSheet(
+            "background-color: #2a2a2a; color: #888; font-size: 16px; border: 1px solid #444; border-radius: 4px;"
+        )
+        self.top_cam_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right.addWidget(self.top_cam_view, 1)
+
+        under_cam_title = QLabel("Under Camera Detection")
+        under_cam_title.setAlignment(Qt.AlignCenter)
+        under_cam_title.setStyleSheet("font-size: 16px; font-weight: bold; margin-top: 4px;")
+        right.addWidget(under_cam_title)
+
+        self.under_cam_view = QLabel("Loading...")
+        self.under_cam_view.setAlignment(Qt.AlignCenter)
+        self.under_cam_view.setMinimumSize(480, 320)
+        self.under_cam_view.setStyleSheet(
+            "background-color: #2a2a2a; color: #888; font-size: 16px; border: 1px solid #444; border-radius: 4px;"
+        )
+        self.under_cam_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right.addWidget(self.under_cam_view, 1)
+
+        outer.addLayout(left, 1)
+        outer.addLayout(right, 2)
+
+    def _retitle(self):
+        self.setTitle(f"Pool {self.pool_id} + Robot {self.pool_id}")
+        self.pool_status_title.setText(f"Pool {self.pool_id} Status")
+        self.robot_status_title.setText(f"Robot {self.pool_id} Status")
+        self.start_button.setText(f"START POOL {self.pool_id}")
+
+    def set_pool(self, pool_id: int):
+        self.pool_id = pool_id
+        self._retitle()
+        self.clear_data()
+
+    def clear_data(self):
+        self.pollution_label.setText("Pollution: —")
+        self.fish_type_label.setText("Fish type: —")
+        self.fish_count_label.setText("Fish count: —")
+        self.fish_suspicious_label.setText("Suspicious fish: —")
+        self.robot_state_label.setText("Robot state: —")
+        self.battery_label.setText("Battery: —")
+        self.collision_label.setText("Collision: —")
+        self.clean_progress_label.setText("Clean progress: —")
+        self.top_cam_view.setPixmap(QPixmap())
+        self.top_cam_view.setText("Loading...")
+        self.under_cam_view.setPixmap(QPixmap())
+        self.under_cam_view.setText("Loading...")
+        self.error_label.setText("")
+        self.start_button.setEnabled(True)
 
     def update_pool_status(self, msg: PoolStatus):
         self.pollution_label.setText(f"Pollution: {msg.pollution_level:.2f}")
@@ -323,16 +402,22 @@ class PoolPanel(QGroupBox):
             self.start_button.setEnabled(False)
 
     def update_top_cam_image(self, msg: Image):
+        self._set_image(self.top_cam_view, msg)
+
+    def update_under_cam_image(self, msg: Image):
+        self._set_image(self.under_cam_view, msg)
+
+    def _set_image(self, view: QLabel, msg: Image):
         pixmap = self._ros_image_to_pixmap(msg)
         if pixmap:
             scaled = pixmap.scaled(
-                self.top_cam_view.size(),
+                view.size(),
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             )
-            self.top_cam_view.setPixmap(scaled)
+            view.setPixmap(scaled)
         else:
-            self.top_cam_view.setText(f"[{msg.width}x{msg.height}]")
+            view.setText(f"[{msg.width}x{msg.height}]")
 
     def _ros_image_to_pixmap(self, msg: Image) -> Optional[QPixmap]:
         try:
@@ -357,17 +442,19 @@ class PoolPanel(QGroupBox):
 
 
 class DashboardWindow(QMainWindow):
-    """Main window for the AquaSweep dashboard."""
+    """Main window: header (title + global controls), pool selector, single panel."""
 
     def __init__(self, ros_node: DashboardRosNode):
         super().__init__()
         self.ros_node = ros_node
-        self.pool_panels: Dict[int, PoolPanel] = {}
+        self.active_pool_id: int = next(iter(pool_ids()))
 
         self.setWindowTitle("AquaSweep Dashboard")
         self.setMinimumSize(1200, 900)
         self._setup_ui()
         self._connect_signals()
+
+        self.ros_node.set_active_pool(self.active_pool_id)
 
         self.status_timer = QTimer(self)
         self.status_timer.timeout.connect(self._update_connection_status)
@@ -438,26 +525,42 @@ class DashboardWindow(QMainWindow):
         self.global_error_label.setStyleSheet("color: #ff6b6b; font-size: 16px;")
         main_layout.addWidget(self.global_error_label)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
+        selector_row = QHBoxLayout()
+        selector_label = QLabel("Pool:")
+        selector_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+        selector_row.addWidget(selector_label)
 
-        grid_widget = QWidget()
-        grid_layout = QGridLayout(grid_widget)
-        grid_layout.setSpacing(20)
+        self.pool_selector = QComboBox()
+        for pid in pool_ids():
+            self.pool_selector.addItem(f"Pool {pid}", pid)
+        self.pool_selector.setStyleSheet("""
+            QComboBox {
+                background-color: #2d2d2d;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-size: 16px;
+                min-width: 140px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2d2d2d;
+                color: #e0e0e0;
+                selection-background-color: #4a90d9;
+            }
+        """)
+        self.pool_selector.currentIndexChanged.connect(self._on_pool_selected)
+        selector_row.addWidget(self.pool_selector)
+        selector_row.addStretch()
+        main_layout.addLayout(selector_row)
 
-        pool_list = list(pool_ids())
-        cols = 2
-        for idx, pool_id in enumerate(pool_list):
-            row = idx // cols
-            col = idx % cols
-            panel = PoolPanel(pool_id)
-            panel.start_button.clicked.connect(partial(self._on_pool_start_clicked, pool_id))
-            grid_layout.addWidget(panel, row, col)
-            self.pool_panels[pool_id] = panel
-
-        scroll.setWidget(grid_widget)
-        main_layout.addWidget(scroll)
+        self.pool_panel = PoolPanel(self.active_pool_id)
+        self.pool_panel.start_button.clicked.connect(self._on_pool_start_clicked)
+        main_layout.addWidget(self.pool_panel, 1)
 
         self.setStyleSheet("""
             QMainWindow {
@@ -481,9 +584,6 @@ class DashboardWindow(QMainWindow):
                 font-weight: bold;
                 font-size: 18px;
             }
-            QScrollArea {
-                background-color: transparent;
-            }
         """)
 
     def _connect_signals(self):
@@ -493,23 +593,36 @@ class DashboardWindow(QMainWindow):
         self.ros_node.signals.under_cam_received.connect(self._on_under_cam)
         self.ros_node.signals.service_response_received.connect(self._on_service_response)
 
+    def _on_pool_selected(self, index: int):
+        new_pool_id = self.pool_selector.itemData(index)
+        if new_pool_id is None or new_pool_id == self.active_pool_id:
+            return
+        self.active_pool_id = int(new_pool_id)
+        self.pool_panel.set_pool(self.active_pool_id)
+        self.ros_node.set_active_pool(self.active_pool_id)
+
+        cached_pool = self.ros_node.get_pool_status(self.active_pool_id)
+        if cached_pool is not None:
+            self.pool_panel.update_pool_status(cached_pool)
+        cached_robot = self.ros_node.get_robot_status(self.active_pool_id)
+        if cached_robot is not None:
+            self.pool_panel.update_robot_status(cached_robot)
+
     def _on_pool_status(self, pool_id: int, msg: PoolStatus):
-        panel = self.pool_panels.get(pool_id)
-        if panel:
-            panel.update_pool_status(msg)
+        if pool_id == self.active_pool_id:
+            self.pool_panel.update_pool_status(msg)
 
     def _on_robot_status(self, pool_id: int, msg: RobotStatus):
-        panel = self.pool_panels.get(pool_id)
-        if panel:
-            panel.update_robot_status(msg)
+        if pool_id == self.active_pool_id:
+            self.pool_panel.update_robot_status(msg)
 
     def _on_top_cam(self, pool_id: int, msg: Image):
-        panel = self.pool_panels.get(pool_id)
-        if panel:
-            panel.update_top_cam_image(msg)
+        if pool_id == self.active_pool_id:
+            self.pool_panel.update_top_cam_image(msg)
 
     def _on_under_cam(self, pool_id: int, msg: Image):
-        pass
+        if pool_id == self.active_pool_id:
+            self.pool_panel.update_under_cam_image(msg)
 
     def _on_service_response(self, service_name: str, success: bool, message: str):
         if service_name == "global_start":
@@ -531,12 +644,11 @@ class DashboardWindow(QMainWindow):
             if len(parts) >= 2:
                 try:
                     pool_id = int(parts[1])
-                    panel = self.pool_panels.get(pool_id)
-                    if panel:
+                    if pool_id == self.active_pool_id:
                         if success:
-                            panel.set_error(f"Started: {message}")
+                            self.pool_panel.set_error(f"Started: {message}")
                         else:
-                            panel.set_error(f"Error: {message}")
+                            self.pool_panel.set_error(f"Error: {message}")
                 except ValueError:
                     pass
 
@@ -550,11 +662,9 @@ class DashboardWindow(QMainWindow):
         self.global_error_label.setStyleSheet("color: #888; font-size: 16px;")
         self.ros_node.call_pause()
 
-    def _on_pool_start_clicked(self, pool_id: int):
-        panel = self.pool_panels.get(pool_id)
-        if panel:
-            panel.set_error("Starting...")
-        self.ros_node.call_pool_start(pool_id)
+    def _on_pool_start_clicked(self):
+        self.pool_panel.set_error("Starting...")
+        self.ros_node.call_pool_start(self.active_pool_id)
 
     def _update_connection_status(self):
         if rclpy.ok():
