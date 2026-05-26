@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.0] - 2026-05-26
+### Changed
+- `HIPPO_USD_FILENAME`: `hippo_v1_black_eyes.usdz` → `hippo_v1_lite.usdz` (7대 모두 자동 적용).
+- 캐터필러 트랙 시각 최적화: 1,032개 Mesh prim + 1,034 머티리얼 → **1개 메시 + 단일 머티리얼** (Blender Decimate ratio 0.05).
+  - face 수 2,108,236 → 105,411 (-95%), draw call 폭발 해소.
+  - 새 USD: `data/hippo_v1_lite.usd` (편집용) + `hippo_v1_lite.usdz` (런타임 self-contained 31MB).
+  - 트랙은 `data/caterpillar_decimate005_clean.usd` 를 reference 로 참조.
+
+### Removed (in hippo_v1_lite)
+- `/Root/GroundPlane` (CollisionMesh + CollisionPlane) — 7대 spawn 시 유령 충돌면이 같이 끌려오던 문제 해결.
+- `/Root/hippo/base_link/under_cam` 하위 시각 자식 (`Model`, `Lens`, `OmniverseKitViewportCameraMesh`) — under_cam Camera prim 자체는 유지.
+
+### Added
+- `underwater_robot_python/bake_visual_wheels.py` — VisualWheels 서브트리 → 단일 Mesh 베이크 (asset-prep).
+- `underwater_robot_python/clean_decimated_usd.py` — Blender export 후처리 (scaffolding 제거 + Y-up 회전 제거 + metersPerUnit 통일).
+- `underwater_robot_python/usd_mesh_to_obj.py` — USD Mesh → OBJ 추출 (외부 DCC 핸드오프용).
+
 ## [1.1.0] - 2026-05-22
 ### Changed
 - 우리 개조 로봇 이름을 **dingo → hippo** 로 통일 (Clearpath Dingo-D 플랫폼 기반).
