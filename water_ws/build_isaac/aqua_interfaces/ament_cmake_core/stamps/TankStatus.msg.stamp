@@ -1,4 +1,0 @@
-float32 pollution_level
-string fish_type
-int32 fish_count
-int32 fish_count_suspicious
