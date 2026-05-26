@@ -343,19 +343,23 @@ class UIBuilder:
 
             try:
                 robot = World.instance().scene.get_object(scene_name)
-                if robot is not None:
-                    pos, orient = robot.get_world_pose()
-                    newly = self._suctions[i].step(
-                        get_current_stage(),
-                        np.asarray(pos, dtype=float),
-                        np.asarray(orient, dtype=float),
-                        step,
-                    )
-                    if newly > 0:
-                        total = sum(s.collected_count for s in self._suctions)
-                        self._suction_label.text = f"{total} 개"
-            except Exception:
-                pass
+                if robot is None:
+                    if self._suctions[i]._step_count == 0:
+                        carb.log_warn(f"[aquasweep] suction: robot '{scene_name}' not found in scene")
+                    continue
+                pos, orient = robot.get_world_pose()
+                newly = self._suctions[i].step(
+                    get_current_stage(),
+                    np.asarray(pos, dtype=float),
+                    np.asarray(orient, dtype=float),
+                    step,
+                )
+                if newly > 0:
+                    total = sum(s.collected_count for s in self._suctions)
+                    self._suction_label.text = f"{total} 개"
+            except Exception as e:
+                if self._suctions[i]._step_count <= 3:
+                    carb.log_warn(f"[aquasweep] suction[{i}] 오류: {e}")
 
     def _on_spawn_debris(self):
         if self._debris_scenario.is_spawned():

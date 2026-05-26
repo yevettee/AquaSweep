@@ -19,7 +19,8 @@ def generate_launch_description() -> LaunchDescription:
                     'rail_name':  f'rail_robot_{i}',
                     'pool_id':    f'pool_{i}',
                     'tank_margin': 0.5,
-                    'robot_footprint': 0.3,
+                    'robot_footprint': 0.15,
+                    'linear_speed': 1.5,
                 }],
                 output='screen',
             )
