@@ -56,6 +56,11 @@ class CleanFloorHandler(BaseHandler):
         )
         self.logger.info(f'CleanFloorHandler: step_sync 구독 → /{pool_id}/step_sync')
 
+    @property
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._spiral_active
+
     # ------------------------------------------------------------------
     # Action callbacks
     # ------------------------------------------------------------------

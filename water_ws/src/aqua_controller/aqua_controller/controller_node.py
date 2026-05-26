@@ -7,6 +7,7 @@ Provides Action Servers for robot control:
 
 Publishes:
     - /{robot_name}/cmd_vel  (geometry_msgs/msg/Twist)
+    - /{robot_name}/status   (aqua_interfaces/msg/RobotStatus) @ 2Hz
 """
 
 import rclpy
@@ -17,11 +18,13 @@ from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import Twist
 
 from aqua_interfaces.action import CleanFloor, CleanWall, MoveFish
+from aqua_interfaces.msg import RobotStatus
 
 from .action_handlers import CleanFloorHandler, CleanWallHandler, MoveFishHandler
 from .spiral_planner import SpiralPlanner
 
 CONTROL_HZ = 60.0
+STATUS_HZ = 2.0
 
 
 class ControllerNode(Node):
@@ -48,6 +51,9 @@ class ControllerNode(Node):
         omega_max      = self.get_parameter('omega_max').get_parameter_value().double_value
 
         self._cmd_vel_pub = self.create_publisher(Twist, f'/{robot_name}/cmd_vel', 10)
+        self._robot_status_pub = self.create_publisher(
+            RobotStatus, f'/{robot_name}/status', 10
+        )
         self._planner = SpiralPlanner(
             physics_dt=1.0 / CONTROL_HZ,
             tank_diameter=tank_diameter,
@@ -88,12 +94,27 @@ class ControllerNode(Node):
             callback_group=cb,
         )
 
+        self.create_timer(1.0 / STATUS_HZ, self._publish_robot_status)
+
         self.get_logger().info(
             f'ControllerNode ready | robot={robot_name} | pool={pool_id}\n'
             f'  cmd_vel : /{robot_name}/cmd_vel\n'
+            f'  status  : /{robot_name}/status @ {STATUS_HZ:.0f}Hz\n'
             f'  actions : /{pool_id}/clean_floor | /{pool_id}/clean_wall | /{pool_id}/move_fish\n'
             f'  spiral  : tank_diameter={tank_diameter}m  linear_speed={linear_speed}m/s'
         )
+
+    def _publish_robot_status(self) -> None:
+        any_active = (
+            self._clean_floor_handler.is_active
+            or self._clean_wall_handler.is_active
+            or self._move_fish_handler.is_active
+        )
+        msg = RobotStatus()
+        msg.state = RobotStatus.RUNNING if any_active else RobotStatus.IDLE
+        msg.battery_level = 1.0
+        msg.collision_force = 0.0
+        self._robot_status_pub.publish(msg)
 
 
 def main(args=None) -> None:

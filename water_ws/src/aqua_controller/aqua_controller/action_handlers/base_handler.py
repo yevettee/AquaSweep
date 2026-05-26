@@ -15,6 +15,10 @@ class BaseHandler(ABC):
     def logger(self):
         return self._node.get_logger()
 
+    @property
+    def is_active(self) -> bool:
+        return False
+
     @abstractmethod
     def execute(self, goal_handle: Any) -> Any:
         pass
