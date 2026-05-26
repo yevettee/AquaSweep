@@ -4,10 +4,10 @@ aqua_controller/spiral_planner.py에서 이식.
 Segments are pre-computed on init (same algorithm as open_loop_plan.py).
 Call next_cmd() each control tick to get the next (v, omega) pair.
 
-경로 순서:
-  1. 아르키메데스 나선 (중심 → 외곽)
-  2. 수조 테두리 한 바퀴 (원주 추종)
-  3. 중심 복귀 (제자리 회전 → 직진)
+경로 순서 (진행률 50/50):
+  1. spiral_out: 아르키메데스 나선 (중심 → 외곽) ~50%
+  2. turn: 180도 제자리 회전
+  3. spiral_return: 역방향 나선 (외곽 → 중심) ~50%
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from typing import List, Tuple
 
 DEFAULT_ROBOT_FOOTPRINT_M = 0.686
 DEFAULT_TANK_DIAMETER_M   = 8.0
-DEFAULT_TANK_MARGIN_M     = 0.08
-DEFAULT_LINEAR_SPEED_M_S  = 0.55
-DEFAULT_OMEGA_MAX_RAD_S   = 2.8
+DEFAULT_TANK_MARGIN_M     = 0.8   # 벽에서 0.5m 여유
+DEFAULT_LINEAR_SPEED_M_S  = 4.5   # 1.5 m/s (빠르지만 안정적)
+DEFAULT_OMEGA_MAX_RAD_S   = 15.0   # 4.0 rad/s (≈230°/초, 180도 회전 ~0.8초)
 
 _MERGE_ROUND     = 6
 _MAX_GUARD_STEPS = 5_000_000
@@ -33,47 +33,42 @@ class Segment:
     num_steps: int
 
 
-def _build_wall_follow(
-    r_end: float,
+def _build_180_reverse_turn(
     physics_dt: float,
-    linear_speed: float,
-) -> List[Segment]:
-    """수조 테두리(반경 r_end)를 따라 한 바퀴 도는 세그먼트."""
-    if r_end < 1e-3:
-        return []
-    omega_wall = linear_speed / r_end
-    n_steps = max(1, round(2.0 * math.pi * r_end / (linear_speed * physics_dt)))
-    return [Segment(v=float(linear_speed), omega=float(omega_wall), num_steps=n_steps)]
-
-
-def _build_return_to_center(
-    theta_end: float,
-    k: float,
-    physics_dt: float,
-    linear_speed: float,
     omega_max: float,
+    linear_speed: float,
 ) -> List[Segment]:
-    """나선 끝 위치에서 수조 중심으로 복귀하는 세그먼트 (제자리 회전 → 직진)."""
-    r_end = k * theta_end
-    if r_end < 1e-3:
-        return []
+    """후진하면서 180도 회전 (U턴).
+    
+    나선이 반시계 방향으로 진행하므로, 180도 회전 시:
+    - 시계 방향(음수 omega)으로 회전해야 중심 쪽으로 호를 그림
+    - 후진하면서 시계방향 회전 → 벽에서 멀어지며 방향 전환
+    """
+    reverse_speed = linear_speed * 0.5  # 후진 속도 (전진의 절반)
+    turn_omega = omega_max * 0.7        # 회전 속도 (약간 줄임)
+    
+    n_turn = max(1, round(math.pi / (turn_omega * physics_dt)))
+    # 시계 방향 회전 (음수 omega) → 중심 쪽으로 호를 그림
+    return [Segment(v=-reverse_speed, omega=-float(turn_omega), num_steps=n_turn)]
 
-    c, s = math.cos(theta_end), math.sin(theta_end)
-    psi_end = math.atan2(k * s + r_end * c, k * c - r_end * s)
-    angle_to_center = math.atan2(-s, -c)
-    delta = (angle_to_center - psi_end + math.pi) % (2.0 * math.pi) - math.pi
 
-    segs: List[Segment] = []
-
-    if abs(delta) > 0.05:
-        n_turn = max(1, round(abs(delta) / (omega_max * physics_dt)))
-        segs.append(Segment(v=0.0, omega=float(math.copysign(omega_max, delta)),
-                            num_steps=n_turn))
-
-    n_drive = max(1, round(r_end / (linear_speed * physics_dt)))
-    segs.append(Segment(v=float(linear_speed), omega=0.0, num_steps=n_drive))
-
-    return segs
+def _build_reverse_spiral(
+    spiral_segs: List[Segment],
+) -> List[Segment]:
+    """나선 세그먼트를 역순으로 뒤집어서 복귀 경로 생성.
+    
+    외곽→중심으로 돌아가려면:
+    1. 세그먼트 순서를 역순으로
+    2. omega 부호를 반전 (반대 방향으로 휘어야 함)
+    """
+    reversed_segs = []
+    for seg in reversed(spiral_segs):
+        reversed_segs.append(Segment(
+            v=seg.v,
+            omega=-seg.omega,  # 회전 방향 반전
+            num_steps=seg.num_steps,
+        ))
+    return reversed_segs
 
 
 def _build_segments(
@@ -83,8 +78,17 @@ def _build_segments(
     robot_footprint: float,
     linear_speed: float,
     omega_max: float,
-) -> List[Segment]:
-    """Pre-compute all (v, omega) segments for one full spiral pass + return to center."""
+) -> Tuple[List[Segment], int, int]:
+    """나선 외곽 진행 + 180도 회전 + 나선 복귀 세그먼트 생성.
+    
+    경로:
+      1. 나선 외곽 (중심 → 외곽): ~50%
+      2. 180도 제자리 회전: 짧음
+      3. 나선 복귀 (외곽 → 중심): ~50%
+    
+    Returns:
+        (segments, spiral_out_count, turn_count): 세그먼트 리스트와 페이즈별 수
+    """
     if physics_dt <= 0:
         raise ValueError("physics_dt must be positive")
 
@@ -93,8 +97,7 @@ def _build_segments(
     lim = tank_radius - tank_margin
 
     theta      = 0.0
-    theta_last = 0.0
-    out: List[Segment] = []
+    spiral_out: List[Segment] = []
     cur_v = cur_omega = None
     cur_n = 0
     guard = 0
@@ -102,10 +105,11 @@ def _build_segments(
     def flush() -> None:
         nonlocal cur_v, cur_omega, cur_n
         if cur_n > 0 and cur_v is not None and cur_omega is not None:
-            out.append(Segment(v=cur_v, omega=float(cur_omega), num_steps=cur_n))
+            spiral_out.append(Segment(v=cur_v, omega=float(cur_omega), num_steps=cur_n))
         cur_v = cur_omega = None
         cur_n = 0
 
+    # 1. 나선 외곽 (중심 → 외곽)
     while True:
         r = k * theta
         if r >= lim:
@@ -130,7 +134,6 @@ def _build_segments(
         dtheta_dt = v_eff / denom
         omega     = float(max(-omega_max, min(omega_max, dpsi_dtheta * dtheta_dt)))
 
-        theta_last = theta
         theta += dtheta_dt * physics_dt
 
         kv = round(v_eff, _MERGE_ROUND)
@@ -148,28 +151,39 @@ def _build_segments(
             raise RuntimeError("Spiral planner exceeded guard step count")
 
     flush()
+    spiral_out_count = len(spiral_out)
 
-    r_last = k * theta_last
-    out.extend(_build_wall_follow(r_last, physics_dt, linear_speed))
-    out.extend(_build_return_to_center(
-        theta_end=theta_last,
-        k=k,
-        physics_dt=physics_dt,
-        linear_speed=linear_speed,
-        omega_max=omega_max,
-    ))
+    # 2. 후진하면서 180도 회전 (U턴, 벽 충돌 방지)
+    turn_segs = _build_180_reverse_turn(physics_dt, omega_max, linear_speed)
+    turn_count = len(turn_segs)
 
-    return out
+    # 3. 나선 복귀 (역방향 나선)
+    spiral_return = _build_reverse_spiral(spiral_out)
+
+    # 전체 세그먼트 조합
+    out = spiral_out + turn_segs + spiral_return
+
+    return out, spiral_out_count, turn_count
 
 
 class SpiralPlanner:
-    """Stateful planner — call next_cmd() once per control tick."""
+    """Stateful planner — call next_cmd() once per control tick.
+    
+    새 경로 구조 (진행률 50/50):
+      1. spiral_out: 중심 → 외곽 (~50%)
+      2. turn: 180도 회전 (짧음)
+      3. spiral_return: 외곽 → 중심 (~50%)
+    """
 
     # Phase names for status reporting
-    PHASE_SPIRAL = "spiral"
-    PHASE_WALL_FOLLOW = "wall_follow"
-    PHASE_RETURN = "return"
+    PHASE_SPIRAL_OUT = "spiral_out"      # 외곽 진행 (~50%)
+    PHASE_TURN = "turn"                   # 180도 회전
+    PHASE_SPIRAL_RETURN = "spiral_return" # 중심 복귀 (~50%)
     PHASE_DONE = "done"
+    
+    # 하위 호환성 (기존 코드에서 참조할 수 있음)
+    PHASE_SPIRAL = PHASE_SPIRAL_OUT
+    PHASE_RETURN = PHASE_SPIRAL_RETURN
 
     def __init__(
         self,
@@ -188,7 +202,7 @@ class SpiralPlanner:
             "linear_speed": linear_speed,
             "omega_max": omega_max,
         }
-        self._segments = _build_segments(
+        self._segments, spiral_out_count, turn_count = _build_segments(
             physics_dt      = physics_dt,
             tank_radius     = tank_diameter * 0.5,
             tank_margin     = tank_margin,
@@ -201,29 +215,12 @@ class SpiralPlanner:
         self._total_steps = sum(seg.num_steps for seg in self._segments)
         self._current_step = 0
         
-        # Phase boundaries (for status reporting)
-        self._spiral_end_seg = 0
-        self._wall_end_seg = 0
-        self._compute_phase_boundaries()
-
-    def _compute_phase_boundaries(self) -> None:
-        """Compute segment indices where each phase ends."""
-        total_segs = len(self._segments)
-        if total_segs == 0:
-            return
-        
-        # Return phase is last 1-2 segments (turn + drive)
-        # Wall follow is 1 segment before that
-        # Rest is spiral
-        if total_segs >= 3:
-            self._spiral_end_seg = total_segs - 3
-            self._wall_end_seg = total_segs - 2
-        elif total_segs == 2:
-            self._spiral_end_seg = 0
-            self._wall_end_seg = 1
-        else:
-            self._spiral_end_seg = total_segs
-            self._wall_end_seg = total_segs
+        # Phase boundaries
+        # spiral_out: 인덱스 0 ~ (spiral_out_count - 1)
+        # turn: 인덱스 spiral_out_count ~ (spiral_out_count + turn_count - 1)
+        # spiral_return: 나머지
+        self._spiral_out_end_seg = spiral_out_count - 1 if spiral_out_count > 0 else -1
+        self._turn_end_seg = spiral_out_count + turn_count - 1 if turn_count > 0 else self._spiral_out_end_seg
 
     def rebuild(
         self,
@@ -245,7 +242,7 @@ class SpiralPlanner:
         if omega_max is not None:
             self._params["omega_max"] = omega_max
         
-        self._segments = _build_segments(
+        self._segments, spiral_out_count, turn_count = _build_segments(
             physics_dt      = self._physics_dt,
             tank_radius     = self._params["tank_diameter"] * 0.5,
             tank_margin     = self._params["tank_margin"],
@@ -254,7 +251,11 @@ class SpiralPlanner:
             omega_max       = self._params["omega_max"],
         )
         self._total_steps = sum(seg.num_steps for seg in self._segments)
-        self._compute_phase_boundaries()
+        
+        # Phase boundaries 재계산
+        self._spiral_out_end_seg = spiral_out_count - 1 if spiral_out_count > 0 else -1
+        self._turn_end_seg = spiral_out_count + turn_count - 1 if turn_count > 0 else self._spiral_out_end_seg
+        
         self.reset()
 
     @property
@@ -287,11 +288,11 @@ class SpiralPlanner:
     def phase(self) -> str:
         if self.is_done:
             return self.PHASE_DONE
-        if self._seg_idx <= self._spiral_end_seg:
-            return self.PHASE_SPIRAL
-        if self._seg_idx <= self._wall_end_seg:
-            return self.PHASE_WALL_FOLLOW
-        return self.PHASE_RETURN
+        if self._seg_idx <= self._spiral_out_end_seg:
+            return self.PHASE_SPIRAL_OUT
+        if self._seg_idx <= self._turn_end_seg:
+            return self.PHASE_TURN
+        return self.PHASE_SPIRAL_RETURN
 
     def next_cmd(self) -> Tuple[float, float]:
         """Return (v m/s, omega rad/s) for the current step and advance."""

@@ -120,15 +120,21 @@ class UnderwaterSpiralScenario:
             carb.log_info(f"{LOG_TAG} [{self._robot_name}] MotionCommandBridge 연결됨")
 
     def _on_bridge_start(self, params: dict) -> None:
-        """MotionCommandBridge에서 start 서비스 호출 시 — 실제 청소 시작."""
+        """MotionCommandBridge에서 start 서비스 호출 시 — 실제 청소 시작.
+        
+        파라미터 값이 0.0이거나 None이면 spiral_planner.py의 기본값 사용.
+        """
         if self._spiral_planner is not None:
-            # 파라미터로 planner 재생성
+            # 0.0 또는 None은 기본값 사용 (None으로 변환)
+            def _or_none(v):
+                return v if v and v > 0 else None
+            
             self._spiral_planner.rebuild(
-                tank_diameter=params.get("tank_diameter"),
-                tank_margin=params.get("tank_margin"),
-                robot_footprint=params.get("robot_footprint"),
-                linear_speed=params.get("linear_speed"),
-                omega_max=params.get("omega_max"),
+                tank_diameter=_or_none(params.get("tank_diameter")),
+                tank_margin=_or_none(params.get("tank_margin")),
+                robot_footprint=_or_none(params.get("robot_footprint")),
+                linear_speed=_or_none(params.get("linear_speed")),
+                omega_max=_or_none(params.get("omega_max")),
             )
         self._cleaning_active = True
         self._paused = False

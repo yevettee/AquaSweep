@@ -130,11 +130,8 @@ class CleanFloorHandler(BaseHandler):
             return False
 
         request = StartMotion.Request()
-        request.params.tank_diameter = 8.0
-        request.params.tank_margin = 0.08
-        request.params.robot_footprint = 0.686
-        request.params.linear_speed = 0.55
-        request.params.omega_max = 2.8
+        # 파라미터 0.0 = Isaac Sim 기본값 사용
+        # 상수는 spiral_planner.py에서 단일 관리
 
         future = self._start_client.call_async(request)
         for _ in range(20):
