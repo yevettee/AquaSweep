@@ -94,7 +94,7 @@ class FishDetectionNode(Node):
         
         # Declare parameters
         self.declare_parameter('num_pools', NUM_POOLS)
-        self.declare_parameter('yolo.model_path', 'models/yolo26n_fish_species_v1.pt')
+        self.declare_parameter('yolo.model_path', 'models/yolo_obb_new.pt')
         self.declare_parameter('yolo.confidence_threshold', 0.7)
         self.declare_parameter('yolo.iou_threshold', 0.45)
         self.declare_parameter('yolo.imgsz', 640)

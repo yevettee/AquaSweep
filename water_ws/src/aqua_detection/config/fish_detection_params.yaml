@@ -19,7 +19,7 @@ fish_detection_node:
 
     # YOLO OBB — models/yolo26n_fish_species_v1.pt (sturgeon only)
     yolo:
-      model_path: "models/yolo26n_fish_species_v1.pt"
+      model_path: "models/yolo_obb_new.pt"
       confidence_threshold: 0.5
       iou_threshold: 0.45
       imgsz: 640
