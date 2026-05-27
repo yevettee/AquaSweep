@@ -361,18 +361,18 @@ class UIBuilder:
                 )
                 self.wrapped_ui_elements.append(self._water_current_btn)
 
-        # ── 겐트리 로봇 ──────────────────────────────────────────────────────────
-        gantry_frame = CollapsableFrame("겐트리 로봇", collapsed=True)
+        # ── Gantry Robot ──────────────────────────────────────────────────────
+        gantry_frame = CollapsableFrame("Gantry Robot", collapsed=True)
         with gantry_frame:
             with ui.VStack(style=get_style(), spacing=5, height=0):
                 ui.Label(
-                    "양식장 벽 상단 레일 마운트 겐트리 (죽은 상어 수거용)",
+                    "Ceiling-rail gantry for collecting dead sturgeons",
                     style={"color": 0xFF888888, "font_size": 12},
                     word_wrap=True,
                 )
                 ui.Spacer(height=4)
                 self._gantry_btn = StateButton(
-                    "Gantry", "겐트리 빌드", "겐트리 제거",
+                    "Gantry", "Build Gantry", "Remove Gantry",
                     on_a_click_fn=self._on_gantry_build,
                     on_b_click_fn=self._on_gantry_remove,
                 )
@@ -851,7 +851,8 @@ class UIBuilder:
         if stage is None:
             carb.log_warn("[aquasweep] 겐트리 빌드 실패 — LOAD를 먼저 실행하세요")
             return
-        _gantry.build(stage)
+        animator = getattr(self._water_scenario, "sturgeon_animator", None)
+        _gantry.build(stage, animator=animator)
 
     def _on_gantry_remove(self):
         _gantry.remove(get_current_stage())
