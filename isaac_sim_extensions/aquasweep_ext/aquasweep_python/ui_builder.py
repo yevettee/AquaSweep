@@ -75,6 +75,10 @@ from underwater_robot_python.global_variables import (
 # multi-robot spawn (7 hippos, one nested under each /World/Pools/Pool_<n>)
 # can address the FSM-driven primary robot explicitly.
 
+# ── Gantry Robot 임포트 ───────────────────────────────────────────────────────
+from . import gantry_builder as _gantry
+_GANTRY_AVAILABLE = True
+
 # ── Rail Robot 임포트 ─────────────────────────────────────────────────────────
 from rail_robot_python.scenario import RailRobotScenario
 from rail_robot_python.rail_builder import (
@@ -356,6 +360,23 @@ class UIBuilder:
                     on_b_click_fn=self._on_water_current_off,
                 )
                 self.wrapped_ui_elements.append(self._water_current_btn)
+
+        # ── 겐트리 로봇 ──────────────────────────────────────────────────────────
+        gantry_frame = CollapsableFrame("겐트리 로봇", collapsed=True)
+        with gantry_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                ui.Label(
+                    "양식장 벽 상단 레일 마운트 겐트리 (죽은 상어 수거용)",
+                    style={"color": 0xFF888888, "font_size": 12},
+                    word_wrap=True,
+                )
+                ui.Spacer(height=4)
+                self._gantry_btn = StateButton(
+                    "Gantry", "겐트리 빌드", "겐트리 제거",
+                    on_a_click_fn=self._on_gantry_build,
+                    on_b_click_fn=self._on_gantry_remove,
+                )
+                self.wrapped_ui_elements.append(self._gantry_btn)
 
         # ── Suction Status (DEBUG_ENABLE_SUCTION이 True일 때만 표시) ──────────
         if DEBUG_ENABLE_SUCTION:
@@ -814,6 +835,16 @@ class UIBuilder:
     def _on_trail_off(self):
         _uw_gv.DEBUG_CENTER_TRAIL_ENABLED = False
         reset_center_trail_debug()
+
+    def _on_gantry_build(self):
+        stage = get_current_stage()
+        if stage is None:
+            carb.log_warn("[aquasweep] 겐트리 빌드 실패 — LOAD를 먼저 실행하세요")
+            return
+        _gantry.build(stage)
+
+    def _on_gantry_remove(self):
+        _gantry.remove(get_current_stage())
 
     def _on_water_current_on(self):
         for i, scenario in enumerate(self._scenarios):

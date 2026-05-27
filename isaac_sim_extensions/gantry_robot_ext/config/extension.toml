@@ -1,0 +1,13 @@
+[package]
+title       = "Gantry Robot"
+description = "천장 겐트리 로봇 — 양식장 벽 상단 레일 마운트, 죽은 상어 수거용"
+version     = "0.1.0"
+category    = "Simulation"
+keywords    = ["robot", "gantry", "aquasweep"]
+
+[dependencies]
+"omni.kit.uiapp"    = {}
+"isaacsim.core.api" = {}
+
+[[python.module]]
+name = "gantry_robot_python"
