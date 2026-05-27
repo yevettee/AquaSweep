@@ -31,6 +31,7 @@ EQUIPMENT_ROOT = "/World/Equipment"
 BUILDING_ROOT = "/World/Building"
 OUTDOOR_GROUND_ROOT = "/World/OutdoorGround"
 PARKING_ROOT = "/World/OutdoorGround/Parking"
+PARKED_CARS_ROOT = "/World/OutdoorGround/ParkedCars"
 DOOR_ROOT = "/World/Building/EastDoor"
 
 # Parking-paint diffuse — slightly off-white (avoids glare in RTX).
@@ -53,6 +54,7 @@ _ASPHALT_MDL_NAME = "Asphalt"
 _SCENES_DIR = Path(__file__).resolve().parents[3] / "assets" / "scenes"
 _AQUAFARM_ENV_USD = str(_SCENES_DIR / "aquafarm_environment.usda")
 _POOL_SHELL_USD   = str(_SCENES_DIR / "pool_shell.usda")
+_CARS_DIR = _SCENES_DIR.parent / "car"   # /home/rokey/water_ws/src/assets/car
 
 
 
@@ -620,6 +622,94 @@ def build_parking_lot(stage, root: str = PARKING_ROOT) -> None:
     carb.log_info(
         f"[scene_builders] Parking lot: {n} stalls along x={wall_x:+.1f}, "
         f"{face_count} paint stripes"
+    )
+
+
+def set_default_view(stage, camera_path: str = "/World/AquaSweep_DefaultView") -> None:
+    """Snap the viewport to a dedicated camera prim under /World.
+
+    /OmniverseKit_Persp lives on the session layer and ignores edits made on
+    the root layer (only its rotation slipped through previously, translate
+    did not). A camera we own on the root layer is fully editable, and we
+    activate it via the Viewport API so Kit reads our transform directly.
+    """
+    cam_prim = stage.GetPrimAtPath(camera_path)
+    if not cam_prim.IsValid():
+        cam = UsdGeom.Camera.Define(stage, camera_path)
+    else:
+        cam = UsdGeom.Camera(cam_prim)
+
+    xf = UsdGeom.Xformable(cam)
+    xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(*params.DEFAULT_VIEW_TRANSLATE))
+    xf.AddRotateXYZOp().Set(Gf.Vec3f(*params.DEFAULT_VIEW_ROTATE_XYZ))
+
+    try:
+        from omni.kit.viewport.utility import get_active_viewport
+        viewport = get_active_viewport()
+        if viewport is not None:
+            viewport.set_active_camera(camera_path)
+    except Exception as exc:
+        carb.log_warn(f"[scene_builders] viewport switch skipped: {exc}")
+
+    carb.log_info(
+        f"[scene_builders] Default view set on {camera_path}: "
+        f"translate={params.DEFAULT_VIEW_TRANSLATE} rotateXYZ={params.DEFAULT_VIEW_ROTATE_XYZ}"
+    )
+
+
+def build_parked_cars(stage, root: str = PARKED_CARS_ROOT) -> None:
+    """Reference real car USDZ assets into selected parking stalls.
+
+    Each car is placed at the stall's centre with a uniform Y-up→Z-up rotation
+    and cm→m scale, then optionally fine-tuned via params.CAR_PER_INDEX_TUNING
+    (z-offset, yaw, scale multiplier). Wrapper Xform pattern: our transforms
+    sit on the wrapper, the inner prim holds the USDZ reference so its own
+    xformOps remain intact. Visual-only, no collider. Idempotent.
+    """
+    if stage.GetPrimAtPath(root).IsValid():
+        return
+
+    UsdGeom.Xform.Define(stage, root)
+
+    w = params.PARKING_STALL_WIDTH
+    d = params.PARKING_STALL_DEPTH
+    wall_x = params.PARKING_WALL_X
+    front_x = wall_x - params.PARKING_OFFSET_FROM_WALL
+    array_half_y = (params.PARKING_STALL_COUNT * w) * 0.5
+    stall_center_x = front_x - d * 0.5
+
+    rx, ry, rz_base = params.CAR_BASE_ROTATE_XYZ
+
+    for slot_n, (stall_idx, usd_filename, tuning) in enumerate(zip(
+        params.CAR_STALL_INDICES, params.CAR_USD_FILES, params.CAR_PER_INDEX_TUNING
+    )):
+        dz, yaw_extra, scale_mul = tuning
+        cy = -array_half_y + stall_idx * w + w * 0.5
+        cz = dz
+        scale = params.CAR_BASE_SCALE * scale_mul
+
+        car_path = f"{root}/Car_{slot_n}"
+        wrapper = UsdGeom.Xform.Define(stage, car_path)
+        xf = UsdGeom.Xformable(wrapper)
+        xf.AddTranslateOp().Set(Gf.Vec3d(stall_center_x, cy, cz))
+        # Rotation order: Z first (yaw in our world), then X (Y-up→Z-up).
+        # RotateXYZ applies X→Y→Z, so we encode the yaw in the Z slot.
+        xf.AddRotateXYZOp().Set(Gf.Vec3f(rx, ry, rz_base + yaw_extra))
+        xf.AddScaleOp().Set(Gf.Vec3f(scale, scale, scale))
+
+        # Inner Xform holds the reference so the USDZ's own xformOps stay intact
+        inner_path = f"{car_path}/Model"
+        inner = stage.DefinePrim(inner_path, "Xform")
+        usdz_path = _CARS_DIR / usd_filename
+        if not usdz_path.is_file():
+            carb.log_error(f"[scene_builders] Car USDZ not found: {usdz_path}")
+            continue
+        inner.GetReferences().AddReference(str(usdz_path))
+
+    carb.log_info(
+        f"[scene_builders] Parked {len(params.CAR_USD_FILES)} cars at stalls "
+        f"{params.CAR_STALL_INDICES}"
     )
 
 

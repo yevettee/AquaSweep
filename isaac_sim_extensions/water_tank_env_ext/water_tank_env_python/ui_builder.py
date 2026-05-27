@@ -103,12 +103,20 @@ class UIBuilder:
         scene_builders.build_building(stage)
         scene_builders.build_outdoor_ground(stage)
         scene_builders.build_parking_lot(stage)
+        scene_builders.build_parked_cars(stage)
         scene_builders.build_door(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
         scene_builders.build_global_top_camera(stage)  # 전체 수조를 보는 단일 글로벌 카메라
         scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
+
+        # Snap viewport LAST so a camera failure can't drop later spawns.
+        try:
+            scene_builders.set_default_view(stage)
+        except Exception as exc:
+            import carb
+            carb.log_warn(f"[water_tank_env] set_default_view skipped: {exc}")
 
     def _setup_scenario(self):
         scene_builders.enable_gpu_dynamics(get_current_stage())

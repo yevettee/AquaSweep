@@ -407,6 +407,7 @@ class UIBuilder:
         scene_builders.build_building(stage)
         scene_builders.build_outdoor_ground(stage)
         scene_builders.build_parking_lot(stage)
+        scene_builders.build_parked_cars(stage)
         scene_builders.build_door(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
@@ -432,6 +433,13 @@ class UIBuilder:
 
         # Build rail robots for wall cleaning
         self._setup_rail_robots(stage)
+
+        # Snap viewport to default view LAST — protects earlier setup from any
+        # camera-side failure (an exception here used to skip robot/sturgeon spawn).
+        try:
+            scene_builders.set_default_view(stage)
+        except Exception as exc:
+            carb.log_warn(f"[aquasweep] set_default_view skipped: {exc}")
 
     def _setup_rail_robots(self, stage) -> None:
         """Setup rail robot USD prims and rails for enabled pools only."""

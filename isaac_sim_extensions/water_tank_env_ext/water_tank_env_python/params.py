@@ -25,10 +25,43 @@ PARKING_OFFSET_FROM_WALL = 2.0  # gap between wall and stall front
 PARKING_LINE_WIDTH = 0.12       # m (paint stripe thickness)
 PARKING_WALL_X = -20.0          # building west wall x-coordinate
 
+# ── Parked cars (real USDZ assets referenced into 3 of the 8 stalls) ─────────
+# All three USDZs are cm-scale and Y-up, so each gets a uniform 0.01 scale and
+# an X-axis −90° rotation to land in our metres / Z-up stage. Tweak per-car
+# overrides below if a model lands rotated, sunk, or floating.
+CAR_USD_FILES = (
+    "ASTON_MARTIN_VULCAN.usdz",
+    "Cyber_Truck.usdz",
+    "Pickup_Truck_Commercial_Vehicle.usdz",
+)
+CAR_STALL_INDICES = (1, 4, 6)
+CAR_BASE_SCALE = 0.01                       # cm → m
+# X +90: Y-up → Z-up (puts +Y[up] onto +Z[up]).  Z +90: rotates car's forward
+# (originally along its local +X after the X-tilt) so the long axis lies along
+# the stall depth direction (our world ±X).
+CAR_BASE_ROTATE_XYZ = (90.0, 0.0, 90.0)
+# Per-car extra (translate_z, yaw_deg, scale_multiplier) tuning.
+# dz values offset each car's bbox-min-Y (in cm × scale_total) so wheels rest
+# on the ground (z=0):
+#   Aston:      bbox_min_Y = -2.3cm  × 0.01    = -0.023 m below origin
+#   Cybertruck: bbox_min_Y = +86cm   × 0.006   = +0.517 m above origin
+#   Pickup:     bbox_min_Y = -123cm  × 0.0055  = -0.676 m below origin
+CAR_PER_INDEX_TUNING = (
+    ( 0.023,  0.0,  1.0 ),    # Aston   — slight lift
+    (-0.517, 90.0,  0.6 ),    # Cyber   — drop to ground + 90° yaw
+    ( 0.676,  0.0,  0.55),    # Pickup  — lift up out of asphalt
+)
+
 # ── Steel hangar door on east wall (visual-only placeholder) ─────────────────
 # Values match the user-tuned cube in the Isaac Sim viewport.
 DOOR_TRANSLATE = (19.98567, 3.46947, 2.85436)
 DOOR_SCALE = (0.60376, 2.44149, 5.12779)
+
+# ── Default viewport camera applied on every LOAD ─────────────────────────────
+# Tuned by user via /OmniverseKit_Persp in Isaac Sim viewport.
+# Looks down at the building from south-above at a 45° pitch.
+DEFAULT_VIEW_TRANSLATE = (-3.0, -45.0, 50.0)
+DEFAULT_VIEW_ROTATE_XYZ = (45.0, 0.0, 0.0)     # degrees, applied as RotateXYZ
 
 # ── Single pool dimensions ────────────────────────────────────────────────────
 TANK_RADIUS = 4.0           # diameter 8 m
