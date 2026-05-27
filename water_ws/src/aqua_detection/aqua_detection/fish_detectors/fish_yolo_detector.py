@@ -1,6 +1,6 @@
 """YOLO OBB fish detector with OpenCV debris detection.
 
-- Fish: models/yolo26n_fish_species_v1.pt (OBB, sturgeon)
+- Fish: models/yolo_obb_new.pt (OBB, sturgeon)
 - Debris: OpenCV SimpleBlobDetector (no separate .pt)
 - Alive/suspicious: fish_status_classifier (outside this module)
 """
@@ -83,8 +83,8 @@ class FishYOLODetector(BaseDetector):
     
     def __init__(
         self,
-        model_path: str = "models/yolo26n_fish_species_v1.pt",
-        confidence_threshold: float = 0.5,
+        model_path: str = "models/yolo_obb_new.pt",
+        confidence_threshold: float = 0.6,
         iou_threshold: float = 0.45,
         device: str = "cuda",
         imgsz: int = 640,
@@ -97,7 +97,7 @@ class FishYOLODetector(BaseDetector):
         """Initialize YOLO OBB + OpenCV debris detector.
         
         Args:
-            model_path: Path to fish OBB weights (yolo26n_fish_species_v1.pt)
+            model_path: Path to fish OBB weights (yolo_obb_new.pt)
             confidence_threshold: Detection confidence threshold
             iou_threshold: NMS IoU threshold
             device: "cuda" or "cpu"

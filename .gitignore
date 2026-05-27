@@ -55,15 +55,15 @@ isaac_sim_extensions/top_cam_ext/top_camera_python/local/*
 
 # aqua_detection — training outputs & datasets (not tracked)
 water_ws/src/aqua_detection/runs/
-water_ws/src/aqua_detection/dataset_obb/
+**/dataset_obb/
 water_ws/src/aqua_detection/debug_obb_viz.png
 water_ws/src/aqua_detection/dataset_replicator/
 water_ws/src/aqua_detection/dataset/
 water_ws/src/aqua_detection/dataset_replicator_seg/
 runs/
 
-# YOLO base weights (deployment: models/yolo26n_fish_species_v1.pt)
+# YOLO base / local training weights (not deployment)
 yolo26n.pt
 yolov8n-seg.pt
 
-# Keep tracked: water_ws/src/aqua_detection/models/yolo26n_fish_species_v*.pt
+# Deployment: water_ws/src/aqua_detection/models/yolo_obb_new.pt (tracked)
