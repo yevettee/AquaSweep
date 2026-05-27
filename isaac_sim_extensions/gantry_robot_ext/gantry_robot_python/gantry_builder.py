@@ -17,11 +17,14 @@ from isaacsim.core.utils.stage import get_current_stage
 from pxr import Gf, Sdf, UsdGeom, UsdShade
 
 ROOT      = "/World/GantryRobot"
+BIN_PATH  = "/World/DeadFishBin"
 CEILING_Z = 7.0
 X_HALF    = 19.0
 Y_HALF    = 12.0
 Z_STROKE  = 5.7
 RAIL_GAP  = 28.0
+
+_FISH_STACK_HEIGHT = 0.5   # 수거함 내 상어 한 마리당 적재 높이 (m)
 
 _YCARR_HALF = 0.11
 _ZCARR_HALF = 0.10
@@ -72,6 +75,7 @@ _OPS:   dict = {}
 _SHAFT_T = None
 _SHAFT_S = None
 _ANIMATOR = None
+_BIN_COUNT = 0   # 수거함에 쌓인 상어 수
 
 # 흡착 패드 USD 핸들
 _SUCTION_T    = None   # translate op (Xform)
@@ -82,7 +86,7 @@ _MAT_SUCTION_ON  = None
 
 _SM: dict = {
     "state": _IDLE,
-    "x": 0.0, "y": 0.0, "z": 0.0,
+    "x": 0.0, "y": 0.0, "z": _CARRY_Z,
     "idle_wait": 0.0,
     "grab_t": 0.0,
     "grabbed_prim": None,
@@ -90,6 +94,7 @@ _SM: dict = {
     "grabbed_pool_cx": 0.0,
     "grabbed_pool_cy": 0.0,
     "grabbed_path": "",
+    "bin_x": _DROP_X, "bin_y": _DROP_Y, "bin_z": 0.0,
 }
 
 
@@ -97,21 +102,23 @@ _SM: dict = {
 
 def build(stage, animator=None) -> None:
     """겐트리를 스테이지에 빌드하고 상태 머신 훅을 등록한다."""
-    global _SHAFT_T, _SHAFT_S, _ANIMATOR
+    global _SHAFT_T, _SHAFT_S, _ANIMATOR, _BIN_COUNT
     global _SUCTION_T, _SUCTION_S, _SUCTION_PRIM, _MAT_SUCTION_OFF, _MAT_SUCTION_ON
     if stage is None:
         carb.log_error("[GantryRobot] stage is None — 빌드 취소")
         return
     _ANIMATOR = animator
+    _BIN_COUNT = 0
     _OPS.clear()
     _SHAFT_T = _SHAFT_S = None
     _SUCTION_T = _SUCTION_S = _SUCTION_PRIM = None
     _MAT_SUCTION_OFF = _MAT_SUCTION_ON = None
     _SM.update({
-        "state": _IDLE, "x": 0.0, "y": 0.0, "z": 0.0,
+        "state": _IDLE, "x": 0.0, "y": 0.0, "z": _CARRY_Z,
         "idle_wait": 0.0, "grab_t": 0.0,
         "grabbed_prim": None, "grabbed_t_op": None,
         "grabbed_pool_cx": 0.0, "grabbed_pool_cy": 0.0, "grabbed_path": "",
+        "bin_x": _DROP_X, "bin_y": _DROP_Y, "bin_z": 0.0,
     })
     _build_prims(stage)
     _hook_timeline()
@@ -270,6 +277,20 @@ def _set_suction_active(active: bool) -> None:
         UsdShade.MaterialBindingAPI(lip_prim).Bind(mat)
 
 
+# ── 수거함 위치 ──────────────────────────────────────────────────────────────
+
+def _get_bin_pos(stage) -> tuple[float, float, float]:
+    """DeadFishBin 월드 X, Y, Z를 반환. prim이 없으면 기본 투하 지점 사용."""
+    prim = stage.GetPrimAtPath(BIN_PATH)
+    if prim and prim.IsValid():
+        t = UsdGeom.XformCache().GetLocalToWorldTransform(prim).ExtractTranslation()
+        x, y, z = float(t[0]), float(t[1]), float(t[2])
+        carb.log_warn(f"[GantryRobot] DeadFishBin 위치: ({x:.2f}, {y:.2f}, {z:.2f})")
+        return x, y, z
+    carb.log_warn(f"[GantryRobot] DeadFishBin prim 없음({BIN_PATH}) — 기본값({_DROP_X}, {_DROP_Y}) 사용")
+    return _DROP_X, _DROP_Y, 0.0
+
+
 # ── 죽은 상어 탐색 ────────────────────────────────────────────────────────────
 
 def _find_dead_sturgeons(stage) -> list[dict]:
@@ -368,6 +389,7 @@ def _on_step(dt: float) -> None:
 
         best = min(candidates,
                    key=lambda c: (c["world_x"] - x) ** 2 + (c["world_y"] - y) ** 2)
+        bx, by, bz = _get_bin_pos(stage)
         sm.update({
             "tx": best["world_x"], "ty": best["world_y"],
             "grabbed_prim":    best["prim"],
@@ -375,6 +397,7 @@ def _on_step(dt: float) -> None:
             "grabbed_pool_cx": best["pool_cx"],
             "grabbed_pool_cy": best["pool_cy"],
             "grabbed_path":    best["path"],
+            "bin_x": bx, "bin_y": by, "bin_z": bz,
             "state": _SEEK_XY,
         })
         carb.log_info(f"[GantryRobot] SEEK_XY → ({best['world_x']:.1f}, {best['world_y']:.1f})")
@@ -383,7 +406,7 @@ def _on_step(dt: float) -> None:
     elif state == _SEEK_XY:
         new_x = _step_toward(x, sm["tx"], _XY_SPEED, dt)
         new_y = _step_toward(y, sm["ty"], _XY_SPEED, dt)
-        new_z = _step_toward(z, 0.0,     _Z_SPEED,  dt)
+        new_z = _step_toward(z, _CARRY_Z, _Z_SPEED,  dt)
         sm["x"], sm["y"], sm["z"] = new_x, new_y, new_z
         _update(new_x, new_y, new_z)
 
@@ -436,28 +459,38 @@ def _on_step(dt: float) -> None:
 
         if abs(new_z - _CARRY_Z) < _Z_TOL:
             sm["state"] = _DELIVER
-            carb.log_info(f"[GantryRobot] DELIVER → ({_DROP_X}, {_DROP_Y})")
+            carb.log_info(f"[GantryRobot] DELIVER → 수거함 ({sm['bin_x']:.1f}, {sm['bin_y']:.1f})")
 
     # ── DELIVER ──────────────────────────────────────────────────────────────
     elif state == _DELIVER:
-        new_x = _step_toward(x, _DROP_X, _XY_SPEED, dt)
-        new_y = _step_toward(y, _DROP_Y, _XY_SPEED, dt)
+        bx, by = sm["bin_x"], sm["bin_y"]
+        new_x = _step_toward(x, bx, _XY_SPEED, dt)
+        new_y = _step_toward(y, by, _XY_SPEED, dt)
         sm["x"], sm["y"], sm["z"] = new_x, new_y, z
         _update(new_x, new_y, z)
         _carry_sturgeon(new_x, new_y, z)
 
-        if abs(new_x - _DROP_X) < _XY_TOL and abs(new_y - _DROP_Y) < _XY_TOL:
+        if abs(new_x - bx) < _XY_TOL and abs(new_y - by) < _XY_TOL:
             sm["state"] = _DROP_ST
             carb.log_info("[GantryRobot] DROP")
 
     # ── DROP ─────────────────────────────────────────────────────────────────
     elif state == _DROP_ST:
-        # 패드 색상 복귀
+        global _BIN_COUNT
         _set_suction_active(False)
 
+        t_op = sm["grabbed_t_op"]
         grabbed_prim = sm["grabbed_prim"]
-        if grabbed_prim is not None and grabbed_prim.IsValid():
-            grabbed_prim.SetActive(False)
+        if grabbed_prim is not None and grabbed_prim.IsValid() and t_op is not None:
+            # 수거함 위치에 적재 (pool 로컬 좌표로 변환)
+            stack_z = sm["bin_z"] + _BIN_COUNT * _FISH_STACK_HEIGHT
+            t_op.Set(Gf.Vec3d(
+                sm["bin_x"] - sm["grabbed_pool_cx"],
+                sm["bin_y"] - sm["grabbed_pool_cy"],
+                stack_z,
+            ))
+            _BIN_COUNT += 1
+            carb.log_info(f"[GantryRobot] 수거함 적재 완료 (누적 {_BIN_COUNT}마리, z={stack_z:.2f})")
 
         if _ANIMATOR is not None and hasattr(_ANIMATOR, "grabbed_paths"):
             _ANIMATOR.grabbed_paths.discard(sm["grabbed_path"])
