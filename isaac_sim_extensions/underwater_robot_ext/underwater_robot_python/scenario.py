@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import carb
 import numpy as np
@@ -71,6 +71,7 @@ class UnderwaterSpiralScenario:
         # 내부 모드용
         self._spiral_planner = None
         self._motion_bridge = None
+        self._initial_pose: Optional[Tuple[float, float, float]] = None  # (x0, y0, theta0)
 
     # ── 초기화 ──────────────────────────────────────────────────────────────
 
@@ -148,6 +149,7 @@ class UnderwaterSpiralScenario:
         self._running = True  # 물리 활성화 (서비스 호출 시 자동 시작)
         self._cleaning_active = True
         self._paused = False
+        self._initial_pose = None  # 첫 physics step에서 기록
         carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 시작 (서비스 호출)")
 
     def _on_bridge_stop(self) -> None:
@@ -189,6 +191,7 @@ class UnderwaterSpiralScenario:
         self._paused = False
         self._stop_requested = False
         self._pause_requested = False
+        self._initial_pose = None
         if self._spiral_planner is not None:
             self._spiral_planner.reset()
 
@@ -259,6 +262,8 @@ class UnderwaterSpiralScenario:
         # Stop 요청 처리
         if self._stop_requested:
             self._stop_requested = False
+            self._pause_requested = False  # Pause 요청도 취소 (CleanWall과 동일)
+            self._running = False  # 물리 비활성화 (CleanWall과 동일하게 추가!)
             self._cleaning_active = False
             self._paused = False
             if self._spiral_planner is not None:
@@ -269,6 +274,9 @@ class UnderwaterSpiralScenario:
                     self._robot.set_angular_velocity(np.zeros(3, dtype=float))
                 except Exception:
                     pass
+            # IDLE 상태를 Dashboard에 알림 (CleanWall과 동일하게)
+            if self._motion_bridge is not None:
+                self._motion_bridge.reset()
             carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 정지 완료")
             return
         
@@ -285,10 +293,10 @@ class UnderwaterSpiralScenario:
             carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 일시정지 완료")
 
     def _step_internal_planner(self, dt: float) -> None:
-        """내부 SpiralPlanner 모드의 physics step."""
+        """내부 SpiralPlanner 모드의 physics step (Pure Pursuit 폐루프)."""
         if self._spiral_planner is None:
             return
-        
+
         # 완료 체크
         if self._spiral_planner.is_done:
             self._cleaning_active = False
@@ -296,13 +304,45 @@ class UnderwaterSpiralScenario:
                 self._motion_bridge.mark_done()
             carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 완료")
             return
-        
-        # 다음 명령 가져오기
-        v, omega = self._spiral_planner.next_cmd()
-        
-        # 로봇에 속도 적용
-        self._apply_velocity(v, omega)
-        
+
+        # 현재 포즈 읽기
+        try:
+            pos, orient = self._robot.get_world_pose()
+        except Exception as e:
+            carb.log_warn(f"{LOG_TAG} [{self._robot_name}] pose 읽기 실패: {e}")
+            return
+
+        x, y  = float(pos[0]), float(pos[1])
+        theta = _quat_to_yaw(orient)
+
+        # 초기 위치 기록 (청소 시작 첫 스텝)
+        if self._initial_pose is None:
+            self._initial_pose = (x, y, theta)
+            carb.log_warn(
+                f"{LOG_TAG} [{self._robot_name}] 초기 위치: "
+                f"({x:.2f}, {y:.2f}, {math.degrees(theta):.1f}°)"
+            )
+
+        # 플래너 프레임으로 좌표 변환 (초기 위치·방향 기준 상대 좌표)
+        x0, y0, theta0 = self._initial_pose
+        dx, dy = x - x0, y - y0
+        c0, s0  = math.cos(-theta0), math.sin(-theta0)
+        rel_x   = dx * c0 - dy * s0
+        rel_y   = dx * s0 + dy * c0
+        rel_theta = theta - theta0
+
+        # Pure Pursuit 폐루프 제어
+        v, omega = self._spiral_planner.next_cmd_closed_loop(rel_x, rel_y, rel_theta)
+
+        # 속도 적용 (이미 theta를 알고 있으므로 직접 계산)
+        try:
+            vx = v * math.cos(theta)
+            vy = v * math.sin(theta)
+            self._robot.set_linear_velocity(np.array([vx, vy, 0.0], dtype=float))
+            self._robot.set_angular_velocity(np.array([0.0, 0.0, omega], dtype=float))
+        except Exception as e:
+            carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 속도 설정 실패: {e}")
+
         # 상태 발행
         if self._motion_bridge is not None:
             self._motion_bridge.publish_status(
@@ -311,13 +351,14 @@ class UnderwaterSpiralScenario:
                 total_steps=self._spiral_planner.total_steps,
                 phase=self._spiral_planner.phase,
             )
-        
+
         # 디버그 로그
         self._debug_tick += 1
-        if self._debug_tick % 60 == 1:
+        if self._debug_tick % 120 == 1:
             carb.log_warn(
-                f"{LOG_TAG} [{self._robot_name}] internal: v={v:.4f} ω={omega:.4f} "
-                f"progress={self._spiral_planner.progress:.1%}"
+                f"{LOG_TAG} [{self._robot_name}] CL: v={v:.3f} ω={omega:.3f} "
+                f"rel=({rel_x:.2f},{rel_y:.2f}) {self._spiral_planner.phase} "
+                f"{self._spiral_planner.progress:.1%}"
             )
 
     def _step_external_cmd_vel(self, dt: float) -> None:

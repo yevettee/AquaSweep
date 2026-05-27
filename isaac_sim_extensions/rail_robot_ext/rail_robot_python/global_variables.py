@@ -35,11 +35,21 @@ RAIL_CENTER_R = TANK_RADIUS + WALL_THICKNESS + RAIL_W * 0.5  # = 4.07 m
 RAIL_MOUNT_Z = TANK_INNER_Z + RAIL_H * 0.5  # = 1.53 m
 
 # ── 자율 청소 궤적 파라미터 ──────────────────────────────────────────────────
-RAIL_STEPS = 18          # 360° ÷ 18 = 20° 단위 이동
-ARM_SWEEP_DURATION = 2.0 # 팔이 상단→하단 쓸기까지 걸리는 시간 (초)
-ARM_HOME_DURATION  = 0.5 # 스윕 완료 후 홈 자세로 이동하는 시간 (초)
-ARM_RESET_DURATION = 0.5 # 홈 자세에서 스윕 시작 자세로 복귀하는 시간 (초)
-RAIL_MOVE_DURATION = 0.4 # 다음 각도 위치로 이동하는 시간 (초)
+RAIL_PLANNER_MODE = "zigzag"   # "classic" | "zigzag"
+
+RAIL_STEPS = 6           # 360° ÷ 6 = 60° 단위 이동 (classic 전용)
+ARM_SWEEP_DURATION = 1.2 # 팔이 상단→하단 쓸기까지 걸리는 시간 (초)
+ARM_HOME_DURATION  = 0.3 # 스윕 완료 후 홈 자세로 이동하는 시간 (초)
+ARM_RESET_DURATION = 0.3 # 홈 자세에서 스윕 시작 자세로 복귀하는 시간 (초)
+RAIL_MOVE_DURATION = 0.3 # 다음 각도 위치로 이동하는 시간 (초)
+
+# zigzag 전용 (rail_planner_zigzag.py)
+# ZIGZAG_FULL_ROTATION_DURATION 이 1바퀴 sim-time 의 기준 (초).
+# ZIGZAG_DOWN_UP_DURATION 으로 half-stroke 개수를 정하고, 세그먼트 시간은 lap/n 으로 맞춤.
+RAIL_STEP_ANGLE_RAD = None   # None → segment count 로 step 자동
+ZIGZAG_DOWN_UP_DURATION = 2.0        # 팔 하단↔상단 1주기 목표 (초)
+ZIGZAG_FULL_ROTATION_DURATION = 60.0 # 레일 360° 1바퀴 목표 sim-time (초, 8mØ≈25.6m)
+COUPLED_SWEEP_DURATION = None        # None → lap / segment_count 자동
 
 # 레일 이동 전후 홈 자세 [j1=0, j2=0, j3=90°, j4=0, j5=90°, j6=0]
 ARM_HOME_JOINTS = {

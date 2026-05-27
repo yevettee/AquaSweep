@@ -53,8 +53,8 @@ class SuctionSystem:
 
     def __init__(
         self,
-        suction_radius: float = 3.0,
-        collection_radius: float = 0.5,
+        suction_radius: float = 1.0,
+        collection_radius: float = 0.3,
         attraction_speed: float = 8.0,
         nozzle_offset: float = 0.35,
         particles_prim_path: str = DEFAULT_PARTICLES_PRIM_PATH,
@@ -143,19 +143,24 @@ class SuctionSystem:
                 vel_changed = True
 
             elif dist < self.suction_radius:
-                # ── 인력: 매 스텝 velocities를 로봇 방향으로 덮어씀 ─────
-                # GPU solver가 이 속도를 적분 → 파티클이 로봇 쪽으로 이동
-                # 가까울수록 강하게 (선형: 경계=0, 중심=attraction_speed)
+                # ── 인력: 위치를 직접 로봇 방향으로 조금씩 이동 ──────────
+                # vel_attr.Set()은 GPU solver 내부 버퍼에 반영되지 않음.
+                # 대신 pos_attr를 매 스텝 소량 이동(CPU delta)하면 GPU solver가
+                # 새 위치 기준으로 중력·충돌을 재계산 → 자연스러운 인력 효과.
+                # pool_center는 순수 평행이동이므로 변위는 로컬/월드 프레임 동일.
                 factor    = 1.0 - dist / self.suction_radius
                 direction = diff / (dist + 1e-9)
-                speed     = self.attraction_speed * factor
+                delta     = direction * (self.attraction_speed * factor * dt)
 
-                cur_v = new_vel[i]
-                new_vel[i] = Gf.Vec3f(
-                    float(direction[0] * speed),
-                    float(direction[1] * speed),
-                    float(cur_v[2]),   # Z 속도는 중력/충돌에 맡김
+                new_pos[i] = Gf.Vec3f(
+                    float(pos[0] + delta[0]),
+                    float(pos[1] + delta[1]),
+                    float(pos[2]),  # z는 바닥 충돌에 맡김
                 )
+                # xy 속도를 0으로 눌러 GPU solver가 역행하지 않도록
+                cur_v = new_vel[i]
+                new_vel[i] = Gf.Vec3f(0.0, 0.0, float(cur_v[2]))
+                pos_changed = True
                 vel_changed = True
 
         if pos_changed:

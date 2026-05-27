@@ -18,6 +18,7 @@ from typing import Dict, Optional
 
 import numpy as np
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, Qt, QTimer
@@ -38,16 +39,20 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
 
+from aqua_interfaces.action import CleanFloor, CleanWall
 from aqua_interfaces.msg import MotionStatus, PoolStatus, RobotStatus
+from aqua_interfaces.srv import PauseMotion, ResumeMotion
 
 from .ros_topics import (
     planner_pause_service,
     planner_start_service,
+    pool_clean_floor_action,
+    pool_clean_wall_action,
     pool_ids,
     pool_motion_status_topic,
+    pool_pause_motion_service,
+    pool_resume_motion_service,
     pool_robot_status_topic,
-    pool_start_clean_floor_service,
-    pool_start_clean_wall_service,
     pool_status_topic,
     pool_top_cam_det_topic,
     pool_under_cam_det_topic,
@@ -107,8 +112,8 @@ class DashboardRosNode(Node):
         self._pool_status: Dict[int, Optional[PoolStatus]] = {}
         self._robot_status: Dict[int, Optional[RobotStatus]] = {}
         self._motion_status: Dict[int, Dict[str, Optional[MotionStatus]]] = {}
-        self._pool_start_wall_clients: Dict[int, object] = {}
-        self._pool_start_floor_clients: Dict[int, object] = {}
+        self._clean_wall_clients: Dict[int, ActionClient] = {}
+        self._clean_floor_clients: Dict[int, ActionClient] = {}
 
         for pool_id in pool_ids():
             self._pool_status[pool_id] = None
@@ -136,14 +141,31 @@ class DashboardRosNode(Node):
                     _BEST_EFFORT_QOS
                 )
 
-            # Per-pool start services (via Planner → Controller → Isaac Sim)
-            self._pool_start_wall_clients[pool_id] = self.create_client(
-                Trigger,
-                pool_start_clean_wall_service(pool_id)
+            # Per-pool actions — controller 직접 호출 (planner 우회, Wall/Floor 분리)
+            self._clean_wall_clients[pool_id] = ActionClient(
+                self, CleanWall, pool_clean_wall_action(pool_id)
             )
-            self._pool_start_floor_clients[pool_id] = self.create_client(
-                Trigger,
-                pool_start_clean_floor_service(pool_id)
+            self._clean_floor_clients[pool_id] = ActionClient(
+                self, CleanFloor, pool_clean_floor_action(pool_id)
+            )
+
+        # Per-pool pause/resume services (Isaac Sim direct)
+        self._pause_floor_clients: Dict[int, any] = {}
+        self._resume_floor_clients: Dict[int, any] = {}
+        self._pause_wall_clients: Dict[int, any] = {}
+        self._resume_wall_clients: Dict[int, any] = {}
+        for pool_id in pool_ids():
+            self._pause_floor_clients[pool_id] = self.create_client(
+                PauseMotion, pool_pause_motion_service(pool_id, 'clean_floor')
+            )
+            self._resume_floor_clients[pool_id] = self.create_client(
+                ResumeMotion, pool_resume_motion_service(pool_id, 'clean_floor')
+            )
+            self._pause_wall_clients[pool_id] = self.create_client(
+                PauseMotion, pool_pause_motion_service(pool_id, 'clean_wall')
+            )
+            self._resume_wall_clients[pool_id] = self.create_client(
+                ResumeMotion, pool_resume_motion_service(pool_id, 'clean_wall')
             )
 
         self._active_pool_id: Optional[int] = None
@@ -231,46 +253,143 @@ class DashboardRosNode(Node):
         except Exception as exc:
             self.signals.service_response_received.emit("global_stop", False, str(exc))
 
-    # --- Per-Pool Services (via Planner → Controller → Isaac Sim) ---
+    # --- Per-Pool Actions (Dashboard → Controller → Isaac Sim) ---
     def call_pool_clean_wall(self, pool_id: int) -> None:
-        client = self._pool_start_wall_clients.get(pool_id)
-        if client is None or not client.service_is_ready():
+        client = self._clean_wall_clients.get(pool_id)
+        if client is None or not client.wait_for_server(timeout_sec=1.0):
             self.signals.service_response_received.emit(
-                f"pool_{pool_id}_clean_wall", False, "Service not available"
+                f"pool_{pool_id}_clean_wall", False, "CleanWall action not available"
             )
             return
-        request = Trigger.Request()
-        future = client.call_async(request)
-        future.add_done_callback(partial(self._on_pool_clean_wall_response, pool_id))
+        future = client.send_goal_async(CleanWall.Goal())
+        future.add_done_callback(partial(self._on_clean_wall_goal_response, pool_id))
 
-    def _on_pool_clean_wall_response(self, pool_id: int, future) -> None:
+    def _on_clean_wall_goal_response(self, pool_id: int, future) -> None:
         try:
-            response = future.result()
-            self.signals.service_response_received.emit(
-                f"pool_{pool_id}_clean_wall", response.success, response.message
-            )
+            handle = future.result()
+            if handle.accepted:
+                self.signals.service_response_received.emit(
+                    f"pool_{pool_id}_clean_wall", True, "CleanWall started"
+                )
+            else:
+                self.signals.service_response_received.emit(
+                    f"pool_{pool_id}_clean_wall", False, "CleanWall goal rejected"
+                )
         except Exception as exc:
-            self.signals.service_response_received.emit(f"pool_{pool_id}_clean_wall", False, str(exc))
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_clean_wall", False, str(exc)
+            )
 
     def call_pool_clean_floor(self, pool_id: int) -> None:
-        client = self._pool_start_floor_clients.get(pool_id)
-        if client is None or not client.service_is_ready():
+        client = self._clean_floor_clients.get(pool_id)
+        if client is None or not client.wait_for_server(timeout_sec=1.0):
             self.signals.service_response_received.emit(
-                f"pool_{pool_id}_clean_floor", False, "Service not available"
+                f"pool_{pool_id}_clean_floor", False, "CleanFloor action not available"
             )
             return
-        request = Trigger.Request()
-        future = client.call_async(request)
-        future.add_done_callback(partial(self._on_pool_clean_floor_response, pool_id))
+        future = client.send_goal_async(CleanFloor.Goal())
+        future.add_done_callback(partial(self._on_clean_floor_goal_response, pool_id))
 
-    def _on_pool_clean_floor_response(self, pool_id: int, future) -> None:
+    def _on_clean_floor_goal_response(self, pool_id: int, future) -> None:
+        try:
+            handle = future.result()
+            if handle.accepted:
+                self.signals.service_response_received.emit(
+                    f"pool_{pool_id}_clean_floor", True, "CleanFloor started"
+                )
+            else:
+                self.signals.service_response_received.emit(
+                    f"pool_{pool_id}_clean_floor", False, "CleanFloor goal rejected"
+                )
+        except Exception as exc:
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_clean_floor", False, str(exc)
+            )
+
+    # --- Per-Pool Pause/Resume Services (Dashboard → Isaac Sim direct) ---
+    def call_pause_floor(self, pool_id: int) -> None:
+        client = self._pause_floor_clients.get(pool_id)
+        if client is None or not client.service_is_ready():
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_pause_floor", False, "Pause floor service not available"
+            )
+            return
+        future = client.call_async(PauseMotion.Request())
+        future.add_done_callback(partial(self._on_pause_floor_response, pool_id))
+
+    def _on_pause_floor_response(self, pool_id: int, future) -> None:
         try:
             response = future.result()
             self.signals.service_response_received.emit(
-                f"pool_{pool_id}_clean_floor", response.success, response.message
+                f"pool_{pool_id}_pause_floor", response.success, response.message
             )
         except Exception as exc:
-            self.signals.service_response_received.emit(f"pool_{pool_id}_clean_floor", False, str(exc))
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_pause_floor", False, str(exc)
+            )
+
+    def call_resume_floor(self, pool_id: int) -> None:
+        client = self._resume_floor_clients.get(pool_id)
+        if client is None or not client.service_is_ready():
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_resume_floor", False, "Resume floor service not available"
+            )
+            return
+        future = client.call_async(ResumeMotion.Request())
+        future.add_done_callback(partial(self._on_resume_floor_response, pool_id))
+
+    def _on_resume_floor_response(self, pool_id: int, future) -> None:
+        try:
+            response = future.result()
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_resume_floor", response.success, response.message
+            )
+        except Exception as exc:
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_resume_floor", False, str(exc)
+            )
+
+    def call_pause_wall(self, pool_id: int) -> None:
+        client = self._pause_wall_clients.get(pool_id)
+        if client is None or not client.service_is_ready():
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_pause_wall", False, "Pause wall service not available"
+            )
+            return
+        future = client.call_async(PauseMotion.Request())
+        future.add_done_callback(partial(self._on_pause_wall_response, pool_id))
+
+    def _on_pause_wall_response(self, pool_id: int, future) -> None:
+        try:
+            response = future.result()
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_pause_wall", response.success, response.message
+            )
+        except Exception as exc:
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_pause_wall", False, str(exc)
+            )
+
+    def call_resume_wall(self, pool_id: int) -> None:
+        client = self._resume_wall_clients.get(pool_id)
+        if client is None or not client.service_is_ready():
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_resume_wall", False, "Resume wall service not available"
+            )
+            return
+        future = client.call_async(ResumeMotion.Request())
+        future.add_done_callback(partial(self._on_resume_wall_response, pool_id))
+
+    def _on_resume_wall_response(self, pool_id: int, future) -> None:
+        try:
+            response = future.result()
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_resume_wall", response.success, response.message
+            )
+        except Exception as exc:
+            self.signals.service_response_received.emit(
+                f"pool_{pool_id}_resume_wall", False, str(exc)
+            )
 
     def get_pool_status(self, pool_id: int) -> Optional[PoolStatus]:
         return self._pool_status.get(pool_id)
@@ -288,6 +407,10 @@ class PoolPanel(QGroupBox):
     # Signals for button clicks
     clean_wall_clicked = pyqtSignal(int)  # pool_id
     clean_floor_clicked = pyqtSignal(int)  # pool_id
+    pause_wall_clicked = pyqtSignal(int)  # pool_id
+    pause_floor_clicked = pyqtSignal(int)  # pool_id
+    resume_wall_clicked = pyqtSignal(int)  # pool_id
+    resume_floor_clicked = pyqtSignal(int)  # pool_id
 
     def __init__(self, pool_id: int, parent=None):
         super().__init__(parent)
@@ -333,16 +456,16 @@ class PoolPanel(QGroupBox):
         control_label.setStyleSheet("font-size: 16px; color: #888; font-weight: bold;")
         control_col.addWidget(control_label)
 
-        # CleanWall button
+        # CleanWall button (dynamic: Start / Pause / Resume)
         self.clean_wall_btn = QPushButton("Clean Wall")
         self.clean_wall_btn.setFixedSize(150, 45)
-        self.clean_wall_btn.clicked.connect(lambda: self.clean_wall_clicked.emit(self.pool_id))
+        self.clean_wall_btn.clicked.connect(self._on_wall_btn_clicked)
         control_col.addWidget(self.clean_wall_btn)
 
-        # CleanFloor button
+        # CleanFloor button (dynamic: Start / Pause / Resume)
         self.clean_floor_btn = QPushButton("Clean Floor")
         self.clean_floor_btn.setFixedSize(150, 45)
-        self.clean_floor_btn.clicked.connect(lambda: self.clean_floor_clicked.emit(self.pool_id))
+        self.clean_floor_btn.clicked.connect(self._on_floor_btn_clicked)
         control_col.addWidget(self.clean_floor_btn)
 
         # Status label
@@ -402,7 +525,7 @@ class PoolPanel(QGroupBox):
         self._apply_button_styles()
 
     def _apply_button_styles(self):
-        """Apply button styles based on current states."""
+        """Apply button styles based on current states (IDLE, RUNNING, PAUSED)."""
         # CleanWall button style
         if self._wall_state == MotionStatus.RUNNING:
             self.clean_wall_btn.setStyleSheet("""
@@ -414,8 +537,22 @@ class PoolPanel(QGroupBox):
                     font-weight: bold;
                     border-radius: 6px;
                 }
+                QPushButton:hover { background-color: #e0a800; }
             """)
-            self.clean_wall_btn.setText("Wall Running...")
+            self.clean_wall_btn.setText("Pause Wall")
+        elif self._wall_state == MotionStatus.PAUSED:
+            self.clean_wall_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #17a2b8;
+                    color: white;
+                    border: none;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border-radius: 6px;
+                }
+                QPushButton:hover { background-color: #138496; }
+            """)
+            self.clean_wall_btn.setText("Resume Wall")
         else:
             self.clean_wall_btn.setStyleSheet("""
                 QPushButton {
@@ -442,8 +579,22 @@ class PoolPanel(QGroupBox):
                     font-weight: bold;
                     border-radius: 6px;
                 }
+                QPushButton:hover { background-color: #e0a800; }
             """)
-            self.clean_floor_btn.setText("Floor Running...")
+            self.clean_floor_btn.setText("Pause Floor")
+        elif self._floor_state == MotionStatus.PAUSED:
+            self.clean_floor_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #17a2b8;
+                    color: white;
+                    border: none;
+                    font-size: 16px;
+                    font-weight: bold;
+                    border-radius: 6px;
+                }
+                QPushButton:hover { background-color: #138496; }
+            """)
+            self.clean_floor_btn.setText("Resume Floor")
         else:
             self.clean_floor_btn.setStyleSheet("""
                 QPushButton {
@@ -458,6 +609,24 @@ class PoolPanel(QGroupBox):
                 QPushButton:disabled { background-color: #555; color: #888; }
             """)
             self.clean_floor_btn.setText("Clean Floor")
+
+    def _on_wall_btn_clicked(self):
+        """Handle wall button click - Start/Pause/Resume based on state."""
+        if self._wall_state == MotionStatus.RUNNING:
+            self.pause_wall_clicked.emit(self.pool_id)
+        elif self._wall_state == MotionStatus.PAUSED:
+            self.resume_wall_clicked.emit(self.pool_id)
+        else:
+            self.clean_wall_clicked.emit(self.pool_id)
+
+    def _on_floor_btn_clicked(self):
+        """Handle floor button click - Start/Pause/Resume based on state."""
+        if self._floor_state == MotionStatus.RUNNING:
+            self.pause_floor_clicked.emit(self.pool_id)
+        elif self._floor_state == MotionStatus.PAUSED:
+            self.resume_floor_clicked.emit(self.pool_id)
+        else:
+            self.clean_floor_clicked.emit(self.pool_id)
 
     def set_pool(self, pool_id: int):
         self.pool_id = pool_id
@@ -519,16 +688,15 @@ class PoolPanel(QGroupBox):
             self._apply_button_styles()
 
     def update_button_enable_state(self):
-        """Update button enable states based on motion states."""
-        is_wall_running = self._wall_state == MotionStatus.RUNNING
-        is_floor_running = self._floor_state == MotionStatus.RUNNING
-        # Disable buttons when any motion is running
-        self.clean_wall_btn.setEnabled(not is_wall_running and not is_floor_running)
-        self.clean_floor_btn.setEnabled(not is_wall_running and not is_floor_running)
+        """Wall/Floor 버튼은 항상 활성화 (Start/Pause/Resume 모두 가능)."""
+        self.clean_wall_btn.setEnabled(True)
+        self.clean_floor_btn.setEnabled(True)
 
     @property
     def is_any_running(self) -> bool:
-        return self._wall_state == MotionStatus.RUNNING or self._floor_state == MotionStatus.RUNNING
+        """RUNNING 또는 PAUSED 상태이면 청소가 진행 중으로 판단."""
+        return self._wall_state in (MotionStatus.RUNNING, MotionStatus.PAUSED) or \
+               self._floor_state in (MotionStatus.RUNNING, MotionStatus.PAUSED)
 
     def reset_motion_states(self):
         """Force reset motion states to IDLE (called after STOP ALL)."""
@@ -715,6 +883,10 @@ class DashboardWindow(QMainWindow):
         self.pool_panel = PoolPanel(self.active_pool_id)
         self.pool_panel.clean_wall_clicked.connect(self._on_clean_wall_clicked)
         self.pool_panel.clean_floor_clicked.connect(self._on_clean_floor_clicked)
+        self.pool_panel.pause_wall_clicked.connect(self._on_pause_wall_clicked)
+        self.pool_panel.pause_floor_clicked.connect(self._on_pause_floor_clicked)
+        self.pool_panel.resume_wall_clicked.connect(self._on_resume_wall_clicked)
+        self.pool_panel.resume_floor_clicked.connect(self._on_resume_floor_clicked)
         main_layout.addWidget(self.pool_panel, 1)
 
         # Apply dark theme
@@ -785,12 +957,15 @@ class DashboardWindow(QMainWindow):
             self.pool_panel.update_robot_status(msg)
 
     def _on_motion_status(self, pool_id: int, motion_type: str, msg: MotionStatus):
-        # Ignore all motion status if we're in idle state (stale topics)
-        if not self._planner_active and not self._individual_active:
-            return
-        
+        # RUNNING 또는 PAUSED 상태이면 individual 모드 활성
+        if msg.state in (MotionStatus.RUNNING, MotionStatus.PAUSED) and not self._planner_active:
+            self._individual_active = True
+            self._update_ui_state()
+
         if pool_id == self.active_pool_id:
             self.pool_panel.update_motion_status(motion_type, msg)
+            if self._individual_active and not self._planner_active:
+                self.pool_panel.update_button_enable_state()
 
         # Check if any pool has finished
         if msg.state == MotionStatus.DONE or msg.state == MotionStatus.IDLE:
@@ -802,7 +977,8 @@ class DashboardWindow(QMainWindow):
         for pid in pool_ids():
             statuses = self.ros_node.get_motion_status(pid)
             for status in statuses.values():
-                if status is not None and status.state == MotionStatus.RUNNING:
+                # RUNNING 또는 PAUSED이면 아직 진행 중
+                if status is not None and status.state in (MotionStatus.RUNNING, MotionStatus.PAUSED):
                     all_idle = False
                     break
             if not all_idle:
@@ -856,10 +1032,10 @@ class DashboardWindow(QMainWindow):
                 self.global_status_label.setText(f"Stop error: {message}")
                 self.global_status_label.setStyleSheet("color: #ff6b6b; font-size: 16px;")
             
-            # Always reset to idle after stop (success or fail)
+            # Planner mode 해제 - 실제 motion 상태는 Isaac Sim status에 의해 결정됨
+            # (reset_motion_states 호출 제거 - 비동기 stop 완료 전에 강제 리셋하면 상태 불일치)
             self._planner_active = False
-            self._individual_active = False
-            self.pool_panel.reset_motion_states()
+            # individual_active는 motion status가 IDLE이 되면 _check_all_idle에서 자동 해제
             self._update_ui_state()
 
         elif service_name.startswith("pool_"):
@@ -879,35 +1055,37 @@ class DashboardWindow(QMainWindow):
                     if pool_id == self.active_pool_id:
                         if success:
                             self.pool_panel.set_status(f"{action}: {message}", "#28a745")
-                            # SUCCESS: set individual active
                             self._individual_active = True
                         else:
                             self.pool_panel.set_status(f"Error: {message}", "#ff6b6b")
-                            # FAILED: restore to idle
-                            self._individual_active = False
                         self._update_ui_state()
                 except ValueError:
                     pass
 
     def _update_ui_state(self):
-        """Update UI based on current state (planner/individual mode)."""
-        any_active = self._planner_active or self._individual_active
-
-        if any_active:
-            # Show STOP ALL, hide AUTO START
+        """Update UI based on current state.
+        
+        상태 관리:
+        - _planner_active: AUTO START로 시작된 전체 청소 (STOP ALL 표시)
+        - _individual_active: 개별 버튼으로 시작된 청소 (AUTO START 유지, 비활성화)
+        """
+        if self._planner_active:
+            # Planner mode (AUTO START): show STOP ALL, disable pool buttons
             self.auto_start_btn.hide()
             self.stop_all_btn.show()
             self.stop_all_btn.setEnabled(True)
             self.stop_all_btn.setText("STOP ALL")
-
-            if self._planner_active:
-                # Planner mode: disable pool panel buttons
-                self.pool_panel.set_buttons_enabled(False)
-            else:
-                # Individual mode: update button states based on running status
-                self.pool_panel.update_button_enable_state()
+            self.pool_panel.set_buttons_enabled(False)
+        elif self._individual_active:
+            # Individual mode: keep AUTO START visible but disabled
+            self.auto_start_btn.show()
+            self.auto_start_btn.setEnabled(False)
+            self.auto_start_btn.setText("AUTO START")
+            self.stop_all_btn.hide()
+            # Update button states based on running status
+            self.pool_panel.update_button_enable_state()
         else:
-            # Idle state: show AUTO START, hide STOP ALL
+            # Idle state: show AUTO START, enable all
             self.auto_start_btn.show()
             self.auto_start_btn.setEnabled(True)
             self.auto_start_btn.setText("AUTO START")
@@ -934,32 +1112,46 @@ class DashboardWindow(QMainWindow):
         self.ros_node.call_global_stop()
 
     def _on_clean_wall_clicked(self, pool_id: int):
-        # Check if already active
-        if self._planner_active or self._individual_active:
+        if self._planner_active:
             return
-        
-        # PENDING state: disable all buttons
+
         self.pool_panel.clean_wall_btn.setEnabled(False)
         self.pool_panel.clean_wall_btn.setText("Starting...")
-        self.pool_panel.clean_floor_btn.setEnabled(False)
-        self.auto_start_btn.setEnabled(False)
-        
         self.pool_panel.set_status("Starting CleanWall...", "#888")
         self.ros_node.call_pool_clean_wall(pool_id)
 
     def _on_clean_floor_clicked(self, pool_id: int):
-        # Check if already active
-        if self._planner_active or self._individual_active:
+        if self._planner_active:
             return
-        
-        # PENDING state: disable all buttons
+
         self.pool_panel.clean_floor_btn.setEnabled(False)
         self.pool_panel.clean_floor_btn.setText("Starting...")
-        self.pool_panel.clean_wall_btn.setEnabled(False)
-        self.auto_start_btn.setEnabled(False)
-        
         self.pool_panel.set_status("Starting CleanFloor...", "#888")
         self.ros_node.call_pool_clean_floor(pool_id)
+
+    def _on_pause_wall_clicked(self, pool_id: int):
+        self.pool_panel.clean_wall_btn.setEnabled(False)
+        self.pool_panel.clean_wall_btn.setText("Pausing...")
+        self.pool_panel.set_status("Pausing CleanWall...", "#888")
+        self.ros_node.call_pause_wall(pool_id)
+
+    def _on_pause_floor_clicked(self, pool_id: int):
+        self.pool_panel.clean_floor_btn.setEnabled(False)
+        self.pool_panel.clean_floor_btn.setText("Pausing...")
+        self.pool_panel.set_status("Pausing CleanFloor...", "#888")
+        self.ros_node.call_pause_floor(pool_id)
+
+    def _on_resume_wall_clicked(self, pool_id: int):
+        self.pool_panel.clean_wall_btn.setEnabled(False)
+        self.pool_panel.clean_wall_btn.setText("Resuming...")
+        self.pool_panel.set_status("Resuming CleanWall...", "#888")
+        self.ros_node.call_resume_wall(pool_id)
+
+    def _on_resume_floor_clicked(self, pool_id: int):
+        self.pool_panel.clean_floor_btn.setEnabled(False)
+        self.pool_panel.clean_floor_btn.setText("Resuming...")
+        self.pool_panel.set_status("Resuming CleanFloor...", "#888")
+        self.ros_node.call_resume_floor(pool_id)
 
     def _update_connection_status(self):
         if rclpy.ok():

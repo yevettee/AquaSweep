@@ -13,12 +13,13 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'models'), glob('models/*.pt')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='woody',
     maintainer_email='woody.myung@gmail.com',
-    description='AquaSweep Fish Detection Package - SAM2/YOLO + DINOv2 Pipeline',
+    description='AquaSweep Fish Detection Package - YOLO OBB + OpenCV status',
     license='Apache-2.0',
     extras_require={
         'test': [

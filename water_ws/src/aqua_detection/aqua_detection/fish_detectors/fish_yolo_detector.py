@@ -1,10 +1,8 @@
-"""YOLOv8-based fish detector with OpenCV debris detection.
+"""YOLO OBB fish detector with OpenCV debris detection.
 
-Hybrid approach:
-- Fish detection: YOLO model (yolov8_fish_species.pt) for sturgeon/salmon
-- Debris detection: OpenCV SimpleBlobDetector for small particles
-
-Alive/suspicious classification is handled by contrast-based analysis.
+- Fish: models/yolo26n_fish_species_v1.pt (OBB, sturgeon)
+- Debris: OpenCV SimpleBlobDetector (no separate .pt)
+- Alive/suspicious: fish_status_classifier (outside this module)
 """
 
 import cv2
@@ -41,7 +39,19 @@ def _find_model_path(model_name: str) -> Optional[Path]:
     direct = Path(model_name)
     if direct.exists():
         return direct
-    
+
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share_model = (
+            Path(get_package_share_directory("aqua_detection"))
+            / "models"
+            / model_name
+        )
+        if share_model.exists():
+            return share_model
+    except Exception:
+        pass
+
     # Common search locations
     search_paths = [
         Path(__file__).parent.parent.parent / "models" / model_name,
@@ -66,29 +76,14 @@ def _find_model_path(model_name: str) -> Optional[Path]:
 
 
 class FishYOLODetector(BaseDetector):
-    """Hybrid detector: YOLO for fish + OpenCV for debris.
+    """YOLO OBB fish detector + OpenCV blob debris."""
     
-    - Fish detection: YOLO model for sturgeon/salmon bbox
-    - Debris detection: OpenCV SimpleBlobDetector for small particles
-    
-    Alive/suspicious classification uses contrast-based analysis.
-    
-    Requirements:
-        pip install ultralytics
-        Model at: models/yolov8_fish_species.pt
-    """
-    
-    # Fish model class mapping
-    FISH_CLASS_NAMES = {
-        0: "sturgeon",
-        1: "salmon",
-        2: "debris",  # ignored, use OpenCV instead
-    }
+    FISH_CLASS_NAMES = {0: "sturgeon"}
+    _IGNORED_SPECIES = frozenset({"debris", "unknown"})
     
     def __init__(
         self,
-        model_path: str = "models/yolov8_fish_species.pt",
-        debris_model_path: str = None,  # deprecated, kept for compatibility
+        model_path: str = "models/yolo26n_fish_species_v1.pt",
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
         device: str = "cuda",
@@ -99,11 +94,10 @@ class FishYOLODetector(BaseDetector):
         debris_max_area: int = 8,
         debris_debug: bool = False,
     ):
-        """Initialize hybrid YOLO+OpenCV detector.
+        """Initialize YOLO OBB + OpenCV debris detector.
         
         Args:
-            model_path: Path to fish detection model
-            debris_model_path: Deprecated, ignored (OpenCV used instead)
+            model_path: Path to fish OBB weights (yolo26n_fish_species_v1.pt)
             confidence_threshold: Detection confidence threshold
             iou_threshold: NMS IoU threshold
             device: "cuda" or "cpu"
@@ -190,7 +184,7 @@ class FishYOLODetector(BaseDetector):
         return cv2.SimpleBlobDetector_create(params)
     
     def get_name(self) -> str:
-        return "yolo_opencv_hybrid"
+        return "yolo_obb"
     
     def warmup(self):
         """Warmup YOLO model with dummy inference."""
@@ -206,6 +200,23 @@ class FishYOLODetector(BaseDetector):
         except Exception as e:
             print(f"YOLO warmup failed: {e}")
     
+    def _species_name(self, class_id: int) -> str:
+        """Resolve class id to species name from checkpoint or fallback map."""
+        if self._fish_model is not None and getattr(self._fish_model, "names", None):
+            return str(self._fish_model.names.get(class_id, "unknown"))
+        return self.FISH_CLASS_NAMES.get(class_id, "unknown")
+
+    @staticmethod
+    def _result_detections(result):
+        """Return ultralytics Boxes/OBB tensor container (detect vs obb task)."""
+        obb = getattr(result, "obb", None)
+        if obb is not None and len(obb):
+            return obb
+        boxes = getattr(result, "boxes", None)
+        if boxes is not None and len(boxes):
+            return boxes
+        return None
+
     def _run_fish_model(self, image: np.ndarray, tracking: bool = False, persist: bool = True) -> List[FishDetection]:
         """Run fish model and extract fish detections only."""
         fish_detections = []
@@ -235,21 +246,22 @@ class FishYOLODetector(BaseDetector):
             return fish_detections
         
         for result in results:
-            boxes = result.boxes
-            if boxes is None:
+            detections = self._result_detections(result)
+            if detections is None:
                 continue
             
-            for i in range(len(boxes)):
-                xyxy = boxes.xyxy[i].cpu().numpy()
+            for i in range(len(detections)):
+                xyxy = detections.xyxy[i].cpu().numpy()
                 x1, y1, x2, y2 = map(int, xyxy)
                 w, h = x2 - x1, y2 - y1
+                if w <= 0 or h <= 0:
+                    continue
                 
-                class_id = int(boxes.cls[i].cpu().numpy())
-                confidence = float(boxes.conf[i].cpu().numpy())
-                class_name = self.FISH_CLASS_NAMES.get(class_id, "unknown")
+                class_id = int(detections.cls[i].cpu().numpy())
+                confidence = float(detections.conf[i].cpu().numpy())
+                class_name = self._species_name(class_id)
                 
-                # Skip debris class from fish model (use debris model instead)
-                if class_name == "debris":
+                if class_name in self._IGNORED_SPECIES:
                     continue
                 
                 det = FishDetection(
@@ -258,9 +270,8 @@ class FishYOLODetector(BaseDetector):
                     confidence=confidence,
                 )
                 
-                # Get tracking ID if available
-                if tracking and boxes.id is not None:
-                    det._track_id = int(boxes.id[i].cpu().numpy())
+                if tracking and getattr(detections, "id", None) is not None:
+                    det._track_id = int(detections.id[i].cpu().numpy())
                 
                 fish_detections.append(det)
         

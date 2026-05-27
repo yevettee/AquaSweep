@@ -49,13 +49,21 @@ Thumbs.db
 *.tmp
 *.bak
 
-# YOLO Training
+# Isaac Sim — local Script Editor tools (OBB collect / debug; keep on disk only)
+isaac_sim_extensions/top_cam_ext/top_camera_python/local/*
+!isaac_sim_extensions/top_cam_ext/top_camera_python/local/README.md
+
+# aqua_detection — training outputs & datasets (not tracked)
 water_ws/src/aqua_detection/runs/
+water_ws/src/aqua_detection/dataset_obb/
+water_ws/src/aqua_detection/debug_obb_viz.png
 water_ws/src/aqua_detection/dataset_replicator/
 water_ws/src/aqua_detection/dataset/
-runs/
 water_ws/src/aqua_detection/dataset_replicator_seg/
+runs/
+
+# YOLO base weights (deployment: models/yolo26n_fish_species_v1.pt)
 yolo26n.pt
 yolov8n-seg.pt
 
-# Keep: models/*.pt (final trained models like yolov8_fish_species.pt)
+# Keep tracked: water_ws/src/aqua_detection/models/yolo26n_fish_species_v*.pt

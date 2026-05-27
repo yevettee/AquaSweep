@@ -26,8 +26,14 @@ class TaskExecutor:
             node, MoveFish, f'/{pool_id}/move_fish'
         )
 
-        self._current_goal_handle: Optional[ClientGoalHandle] = None
-        self._feedback_callback: Optional[Callable] = None
+        # 각 action별로 별도 goal handle 관리 (동시 실행 지원)
+        self._clean_floor_handle: Optional[ClientGoalHandle] = None
+        self._clean_wall_handle: Optional[ClientGoalHandle] = None
+        self._move_fish_handle: Optional[ClientGoalHandle] = None
+        
+        self._floor_feedback_callback: Optional[Callable] = None
+        self._wall_feedback_callback: Optional[Callable] = None
+        self._fish_feedback_callback: Optional[Callable] = None
 
     @property
     def pool_id(self) -> str:
@@ -59,14 +65,14 @@ class TaskExecutor:
             return False
 
         goal = CleanFloor.Goal()
-        self._feedback_callback = feedback_callback
+        self._floor_feedback_callback = feedback_callback
 
         future = self._clean_floor_client.send_goal_async(
             goal,
-            feedback_callback=self._handle_feedback
+            feedback_callback=self._handle_floor_feedback
         )
         future.add_done_callback(
-            lambda f: self._handle_goal_response(f, done_callback)
+            lambda f: self._handle_floor_goal_response(f, done_callback)
         )
         return True
 
@@ -75,7 +81,7 @@ class TaskExecutor:
         feedback_callback: Optional[Callable] = None,
         done_callback: Optional[Callable] = None
     ) -> bool:
-        """Send CleanWall goal to controller (stub - not fully implemented)."""
+        """Send CleanWall goal to controller."""
         if not self._clean_wall_client.wait_for_server(timeout_sec=1.0):
             self._node.get_logger().warn(
                 f'CleanWall server not available: /{self._pool_id}/clean_wall'
@@ -83,14 +89,14 @@ class TaskExecutor:
             return False
 
         goal = CleanWall.Goal()
-        self._feedback_callback = feedback_callback
+        self._wall_feedback_callback = feedback_callback
 
         future = self._clean_wall_client.send_goal_async(
             goal,
-            feedback_callback=self._handle_feedback
+            feedback_callback=self._handle_wall_feedback
         )
         future.add_done_callback(
-            lambda f: self._handle_goal_response(f, done_callback)
+            lambda f: self._handle_wall_goal_response(f, done_callback)
         )
         return True
 
@@ -102,7 +108,7 @@ class TaskExecutor:
         feedback_callback: Optional[Callable] = None,
         done_callback: Optional[Callable] = None
     ) -> bool:
-        """Send MoveFish goal to controller (stub - not fully implemented)."""
+        """Send MoveFish goal to controller."""
         if not self._move_fish_client.wait_for_server(timeout_sec=1.0):
             self._node.get_logger().warn(
                 f'MoveFish server not available: /{self._pool_id}/move_fish'
@@ -113,51 +119,112 @@ class TaskExecutor:
         goal.source_pool = source_pool
         goal.target_pool = target_pool
         goal.fish_count = fish_count
-        self._feedback_callback = feedback_callback
+        self._fish_feedback_callback = feedback_callback
 
         future = self._move_fish_client.send_goal_async(
             goal,
-            feedback_callback=self._handle_feedback
+            feedback_callback=self._handle_fish_feedback
         )
         future.add_done_callback(
-            lambda f: self._handle_goal_response(f, done_callback)
+            lambda f: self._handle_fish_goal_response(f, done_callback)
         )
         return True
 
     def cancel_current_goal(self) -> bool:
-        """Cancel currently running goal."""
-        if self._current_goal_handle is None:
-            return False
+        """Cancel all running goals (CleanWall, CleanFloor, MoveFish)."""
+        cancelled = False
+        
+        if self._clean_wall_handle is not None:
+            self._clean_wall_handle.cancel_goal_async()
+            self._node.get_logger().info(f'{self._pool_id}: CleanWall cancellation requested')
+            cancelled = True
+        
+        if self._clean_floor_handle is not None:
+            self._clean_floor_handle.cancel_goal_async()
+            self._node.get_logger().info(f'{self._pool_id}: CleanFloor cancellation requested')
+            cancelled = True
+        
+        if self._move_fish_handle is not None:
+            self._move_fish_handle.cancel_goal_async()
+            self._node.get_logger().info(f'{self._pool_id}: MoveFish cancellation requested')
+            cancelled = True
+        
+        return cancelled
 
-        cancel_future = self._current_goal_handle.cancel_goal_async()
-        self._node.get_logger().info('Cancellation requested')
-        return True
+    # --- CleanFloor handlers ---
+    def _handle_floor_feedback(self, feedback_msg) -> None:
+        if self._floor_feedback_callback:
+            self._floor_feedback_callback(feedback_msg.feedback)
 
-    def _handle_feedback(self, feedback_msg) -> None:
-        """Internal feedback handler."""
-        if self._feedback_callback:
-            self._feedback_callback(feedback_msg.feedback)
-
-    def _handle_goal_response(self, future, done_callback: Optional[Callable]) -> None:
-        """Handle goal acceptance/rejection."""
+    def _handle_floor_goal_response(self, future, done_callback: Optional[Callable]) -> None:
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self._node.get_logger().warn('Goal rejected')
-            self._current_goal_handle = None
+            self._node.get_logger().warn(f'{self._pool_id}: CleanFloor goal rejected')
+            self._clean_floor_handle = None
             return
 
-        self._current_goal_handle = goal_handle
-        self._node.get_logger().info('Goal accepted')
+        self._clean_floor_handle = goal_handle
+        self._node.get_logger().info(f'{self._pool_id}: CleanFloor goal accepted')
 
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(
-            lambda f: self._handle_result(f, done_callback)
+            lambda f: self._handle_floor_result(f, done_callback)
         )
 
-    def _handle_result(self, future, done_callback: Optional[Callable]) -> None:
-        """Handle action result."""
+    def _handle_floor_result(self, future, done_callback: Optional[Callable]) -> None:
         result = future.result().result
-        self._current_goal_handle = None
+        self._clean_floor_handle = None
+        if done_callback:
+            done_callback(result)
 
+    # --- CleanWall handlers ---
+    def _handle_wall_feedback(self, feedback_msg) -> None:
+        if self._wall_feedback_callback:
+            self._wall_feedback_callback(feedback_msg.feedback)
+
+    def _handle_wall_goal_response(self, future, done_callback: Optional[Callable]) -> None:
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self._node.get_logger().warn(f'{self._pool_id}: CleanWall goal rejected')
+            self._clean_wall_handle = None
+            return
+
+        self._clean_wall_handle = goal_handle
+        self._node.get_logger().info(f'{self._pool_id}: CleanWall goal accepted')
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            lambda f: self._handle_wall_result(f, done_callback)
+        )
+
+    def _handle_wall_result(self, future, done_callback: Optional[Callable]) -> None:
+        result = future.result().result
+        self._clean_wall_handle = None
+        if done_callback:
+            done_callback(result)
+
+    # --- MoveFish handlers ---
+    def _handle_fish_feedback(self, feedback_msg) -> None:
+        if self._fish_feedback_callback:
+            self._fish_feedback_callback(feedback_msg.feedback)
+
+    def _handle_fish_goal_response(self, future, done_callback: Optional[Callable]) -> None:
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self._node.get_logger().warn(f'{self._pool_id}: MoveFish goal rejected')
+            self._move_fish_handle = None
+            return
+
+        self._move_fish_handle = goal_handle
+        self._node.get_logger().info(f'{self._pool_id}: MoveFish goal accepted')
+
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(
+            lambda f: self._handle_fish_result(f, done_callback)
+        )
+
+    def _handle_fish_result(self, future, done_callback: Optional[Callable]) -> None:
+        result = future.result().result
+        self._move_fish_handle = None
         if done_callback:
             done_callback(result)
