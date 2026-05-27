@@ -135,6 +135,7 @@ class SturgeonAnimator:
         self._sturgeons: list[_SturgeonCache] | None = None
         self._step_counter = 0
         self._enabled = True
+        self.grabbed_paths: set[str] = set()  # prim paths currently held by gantry
 
     @property
     def enabled(self) -> bool:
@@ -191,6 +192,8 @@ class SturgeonAnimator:
 
         t = self._t
         for s in self._sturgeons:
+            if str(s.prim.GetPath()) in self.grabbed_paths:
+                continue
             p = s.params
             angle = p["angle0"] + p["omega"] * t
             radius = p["radius_base"] + p["radius_amp"] * math.sin(

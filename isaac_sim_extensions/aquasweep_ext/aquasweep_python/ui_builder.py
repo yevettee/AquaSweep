@@ -75,6 +75,10 @@ from underwater_robot_python.global_variables import (
 # multi-robot spawn (7 hippos, one nested under each /World/Pools/Pool_<n>)
 # can address the FSM-driven primary robot explicitly.
 
+# ── Gantry Robot 임포트 ───────────────────────────────────────────────────────
+from . import gantry_builder as _gantry
+_GANTRY_AVAILABLE = True
+
 # ── Rail Robot 임포트 ─────────────────────────────────────────────────────────
 from rail_robot_python.scenario import RailRobotScenario
 from rail_robot_python.rail_builder import (
@@ -357,6 +361,23 @@ class UIBuilder:
                 )
                 self.wrapped_ui_elements.append(self._water_current_btn)
 
+        # ── Gantry Robot ──────────────────────────────────────────────────────
+        gantry_frame = CollapsableFrame("Gantry Robot", collapsed=True)
+        with gantry_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                ui.Label(
+                    "Ceiling-rail gantry for collecting dead sturgeons",
+                    style={"color": 0xFF888888, "font_size": 12},
+                    word_wrap=True,
+                )
+                ui.Spacer(height=4)
+                self._gantry_btn = StateButton(
+                    "Gantry", "Build Gantry", "Remove Gantry",
+                    on_a_click_fn=self._on_gantry_build,
+                    on_b_click_fn=self._on_gantry_remove,
+                )
+                self.wrapped_ui_elements.append(self._gantry_btn)
+
         # ── Suction Status (DEBUG_ENABLE_SUCTION이 True일 때만 표시) ──────────
         if DEBUG_ENABLE_SUCTION:
             suction_frame = CollapsableFrame("Suction Status", collapsed=True)
@@ -405,9 +426,12 @@ class UIBuilder:
         scene_builders.enable_gpu_dynamics(stage)
         scene_builders.add_lighting(stage)
         scene_builders.build_building(stage)
+        scene_builders.build_outdoor_ground(stage)
+        scene_builders.build_parking_lot(stage)
+        scene_builders.build_parked_cars(stage)
+        scene_builders.build_door(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
-        scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
 
         if not _ROBOT_USD_PATH.is_file():
@@ -429,6 +453,13 @@ class UIBuilder:
 
         # Build rail robots for wall cleaning
         self._setup_rail_robots(stage)
+
+        # Snap viewport to default view LAST — protects earlier setup from any
+        # camera-side failure (an exception here used to skip robot/sturgeon spawn).
+        try:
+            scene_builders.set_default_view(stage)
+        except Exception as exc:
+            carb.log_warn(f"[aquasweep] set_default_view skipped: {exc}")
 
     def _setup_rail_robots(self, stage) -> None:
         """Setup rail robot USD prims and rails for enabled pools only."""
@@ -814,6 +845,17 @@ class UIBuilder:
     def _on_trail_off(self):
         _uw_gv.DEBUG_CENTER_TRAIL_ENABLED = False
         reset_center_trail_debug()
+
+    def _on_gantry_build(self):
+        stage = get_current_stage()
+        if stage is None:
+            carb.log_warn("[aquasweep] 겐트리 빌드 실패 — LOAD를 먼저 실행하세요")
+            return
+        animator = getattr(self._water_scenario, "sturgeon_animator", None)
+        _gantry.build(stage, animator=animator)
+
+    def _on_gantry_remove(self):
+        _gantry.remove(get_current_stage())
 
     def _on_water_current_on(self):
         for i, scenario in enumerate(self._scenarios):

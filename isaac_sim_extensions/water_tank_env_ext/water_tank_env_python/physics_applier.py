@@ -96,6 +96,9 @@ HALF_HEIGHT_ATTR = "aquasweep:half_height"
 CD_LINEAR_ATTR = "aquasweep:cd_linear"
 CD_ANGULAR_ATTR = "aquasweep:cd_angular"
 ADDED_MASS_ATTR = "aquasweep:added_mass"
+# BCD multiplier — robot scenario 가 매 상태 전환 시 prim.SetAttribute 로 갱신.
+# physics_applier 는 매 step 이 값을 읽어 body.buoyancy_multiplier 에 반영.
+BUOYANCY_MULT_ATTR = "aquasweep:buoyancy_mult"
 
 
 class _Body:
@@ -104,7 +107,7 @@ class _Body:
     __slots__ = (
         "prim_path", "robot_root", "volume", "half_height",
         "drag", "added_mass", "ground_effect",
-        "view", "prev_velocity",
+        "view", "prev_velocity", "buoyancy_multiplier",
     )
 
     def __init__(self, prim_path, robot_root, volume, half_height, cd_linear, cd_angular,
@@ -118,6 +121,9 @@ class _Body:
         self.ground_effect = GroundEffect()
         self.view = view
         self.prev_velocity = np.zeros(3)
+        # BCD (buoyancy control device) — scenario 가 상태별로 조정
+        # 1.0=중성, >1=떠오름, <1=가라앉음. _compute_buoyancy 에서 magnitude 에 곱함.
+        self.buoyancy_multiplier = 1.0
 
 
 def _get_attr(prim: Usd.Prim, name: str, default: float) -> float:
@@ -182,6 +188,17 @@ class WaterPhysicsApplier:
             )
             self._bodies.append(body)
 
+    def set_buoyancy_multiplier(self, prim_path_substring: str, multiplier: float) -> bool:
+        """robot_root 또는 prim_path 에 ``prim_path_substring`` 이 포함된 body 의
+        부력 multiplier 를 설정한다. scenario 가 IDLE/SINK/CLEAN/ASCEND 상태에 따라 호출.
+        매칭된 body 가 있으면 True 반환."""
+        matched = False
+        for body in self._bodies:
+            if prim_path_substring in body.robot_root or prim_path_substring in body.prim_path:
+                body.buoyancy_multiplier = float(multiplier)
+                matched = True
+        return matched
+
     def apply(self, dt: float) -> None:
         # underwater_robot_ext가 water_tank_env보다 나중에 LOAD되면 discover_bodies
         # 시점에 로봇이 없어서 _bodies가 비어있을 수 있다. 60프레임마다 재탐색한다.
@@ -205,6 +222,15 @@ class WaterPhysicsApplier:
                 ang_vels = body.view.get_angular_velocities()
             except Exception:
                 continue
+
+            # USD attr 로부터 buoyancy_multiplier 동기화 (없으면 직전 값 유지).
+            # 로봇 scenario 가 IDLE/SINK/CLEAN/ASCEND 전환 시 prim attr 만 set 하면 됨.
+            if self._stage is not None:
+                prim = self._stage.GetPrimAtPath(body.prim_path)
+                if prim and prim.IsValid():
+                    mult_attr = prim.GetAttribute(BUOYANCY_MULT_ATTR)
+                    if mult_attr and mult_attr.HasValue():
+                        body.buoyancy_multiplier = float(mult_attr.Get())
 
             pos = np.asarray(positions[0], dtype=float)
             lv = np.asarray(lin_vels[0], dtype=float)
@@ -285,5 +311,5 @@ class WaterPhysicsApplier:
             submerged_ratio = float(np.clip(submerged_height / total_height, 0.0, 1.0))
 
         submerged_volume = body.volume * submerged_ratio
-        magnitude = params.WATER_DENSITY * submerged_volume * params.GRAVITY
+        magnitude = params.WATER_DENSITY * submerged_volume * params.GRAVITY * body.buoyancy_multiplier
         return np.array([0.0, 0.0, magnitude]), pos

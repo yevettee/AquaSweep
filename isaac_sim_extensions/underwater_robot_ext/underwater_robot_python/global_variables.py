@@ -41,11 +41,19 @@ ROBOT_SPAWN_Z_M = 0.26
 ROBOT_CONSTRAINT_Z_M = 0.049
 
 # water_tank_env WaterPhysicsApplier — LOAD 시 tag_aquasweep_attrs()가 base_link에 설정
-# 스러스터 방식: 부력 없음(바닥 청소), 항력은 추진력과 균형을 이루도록 설정
-ROBOT_VOLUME_M3 = 0.0       # 부력 비활성화 — 바닥 접촉 청소 모드
+# BCD 모드: volume 은 mass/ρ 균형값. scenario 가 aquasweep:buoyancy_mult 로 상태별 부력비 조절.
+#   IDLE_FLOATING ≈ 1.10 (부유)  SINKING ≈ 0.70  CLEANING ≈ 0.95  ASCENDING ≈ 1.30
+# mass 추정 ~15 kg (Dingo-D 13 kg + 청소 장비) → 균형 부피 0.015 m³. 실측 후 튜닝 권장.
+ROBOT_VOLUME_M3 = 0.015     # 균형 부피 (multiplier=1.0 에서 부력 = 중력)
 ROBOT_HALF_HEIGHT_M = 0.115
 DRAG_LINEAR_XY = 8.0        # N·s/m — 스러스터 추진과 균형 (0.55m/s @ ~4.4N)
 DRAG_ANGULAR = 6.0          # N·m·s/rad
+
+# BCD multiplier — 모션 상태별 부력비 (mass·g 대비)
+BUOYANCY_MULT_IDLE_FLOATING = 1.10
+BUOYANCY_MULT_SINKING       = 0.70
+BUOYANCY_MULT_CLEANING      = 0.95
+BUOYANCY_MULT_ASCENDING     = 1.30
 
 # 루트 중심 궤적 시각화 (Physics step 샘플)
 DEBUG_CENTER_TRAIL_ENABLED = False

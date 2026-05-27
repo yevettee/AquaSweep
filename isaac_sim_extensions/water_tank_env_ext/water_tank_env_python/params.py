@@ -8,6 +8,60 @@ BUILDING_X = 40.0   # long axis: 4 pools in a row
 BUILDING_Y = 30.0
 BUILDING_FLOOR_Z = 0.0
 
+# ── Outdoor ground (visual-only dry-earth plane around the building) ──────────
+# Mountain fish-farm setting: barren plain encircling the warehouse.
+# Z = -0.10 sits at the bottom of aquafarm Floor mesh (top=0, bottom=-0.10),
+# so the Floor occludes it indoors. Outside, the building reads as resting
+# on a 10 cm concrete plinth above the surrounding earth.
+GROUND_X = 200.0
+GROUND_Y = 160.0
+GROUND_Z = -0.10
+
+# ── Parking lot along the west short wall (x = -20) ──────────────────────────
+PARKING_STALL_COUNT = 8         # 8 × 3.5 = 28 m, leaves 1 m at each y-end
+PARKING_STALL_WIDTH = 3.5       # m (Y, along the wall, ×1.4 of the original 2.5)
+PARKING_STALL_DEPTH = 5.0       # m (X, away from the wall)
+PARKING_OFFSET_FROM_WALL = 2.0  # gap between wall and stall front
+PARKING_LINE_WIDTH = 0.12       # m (paint stripe thickness)
+PARKING_WALL_X = -20.0          # building west wall x-coordinate
+
+# ── Parked cars (real USDZ assets referenced into 3 of the 8 stalls) ─────────
+# All three USDZs are cm-scale and Y-up, so each gets a uniform 0.01 scale and
+# an X-axis −90° rotation to land in our metres / Z-up stage. Tweak per-car
+# overrides below if a model lands rotated, sunk, or floating.
+CAR_USD_FILES = (
+    "ASTON_MARTIN_VULCAN.usdz",
+    "Cyber_Truck.usdz",
+    "Pickup_Truck_Commercial_Vehicle.usdz",
+    "007s_Aston_Martin_DB5.usdz",
+)
+CAR_STALL_INDICES = (1, 4, 6, 3)
+CAR_BASE_SCALE = 0.01                       # cm → m
+# X +90: Y-up → Z-up (puts +Y[up] onto +Z[up]).  Z +90: rotates car's forward
+# (originally along its local +X after the X-tilt) so the long axis lies along
+# the stall depth direction (our world ±X).
+CAR_BASE_ROTATE_XYZ = (90.0, 0.0, 90.0)
+# Per-car tuning: (dx, dy, dz, yaw_deg, scale_mul, color_override_or_None).
+# dx/dy offset within the stall (m). dz lifts car so wheels rest on z=0.
+# color_override binds an off-USDZ red/blue/etc. UsdPreviewSurface to recolor.
+CAR_PER_INDEX_TUNING = (
+    ( 0.00,  0.00,  0.023,  0.0,  1.0,  None),                  # Aston Vulcan
+    ( 0.00,  0.00, -0.517, 90.0,  0.6,  None),                  # Cybertruck
+    ( 0.00,  0.00,  0.676,  0.0,  0.55, None),                  # Pickup
+    (-0.44,  0.00, -0.048,  0.0,  2.0,  None),                  # DB5 — GUI-tuned position/scale
+)
+
+# ── Steel hangar door on east wall (visual-only placeholder) ─────────────────
+# Values match the user-tuned cube in the Isaac Sim viewport.
+DOOR_TRANSLATE = (19.98567, 3.46947, 2.85436)
+DOOR_SCALE = (0.60376, 2.44149, 5.12779)
+
+# ── Default viewport camera applied on every LOAD ─────────────────────────────
+# Tuned by user via /OmniverseKit_Persp in Isaac Sim viewport.
+# Looks down at the building from south-above at a 45° pitch.
+DEFAULT_VIEW_TRANSLATE = (-3.0, -96.59837, 101.59837)
+DEFAULT_VIEW_ROTATE_XYZ = (45.0, 0.0, 0.0)     # degrees, applied as RotateXYZ
+
 # ── Single pool dimensions ────────────────────────────────────────────────────
 TANK_RADIUS = 4.0           # diameter 8 m
 TANK_INNER_Z = 1.5
