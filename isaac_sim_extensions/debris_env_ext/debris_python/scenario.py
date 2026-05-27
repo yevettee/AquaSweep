@@ -17,6 +17,15 @@ def _resolve_pool_centers() -> list[tuple[float, float]]:
         return [(0.0, 0.0)]
 
 
+def _resolve_floor_z() -> float:
+    """Pull TANK_FLOOR_Z from water_tank_env_ext; fall back to gv.FLOOR_Z."""
+    try:
+        params = importlib.import_module("water_tank_env_python.params")
+        return float(getattr(params, "TANK_FLOOR_Z", gv.FLOOR_Z))
+    except ImportError:
+        return gv.FLOOR_Z
+
+
 class DebrisScenario:
     def __init__(self):
         self._debris: DebrisSystem | None = None
@@ -33,7 +42,7 @@ class DebrisScenario:
             radius=radius if radius is not None else gv.DEBRIS_RADIUS,
             color_hex=gv.DEBRIS_COLOR_HEX,
             tank_range=gv.TANK_RANGE,
-            z_floor=gv.FLOOR_Z,
+            z_floor=_resolve_floor_z(),
             pool_centers=_resolve_pool_centers(),
         )
         self._debris.spawn(stage)
