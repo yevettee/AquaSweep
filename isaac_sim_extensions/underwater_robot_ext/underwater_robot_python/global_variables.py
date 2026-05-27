@@ -53,6 +53,10 @@ DEBUG_TRAIL_MAX_POINTS = 40000
 DEBUG_TRAIL_CURVE_PRIM_PATH = "/World/Debug/HippoCenterTrail"
 DEBUG_TRAIL_LINE_WIDTH_WORLD = 0.02
 
+# 양식장 순환 수류 — 수조 중심 기준 solid-body rotation
+WATER_ROTATION_OMEGA = 0.05       # rad/s (양수=반시계, 음수=시계 방향)
+WATER_ROTATION_CENTER = (0.0, 0.0)  # 수조 중심 좌표 (m)
+
 # Physics step 디버그 — False로 끄고 extension reload 후 LOAD → RUN
 DEBUG_ENABLE_WATER_PHYSICS = True
 DEBUG_ENABLE_STURGEON_ANIM = True

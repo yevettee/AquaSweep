@@ -63,11 +63,12 @@ from underwater_robot_python.actiongraph_setup import remove_cmd_vel_graph
 from underwater_robot_python.scenario import UnderwaterSpiralScenario
 from underwater_robot_python.suction_system import SuctionSystem
 from underwater_robot_python.trail_debug import reset_center_trail_debug, tick_center_trail_debug
+import underwater_robot_python.global_variables as _uw_gv
 from underwater_robot_python.global_variables import (
-    DEBUG_CENTER_TRAIL_ENABLED,
     DEBUG_ENABLE_SUCTION,
     HIPPO_USD_FILENAME,
     ROBOT_SPAWN_Z_M,
+    WATER_ROTATION_OMEGA,
 )
 # NOTE: ROBOT_PRIM_PATH / ROBOT_SCENE_NAME from globals are NOT imported —
 # we redefine them below as aliases of the PRIMARY_ROBOT_* constants so the
@@ -199,7 +200,7 @@ class UIBuilder:
             robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
         except Exception:
             return
-        if robot is not None and DEBUG_CENTER_TRAIL_ENABLED:
+        if robot is not None and _uw_gv.DEBUG_CENTER_TRAIL_ENABLED:
             tick_center_trail_debug(robot)
 
     def on_stage_event(self, event):
@@ -333,6 +334,28 @@ class UIBuilder:
                     "CLEAR DEBRIS", height=36, clicked_fn=self._on_clear_debris,
                     style={"background_color": 0xFF6B1A1A},
                 )
+
+        # ── 시각화 ───────────────────────────────────────────────────────────
+        viz_frame = CollapsableFrame("시각화", collapsed=True)
+        with viz_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                self._trail_btn = StateButton(
+                    "Trail", "경로 Trail 켜기", "경로 Trail 끄기",
+                    on_a_click_fn=self._on_trail_on,
+                    on_b_click_fn=self._on_trail_off,
+                )
+                self.wrapped_ui_elements.append(self._trail_btn)
+
+        # ── 수류 설정 ─────────────────────────────────────────────────────────
+        water_frame = CollapsableFrame("수류 설정", collapsed=True)
+        with water_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                self._water_current_btn = StateButton(
+                    "Water Current", "수류 켜기", "수류 끄기",
+                    on_a_click_fn=self._on_water_current_on,
+                    on_b_click_fn=self._on_water_current_off,
+                )
+                self.wrapped_ui_elements.append(self._water_current_btn)
 
         # ── Suction Status (DEBUG_ENABLE_SUCTION이 True일 때만 표시) ──────────
         if DEBUG_ENABLE_SUCTION:
@@ -784,6 +807,22 @@ class UIBuilder:
         self._cmd_receivers = [None] * _NUM_ROBOTS
         self._floor_bridges = []
         self._wall_bridges = []
+
+    def _on_trail_on(self):
+        _uw_gv.DEBUG_CENTER_TRAIL_ENABLED = True
+
+    def _on_trail_off(self):
+        _uw_gv.DEBUG_CENTER_TRAIL_ENABLED = False
+        reset_center_trail_debug()
+
+    def _on_water_current_on(self):
+        for i, scenario in enumerate(self._scenarios):
+            center = _POOL_CENTERS[i] if i < len(_POOL_CENTERS) else (0.0, 0.0)
+            scenario.set_water_current(True, omega=WATER_ROTATION_OMEGA, center=center)
+
+    def _on_water_current_off(self):
+        for scenario in self._scenarios:
+            scenario.set_water_current(False)
 
     def _on_run(self):
         # PhysX UI 오류 방지

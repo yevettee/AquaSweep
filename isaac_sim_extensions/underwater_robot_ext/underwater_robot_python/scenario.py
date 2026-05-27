@@ -21,7 +21,7 @@ from typing import Optional, Tuple
 import carb
 import numpy as np
 
-from .global_variables import ROBOT_PRIM_PATH
+from .global_variables import ROBOT_PRIM_PATH, WATER_ROTATION_OMEGA, WATER_ROTATION_CENTER
 
 LOG_TAG = "[underwater.robot]"
 
@@ -64,6 +64,11 @@ class UnderwaterSpiralScenario:
         
         # 모드 설정
         self._use_internal_planner = use_internal_planner
+
+        # 순환 수류
+        self._water_current_enabled: bool = False
+        self._water_rotation_omega: float = WATER_ROTATION_OMEGA
+        self._water_rotation_center: Tuple[float, float] = WATER_ROTATION_CENTER
         
         # 외부 모드용
         self._cmd_receiver = None  # rclpy CmdVelReceiver 인스턴스
@@ -334,10 +339,11 @@ class UnderwaterSpiralScenario:
         # Pure Pursuit 폐루프 제어
         v, omega = self._spiral_planner.next_cmd_closed_loop(rel_x, rel_y, rel_theta)
 
-        # 속도 적용 (이미 theta를 알고 있으므로 직접 계산)
+        # 속도 적용 (수류 포함)
         try:
-            vx = v * math.cos(theta)
-            vy = v * math.sin(theta)
+            dvx, dvy = self._water_current_velocity(pos)
+            vx = v * math.cos(theta) + dvx
+            vy = v * math.sin(theta) + dvy
             self._robot.set_linear_velocity(np.array([vx, vy, 0.0], dtype=float))
             self._robot.set_angular_velocity(np.array([0.0, 0.0, omega], dtype=float))
         except Exception as e:
@@ -377,6 +383,34 @@ class UnderwaterSpiralScenario:
         # step_sync 발행 (기존 동기화 방식)
         self._cmd_receiver.publish_step_sync()
 
+    # ── 수류 제어 ────────────────────────────────────────────────────────────
+
+    def set_water_current(
+        self,
+        enabled: bool,
+        omega: float | None = None,
+        center: tuple[float, float] | None = None,
+    ) -> None:
+        """순환 수류 켜기/끄기. omega·center 미지정 시 기존 값 유지."""
+        self._water_current_enabled = enabled
+        if omega is not None:
+            self._water_rotation_omega = omega
+        if center is not None:
+            self._water_rotation_center = center
+        carb.log_warn(
+            f"{LOG_TAG} [{self._robot_name}] 수류 {'ON' if enabled else 'OFF'} "
+            f"ω={self._water_rotation_omega:.3f} center={self._water_rotation_center}"
+        )
+
+    def _water_current_velocity(self, pos) -> tuple[float, float]:
+        """현재 위치에서의 순환 수류 속도 (vx, vy) 반환."""
+        if not self._water_current_enabled:
+            return 0.0, 0.0
+        cx, cy = self._water_rotation_center
+        dx = float(pos[0]) - cx
+        dy = float(pos[1]) - cy
+        return -self._water_rotation_omega * dy, self._water_rotation_omega * dx
+
     def _apply_velocity(self, v: float, omega: float) -> None:
         """로봇에 속도 적용."""
         try:
@@ -386,8 +420,9 @@ class UnderwaterSpiralScenario:
             return
 
         theta = _quat_to_yaw(orient)
-        vx = v * math.cos(theta)
-        vy = v * math.sin(theta)
+        dvx, dvy = self._water_current_velocity(pos)
+        vx = v * math.cos(theta) + dvx
+        vy = v * math.sin(theta) + dvy
 
         try:
             self._robot.set_linear_velocity(np.array([vx, vy, 0.0], dtype=float))

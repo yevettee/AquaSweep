@@ -102,6 +102,16 @@ class UIBuilder:
                 self._scenario_state_btn.enabled = False
                 self.wrapped_ui_elements.append(self._scenario_state_btn)
 
+        water_current_frame = CollapsableFrame("수류 설정", collapsed=False)
+        with water_current_frame:
+            with ui.VStack(style=get_style(), spacing=5, height=0):
+                self._water_current_btn = StateButton(
+                    "Water Current", "수류 켜기", "수류 끄기",
+                    on_a_click_fn=self._on_water_current_on,
+                    on_b_click_fn=self._on_water_current_off,
+                )
+                self.wrapped_ui_elements.append(self._water_current_btn)
+
         suction_frame = CollapsableFrame("Suction Status", collapsed=False)
         with suction_frame:
             with ui.VStack(style=get_style(), spacing=4, height=0):
@@ -212,6 +222,12 @@ class UIBuilder:
     def _on_run_scenario_b_text(self):
         self._scenario.stop()
         self._timeline.pause()
+
+    def _on_water_current_on(self):
+        self._scenario.set_water_current(True)
+
+    def _on_water_current_off(self):
+        self._scenario.set_water_current(False)
 
     def _reset_extension(self):
         self._on_init()
