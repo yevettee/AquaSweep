@@ -1,95 +1,32 @@
 # Fish Detection Node Configuration
 # ============================================================================
 #
-# QUICK START (YOLO + Global Camera - 권장):
+# QUICK START:
 #   cd ~/AquaSweep/water_ws
 #   ros2 run aqua_detection fish_detection_node --ros-args \
 #       --params-file src/aqua_detection/config/fish_detection_params.yaml
-#
-# 또는 파라미터 오버라이드:
-#   ros2 run aqua_detection fish_detection_node --ros-args \
-#       --params-file src/aqua_detection/config/fish_detection_params.yaml \
-#       -p use_global_camera:=false
 #
 # ============================================================================
 
 fish_detection_node:
   ros__parameters:
-    # ─── 핵심 설정 ───────────────────────────────────────────────────────────
-    # Detector: "opencv" (legacy), "yolo" (권장), "sam2", "yoloworld"
-    detector_type: "yolo"
-    
-    # Camera mode:
-    #   true  = /global/top_img_raw 단일 토픽 (1개 렌더패스, 성능 좋음)
-    #   false = /pool_N/top_img_raw 7개 토픽 (7개 렌더패스)
-    use_global_camera: true
-    
-    # Number of pools to monitor
+    use_global_camera: true      # /global/top_img_raw (true) or /pool_N/top_img_raw (false)
     num_pools: 7
-    
-    # Enable debug visualization (/pool_N/top_img_det 토픽 발행)
-    debug_visualization: true
+    debug_visualization: true    # /pool_N/top_img_det
 
-    # Image subscription QoS
     image_qos_reliability: "best_effort"
     image_qos_depth: 10
-    
-    # OpenCV detector parameters
-    opencv:
-      scale_factor: 3.0
-      fish_area_min: 1200
-      fish_area_max: 45000
-      fish_aspect_ratio_min: 1.4
-      debris_area_min: 15
-      debris_area_max: 500
-      pool_margin: 25
-    
-    # SAM2 detector parameters (Track A)
-    sam2:
-      model_type: "vit_h"  # vit_h, vit_l, vit_b
-      checkpoint_path: "models/sam2_hiera_large.pt"
-      points_per_side: 32
-      pred_iou_thresh: 0.88
-      stability_score_thresh: 0.95
-    
-    # YOLO detector parameters (Track B)
+
+    # YOLO OBB — models/yolo26n_fish_species_v1.pt (sturgeon only)
     yolo:
-      model_path: "models/yolov8_fish_species.pt"
+      model_path: "models/yolo26n_fish_species_v1.pt"
       confidence_threshold: 0.5
       iou_threshold: 0.45
-      imgsz: 640           # Inference image size (match training)
-      half: true           # FP16 inference for speed
-      # Classes: sturgeon, salmon, debris
-    
-    # Status classifier parameters (contrast-based dead/alive detection)
+      imgsz: 640
+      half: true
+      debris_min_area: 3         # OpenCV blob detector (not a .pt model)
+      debris_max_area: 8
+
+    # suspicious when debug overlay C (bg_contrast) >= this (per YOLO bbox)
     classifier:
-      # Velocity settings
-      use_velocity: false           # Toggle velocity-based classification on/off
-      velocity_threshold: 0.02     # Below this = suspicious (relative velocity)
-      velocity_weight: 0.20        # Weight for velocity score
-      
-      # Contrast-based classification (KEY FEATURE)
-      contrast_threshold: 8.0     # Brightness contrast with background (higher = suspicious)
-      
-      # Additional thresholds
-      water_similarity_threshold: 0.3  # Below = different from water color
-      value_std_threshold: 40.0    # HSV value std above = bimodal
-      saturation_std_threshold: 30.0  # HSV saturation std above = bimodal
-    
-    # Velocity estimator parameters
-    velocity:
-      use_optical_flow: false      # Disable for slow rendering
-      use_tracking: false
-      frame_skip: 10               # Compare with N frames ago (~1 second)
-    
-    # DINOv2 (optional, for advanced features)
-    dino:
-      model_type: "dinov2_vits14"
-      use_dino_features: false     # Disable for faster inference
-    
-    # Tracker parameters
-    tracker:
-      type: "bytetrack"
-      track_thresh: 0.5
-      track_buffer: 30
-      match_thresh: 0.8
+      contrast_threshold: 8.0
