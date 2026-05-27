@@ -1,6 +1,6 @@
 """Cleaning orchestrator for aqua_planner.
 
-Coordinates the CleanWall → CleanFloor cleaning sequence for pools.
+레일 로봇(CleanWall)과 바닥 청소 로봇(CleanFloor)을 동시에 실행한다.
 """
 
 from functools import partial
@@ -12,7 +12,7 @@ from .task_executor import TaskExecutor
 
 
 class CleaningOrchestrator:
-    """Orchestrates cleaning sequences: CleanWall → CleanFloor."""
+    """Orchestrates concurrent cleaning: CleanWall ∥ CleanFloor."""
 
     def __init__(
         self,
@@ -24,17 +24,15 @@ class CleaningOrchestrator:
         self._state = state_manager
         self._executors = executors
         self._on_all_complete: Optional[Callable[[], None]] = None
+        # 풀별 완료 추적: {pool_id: {'wall': bool, 'floor': bool}}
+        self._completion: dict[str, dict[str, bool]] = {}
 
     def set_completion_callback(self, callback: Callable[[], None]) -> None:
         """Set callback to be invoked when all cleaning is complete."""
         self._on_all_complete = callback
 
     def start_global_cleaning(self) -> tuple[bool, str]:
-        """Start cleaning sequence for all eligible pools.
-
-        Returns:
-            (success, message) tuple
-        """
+        """모든 적합한 수조에서 CleanWall ∥ CleanFloor 동시 시작."""
         if self._state.global_task_active or self._state.any_active():
             return False, "Task already running"
 
@@ -48,29 +46,31 @@ class CleaningOrchestrator:
         started = []
 
         for pool_id in eligible:
-            if self._start_wall_cleaning(pool_id):
+            self._completion[pool_id] = {'wall': False, 'floor': False}
+            wall_ok  = self._start_wall_cleaning(pool_id)
+            floor_ok = self._start_floor_cleaning(pool_id)
+            if wall_ok or floor_ok:
                 started.append(pool_id)
+                if not wall_ok:
+                    self._completion[pool_id]['wall'] = True   # 서버 없으면 완료로 간주
+                if not floor_ok:
+                    self._completion[pool_id]['floor'] = True
 
         if not started:
             self._state.global_task_active = False
             return False, "Failed to start any pool (action servers not available)"
 
-        msg = f"CleanWall started for: {started}"
+        msg = f"CleanWall ∥ CleanFloor 동시 시작: {started}"
         if skipped:
             msg += f" | Skipped: {skipped}"
         self._node.get_logger().info(msg)
         return True, msg
 
     def start_pool_cleaning(self, pool_id: str, wall_first: bool = True) -> tuple[bool, str]:
-        """Start cleaning for a specific pool.
+        """특정 수조 청소 시작.
 
-        Args:
-            pool_id: Target pool ID
-            wall_first: If True, start with CleanWall then CleanFloor.
-                       If False, start CleanFloor directly (legacy behavior).
-
-        Returns:
-            (success, message) tuple
+        wall_first=True  : CleanWall ∥ CleanFloor 동시 실행
+        wall_first=False : CleanFloor만 실행 (레거시)
         """
         state = self._state.get_state(pool_id)
         if state is None:
@@ -83,8 +83,15 @@ class CleaningOrchestrator:
             return False, f"{pool_id}: Global task in progress"
 
         if wall_first:
-            success = self._start_wall_cleaning(pool_id)
-            action = "CleanWall"
+            self._completion[pool_id] = {'wall': False, 'floor': False}
+            wall_ok  = self._start_wall_cleaning(pool_id)
+            floor_ok = self._start_floor_cleaning(pool_id)
+            if not wall_ok:
+                self._completion[pool_id]['wall'] = True
+            if not floor_ok:
+                self._completion[pool_id]['floor'] = True
+            success = wall_ok or floor_ok
+            action = "CleanWall ∥ CleanFloor"
         else:
             success = self._start_floor_cleaning(pool_id)
             action = "CleanFloor"
@@ -141,20 +148,16 @@ class CleaningOrchestrator:
         self._node.get_logger().info(f"{pool_id}: CleanWall progress {progress * 100:.1f}%")
 
     def _on_wall_done(self, pool_id: str, result) -> None:
-        """Handle CleanWall completion - automatically start CleanFloor."""
+        """CleanWall 완료 처리 — CleanFloor는 이미 동시에 실행 중."""
         if result.success:
-            self._node.get_logger().info(
-                f"{pool_id}: CleanWall completed, starting CleanFloor"
-            )
-            if not self._start_floor_cleaning(pool_id):
-                self._node.get_logger().warn(
-                    f"{pool_id}: Failed to start CleanFloor after CleanWall"
-                )
-                self._state.mark_failed(pool_id, "CleanFloor start failed")
-                self._check_global_completion()
+            self._node.get_logger().info(f"{pool_id}: CleanWall 완료")
         else:
-            self._node.get_logger().warn(f"{pool_id}: CleanWall failed")
-            self._state.mark_failed(pool_id, "CleanWall failed")
+            self._node.get_logger().warn(f"{pool_id}: CleanWall 실패")
+
+        if pool_id in self._completion:
+            self._completion[pool_id]['wall'] = True
+            self._check_pool_completion(pool_id)
+        else:
             self._check_global_completion()
 
     # ── Floor Cleaning ─────────────────────────────────────────────────────
@@ -183,22 +186,33 @@ class CleaningOrchestrator:
         self._node.get_logger().info(f"{pool_id}: CleanFloor progress {progress * 100:.1f}%")
 
     def _on_floor_done(self, pool_id: str, result) -> None:
-        """Handle CleanFloor completion."""
+        """CleanFloor 완료 처리."""
         if result.success:
-            self._node.get_logger().info(f"{pool_id}: CleanFloor completed")
+            self._node.get_logger().info(f"{pool_id}: CleanFloor 완료")
             self._state.set_phase(pool_id, CleaningPhase.COMPLETED)
         else:
-            self._node.get_logger().warn(f"{pool_id}: CleanFloor failed")
+            self._node.get_logger().warn(f"{pool_id}: CleanFloor 실패")
             self._state.mark_failed(pool_id, "CleanFloor failed")
 
-        self._check_global_completion()
+        if pool_id in self._completion:
+            self._completion[pool_id]['floor'] = True
+            self._check_pool_completion(pool_id)
+        else:
+            self._check_global_completion()
 
     # ── Completion Check ───────────────────────────────────────────────────
 
+    def _check_pool_completion(self, pool_id: str) -> None:
+        """수조 1개의 wall+floor 모두 완료됐는지 확인."""
+        status = self._completion.get(pool_id, {})
+        if status.get('wall') and status.get('floor'):
+            self._node.get_logger().info(f"{pool_id}: CleanWall ∥ CleanFloor 모두 완료")
+            self._check_global_completion()
+
     def _check_global_completion(self) -> None:
-        """Check if all cleaning is complete and invoke callback."""
+        """전체 청소 완료 여부 확인 후 콜백 호출."""
         if self._state.all_completed_or_idle():
             self._state.global_task_active = False
-            self._node.get_logger().info("All pool cleaning completed")
+            self._node.get_logger().info("전체 수조 청소 완료")
             if self._on_all_complete:
                 self._on_all_complete()

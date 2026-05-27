@@ -26,9 +26,21 @@ _be1 = QoSProfile(
 
 class CleanFloorHandler(BaseHandler):
 
-    def __init__(self, node: Node, pool_id: str = 'pool_1'):
+    def __init__(
+        self,
+        node: Node,
+        pool_id: str = 'pool_1',
+        tank_margin: float = 0.0,
+        robot_footprint: float = 0.0,
+        linear_speed: float = 0.0,
+        omega_max: float = 0.0,
+    ):
         super().__init__(node)
         self._pool_id = pool_id
+        self._tank_margin = tank_margin
+        self._robot_footprint = robot_footprint
+        self._linear_speed = linear_speed
+        self._omega_max = omega_max
 
         self._cancel_requested = False
         self._active = False
@@ -133,8 +145,10 @@ class CleanFloorHandler(BaseHandler):
             return False
 
         request = StartMotion.Request()
-        # 파라미터 0.0 = Isaac Sim 기본값 사용
-        # 상수는 spiral_planner.py에서 단일 관리
+        request.params.tank_margin     = float(self._tank_margin)
+        request.params.robot_footprint = float(self._robot_footprint)
+        request.params.linear_speed    = float(self._linear_speed)
+        request.params.omega_max       = float(self._omega_max)
 
         future = self._start_client.call_async(request)
         for _ in range(20):

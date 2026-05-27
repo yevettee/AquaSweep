@@ -35,16 +35,31 @@ class ControllerNode(Node):
         self.declare_parameter('robot_name', 'under_robot_1')
         self.declare_parameter('rail_name', 'rail_robot_1')
         self.declare_parameter('pool_id', 'pool_1')
+        self.declare_parameter('tank_margin', 0.0)
+        self.declare_parameter('robot_footprint', 0.0)
+        self.declare_parameter('linear_speed', 0.0)
+        self.declare_parameter('omega_max', 0.0)
 
-        robot_name = self.get_parameter('robot_name').get_parameter_value().string_value
-        rail_name = self.get_parameter('rail_name').get_parameter_value().string_value
-        pool_id = self.get_parameter('pool_id').get_parameter_value().string_value
+        robot_name      = self.get_parameter('robot_name').get_parameter_value().string_value
+        rail_name       = self.get_parameter('rail_name').get_parameter_value().string_value
+        pool_id         = self.get_parameter('pool_id').get_parameter_value().string_value
+        tank_margin     = self.get_parameter('tank_margin').get_parameter_value().double_value
+        robot_footprint = self.get_parameter('robot_footprint').get_parameter_value().double_value
+        linear_speed    = self.get_parameter('linear_speed').get_parameter_value().double_value
+        omega_max       = self.get_parameter('omega_max').get_parameter_value().double_value
 
         self._robot_status_pub = self.create_publisher(
             RobotStatus, f'/{robot_name}/status', 10
         )
 
-        self._clean_floor_handler = CleanFloorHandler(self, pool_id=pool_id)
+        self._clean_floor_handler = CleanFloorHandler(
+            self,
+            pool_id=pool_id,
+            tank_margin=tank_margin,
+            robot_footprint=robot_footprint,
+            linear_speed=linear_speed,
+            omega_max=omega_max,
+        )
         self._clean_wall_handler = CleanWallHandler(self, pool_id=pool_id)
         self._move_fish_handler = MoveFishHandler(self)
 

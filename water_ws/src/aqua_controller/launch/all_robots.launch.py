@@ -40,7 +40,7 @@ def generate_launch_description() -> LaunchDescription:
                     'robot_name': f'under_robot_{i}',
                     'rail_name':  f'rail_robot_{i}',
                     'pool_id':    f'pool_{i}',
-                    'tank_margin': 0.45,
+                    'tank_margin': 0.6,
                     'robot_footprint': 0.686,
                     'linear_speed': 3.0,
                     'omega_max': 8.0,

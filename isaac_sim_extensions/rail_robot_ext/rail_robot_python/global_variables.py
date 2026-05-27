@@ -35,11 +35,11 @@ RAIL_CENTER_R = TANK_RADIUS + WALL_THICKNESS + RAIL_W * 0.5  # = 4.07 m
 RAIL_MOUNT_Z = TANK_INNER_Z + RAIL_H * 0.5  # = 1.53 m
 
 # ── 자율 청소 궤적 파라미터 ──────────────────────────────────────────────────
-RAIL_STEPS = 18          # 360° ÷ 18 = 20° 단위 이동
-ARM_SWEEP_DURATION = 2.0 # 팔이 상단→하단 쓸기까지 걸리는 시간 (초)
-ARM_HOME_DURATION  = 0.5 # 스윕 완료 후 홈 자세로 이동하는 시간 (초)
-ARM_RESET_DURATION = 0.5 # 홈 자세에서 스윕 시작 자세로 복귀하는 시간 (초)
-RAIL_MOVE_DURATION = 0.4 # 다음 각도 위치로 이동하는 시간 (초)
+RAIL_STEPS = 6           # 360° ÷ 6 = 60° 단위 이동
+ARM_SWEEP_DURATION = 1.2 # 팔이 상단→하단 쓸기까지 걸리는 시간 (초)
+ARM_HOME_DURATION  = 0.3 # 스윕 완료 후 홈 자세로 이동하는 시간 (초)
+ARM_RESET_DURATION = 0.3 # 홈 자세에서 스윕 시작 자세로 복귀하는 시간 (초)
+RAIL_MOVE_DURATION = 0.3 # 다음 각도 위치로 이동하는 시간 (초)
 
 # 레일 이동 전후 홈 자세 [j1=0, j2=0, j3=90°, j4=0, j5=90°, j6=0]
 ARM_HOME_JOINTS = {
