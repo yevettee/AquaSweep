@@ -13,23 +13,23 @@ TANK_RADIUS = 4.0           # diameter 8 m
 TANK_INNER_Z = 1.5
 WALL_THICKNESS = 0.03
 
-WATER_LEVEL = 1.2
-TANK_FLOOR_Z = 0.0
+WATER_LEVEL = 1.10            # water depth (surface at z = TANK_FLOOR_Z + WATER_LEVEL = 1.35)
+TANK_FLOOR_Z = 0.25           # USD Bottom mesh top surface
 
 # ── Pool layout (4 bottom + 3 top, plus one equipment slot) ───────────────────
-# Spacing: 0.5 m horizontal gap → 8.5 m centre-to-centre on x.
-#          2.0 m vertical   gap → 10  m centre-to-centre on y.
+# Aligned with aquafarm_environment.usda (B01~B04 bottom, T01~T03 top).
+# Spacing: 8.5 m centre-to-centre on x, 12 m centre-to-centre on y.
 POOL_CENTERS: list[tuple[float, float]] = [
-     (-12.75, -5.0),   # Pool_1
-     ( -4.25, -5.0),   # Pool_2
-     (  4.25, -5.0),   # Pool_3
-     ( 12.75, -5.0),   # Pool_4
-     (-12.75,  5.0),   # Pool_5
-     ( -4.25,  5.0),   # Pool_6
-     (  4.25,  5.0),   # Pool_7
+     (-12.75, -6.0),   # Pool_1  ← B01
+     ( -4.25, -6.0),   # Pool_2  ← B02
+     (  4.25, -6.0),   # Pool_3  ← B03
+     ( 12.75, -6.0),   # Pool_4  ← B04
+     (-12.75,  6.0),   # Pool_5  ← T01
+     ( -4.25,  6.0),   # Pool_6  ← T02
+     (  4.25,  6.0),   # Pool_7  ← T03
 ]
 
-EQUIPMENT_CENTER: tuple[float, float] = (12.75, 5.0)
+EQUIPMENT_CENTER: tuple[float, float] = (12.75, 6.0)
 
 # ── Sturgeon spawn settings ──────────────────────────────────────────────────
 # 상어 spawn할 풀 번호 (1-indexed). None이면 랜덤 선택 유지

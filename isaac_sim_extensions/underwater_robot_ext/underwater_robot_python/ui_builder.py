@@ -8,14 +8,12 @@ import numpy as np
 import omni.timeline
 import omni.ui as ui
 from isaacsim.core.api.world import World
-from isaacsim.core.prims import XFormPrim
 from isaacsim.core.utils.stage import get_current_stage
 from isaacsim.examples.extension.core_connectors import LoadButton, ResetButton
 from isaacsim.gui.components.element_wrappers import CollapsableFrame, StateButton
 from isaacsim.gui.components.ui_utils import get_style
 from isaacsim.robot.wheeled_robots.robots import WheeledRobot
 from omni.usd import StageEventType
-from pxr import Sdf, UsdLux
 
 from .global_variables import (
     DEBUG_CENTER_TRAIL_ENABLED,
@@ -121,22 +119,11 @@ class UIBuilder:
         self._suction = SuctionSystem()
         self._scenario = UnderwaterSpiralScenario()
 
-    def _add_light_to_stage(self):
-        sphereLight = UsdLux.SphereLight.Define(get_current_stage(), Sdf.Path("/World/SphereLight"))
-        sphereLight.CreateRadiusAttr(2)
-        sphereLight.CreateIntensityAttr(100000)
-        XFormPrim(str(sphereLight.GetPath())).set_world_poses(np.array([[6.5, 0, 12]]))
-
     def _setup_scene(self):
         hippo_usd_path = Path(__file__).resolve().parents[1] / "data" / HIPPO_USD_FILENAME
         if not hippo_usd_path.is_file():
             carb.log_error(f"[underwater.robot] Hippo USD not found: {hippo_usd_path}")
             return
-
-        stage = get_current_stage()
-        if not stage.GetPrimAtPath("/World/Tank").IsValid():
-            self._add_light_to_stage()
-            World.instance().scene.add_default_ground_plane()
 
         World.instance().scene.add(
             WheeledRobot(

@@ -26,8 +26,8 @@ from . import params
 from .scene_builders import POOLS_ROOT
 
 # ── Motion bounds for ALIVE sturgeons ─────────────────────────────────────────
-_Z_MIN_ALIVE = 0.30                  # 최소 수심 (m), 바닥에서 30cm
-_Z_MAX_ALIVE = 0.80                  # 최대 수심 (m), 바닥에서 80cm
+_Z_MIN_ALIVE = params.TANK_FLOOR_Z + 0.30   # 바닥에서 30cm 위
+_Z_MAX_ALIVE = params.TANK_FLOOR_Z + 0.80   # 바닥에서 80cm 위
 _Z_MID_ALIVE = (_Z_MIN_ALIVE + _Z_MAX_ALIVE) / 2.0
 _Z_AMP_ALIVE = (_Z_MAX_ALIVE - _Z_MIN_ALIVE) / 2.0
 
@@ -41,8 +41,8 @@ _ROLL_FREQ_MAX = 5                   # 최대 흔들림 주파수 (Hz)
 
 # ── Motion bounds for FLIPPED (dead/sick) sturgeons ───────────────────────────
 # 죽은 물고기는 수면에 둥둥 떠있어야 함 (등이 살짝 노출)
-_Z_MIN_FLIPPED = params.WATER_LEVEL + 0.02   # 수면 위 2cm
-_Z_MAX_FLIPPED = params.WATER_LEVEL + 0.03   # 수면 위 3cm
+_Z_MIN_FLIPPED = params.water_surface_z() + 0.02   # 수면 위 2cm
+_Z_MAX_FLIPPED = params.water_surface_z() + 0.03   # 수면 위 3cm
 _Z_MID_FLIPPED = (_Z_MIN_FLIPPED + _Z_MAX_FLIPPED) / 2.0
 _Z_AMP_FLIPPED = 0.01                # ±1cm 출렁임 (물결에 따라 살짝 오르내림)
 

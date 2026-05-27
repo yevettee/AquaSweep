@@ -1,36 +1,28 @@
-"""Scene-building helpers: pools (tank + water + surface), lighting, equipment.
+"""Scene-building helpers: pools (shell ref + water body), building ref, lighting, equipment.
 
 Used by UIBuilder._setup_scene. Assumes Isaac Sim is already running (so
 ``pxr`` is importable).
 
 Prim hierarchy:
+    /World/Building                    ← Reference: aquafarm_environment.usda
     /World/Pools (Xform)
         /Pool_<n> (Xform, translate = pool centre)
-            /Floor, /Wall, /WallInterior   ← FRP tank meshes (local coords)
-            /WaterBody                     ← solid water volume (no collider)
-            /WaterSurface                  ← animated wave disc
-    /World/Equipment (Xform)
-        /UnderwaterEquipment               ← referenced asset or placeholder
-    /World/Lighting
-
-Tank material — FRP (glass-fibre reinforced plastic):
-    Interior: light teal (0.55, 0.88, 0.82)
-    Exterior: blue        (0.14, 0.35, 0.70)
-    Opacity ≈ 0.80–0.92, mid roughness (0.25–0.35).
+            /Shell                     ← Reference: pool_shell.usda
+                                          (Outer / InnerWall / Bottom / Drain / Air×4 / Sensor / Pipe)
+                                          CollisionAPI baked in: InnerWall (none), Bottom (convexHull).
+            /WaterBody                 ← solid water disc (code-generated, no collider)
+            /UnderwaterLight           ← spotlight from below
+    /World/Equipment                   ← /UnderwaterEquipment placeholder/asset
+    /World/Lighting                    ← DomeLight + RectLight
 """
 import math
-import os
+from pathlib import Path
 
 import carb
 from pxr import Gf, Sdf, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 from . import params
 
-# ── FRP tank colour constants ────────────────────────────────────────────────
-_FRP_INTERIOR = (0.55, 0.88, 0.82)
-_FRP_EXTERIOR = (0.14, 0.35, 0.70)
-_FRP_ROUGHNESS_INT = 0.22
-_FRP_ROUGHNESS_EXT = 0.32
 
 WALL_SEGMENTS = 64
 
@@ -38,16 +30,14 @@ POOLS_ROOT = "/World/Pools"
 EQUIPMENT_ROOT = "/World/Equipment"
 BUILDING_ROOT = "/World/Building"
 
-# ── Building (custom-built fish-farm hall) ────────────────────────────────────
-# Built directly in code instead of referencing an Isaac Sim asset, because:
-#  (a) Simple_Warehouse.usd brings its own UsdPhysics.Scene with GPU dynamics
-#      OFF, which breaks PhysX particle (debris) spawning.
-#  (b) Its interior size doesn't match our 40 m × 30 m pool layout.
-_FLOOR_THICKNESS = 0.05
-_WALL_THICKNESS = 0.30
-_WALL_HEIGHT = 5.0
-_FLOOR_COLOR = (0.0, 0.14, 0.08)         # 청테이프/방수페인트 녹색 (어둡게)
-_WALL_COLOR  = (0.58, 0.57, 0.54)        # lighter concrete (poured panel)
+# ── External USD assets (aquafarm slice) ──────────────────────────────────────
+# Resolved at runtime from __file__ — portable across team members regardless of
+# clone location. Requires aquafarm_final.usdz in the same folder because
+# textures are sublayer-referenced as @./aquafarm_final.usdz[textures/...]@.
+_SCENES_DIR = Path(__file__).resolve().parents[3] / "assets" / "scenes"
+_AQUAFARM_ENV_USD = str(_SCENES_DIR / "aquafarm_environment.usda")
+_POOL_SHELL_USD   = str(_SCENES_DIR / "pool_shell.usda")
+
 
 
 # ── Physics scene helpers ────────────────────────────────────────────────────
@@ -156,134 +146,6 @@ def _build_solid_cylinder_mesh(stage, path, center, height, radius,
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim())
         UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("convexDecomposition")
     return mesh
-
-
-def _build_tube_mesh(stage, path, center, height, inner_radius, outer_radius,
-                     color, opacity=1.0, n_segments=WALL_SEGMENTS,
-                     roughness=0.4, clearcoat=0.0, clearcoat_roughness=0.1,
-                     ior=1.5, emissive=(0.0, 0.0, 0.0)):
-    mesh = UsdGeom.Mesh.Define(stage, path)
-
-    points = []
-    for r, z in [(inner_radius, 0.0), (inner_radius, height),
-                 (outer_radius, 0.0), (outer_radius, height)]:
-        for i in range(n_segments):
-            theta = 2.0 * math.pi * i / n_segments
-            points.append(Gf.Vec3f(r * math.cos(theta), r * math.sin(theta), z))
-
-    ib = 0
-    it = n_segments
-    ob = 2 * n_segments
-    ot = 3 * n_segments
-
-    fvc, fvi = [], []
-    for i in range(n_segments):
-        j = (i + 1) % n_segments
-        fvc.append(4); fvi.extend([ib + i, it + i, it + j, ib + j])
-        fvc.append(4); fvi.extend([ob + i, ob + j, ot + j, ot + i])
-        fvc.append(4); fvi.extend([it + i, ot + i, ot + j, it + j])
-        fvc.append(4); fvi.extend([ib + i, ib + j, ob + j, ob + i])
-
-    mesh.CreatePointsAttr().Set(points)
-    mesh.CreateFaceVertexCountsAttr().Set(fvc)
-    mesh.CreateFaceVertexIndicesAttr().Set(fvi)
-    mesh.CreateDoubleSidedAttr().Set(True)
-
-    xform = UsdGeom.Xformable(mesh)
-    xform.ClearXformOpOrder()
-    xform.AddTranslateOp().Set(Gf.Vec3d(*center))
-
-    _bind_preview_material(stage, mesh.GetPrim(), path + "_Mat", color, opacity,
-                           roughness, clearcoat, clearcoat_roughness, ior, emissive)
-
-    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
-    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim())
-    UsdPhysics.MeshCollisionAPI(mesh.GetPrim()).CreateApproximationAttr().Set("convexDecomposition")
-    return mesh
-
-
-def _build_lateral_cylinder(stage, path, center, height, radius, color,
-                             opacity=1.0, n_segments=WALL_SEGMENTS,
-                             roughness=0.3):
-    """Capless tube side mesh (DoubleSided, visual-only overlay).
-
-    The outer wall already carries the collider, so no physics on this layer.
-    """
-    mesh = UsdGeom.Mesh.Define(stage, path)
-
-    half_h = height / 2.0
-    pts = []
-    for z_off in (-half_h, half_h):
-        for i in range(n_segments):
-            theta = 2.0 * math.pi * i / n_segments
-            pts.append(Gf.Vec3f(radius * math.cos(theta),
-                                radius * math.sin(theta), z_off))
-
-    fvc, fvi = [], []
-    for i in range(n_segments):
-        j = (i + 1) % n_segments
-        fvc.append(4)
-        fvi.extend([i, j, n_segments + j, n_segments + i])
-
-    mesh.CreatePointsAttr().Set(pts)
-    mesh.CreateFaceVertexCountsAttr().Set(fvc)
-    mesh.CreateFaceVertexIndicesAttr().Set(fvi)
-    mesh.CreateDoubleSidedAttr().Set(True)
-
-    xform = UsdGeom.Xformable(mesh)
-    xform.ClearXformOpOrder()
-    xform.AddTranslateOp().Set(Gf.Vec3d(*center))
-
-    _bind_preview_material(stage, mesh.GetPrim(), path + "_Mat",
-                           color, opacity, roughness)
-    return mesh
-
-
-# ── Pool builders ────────────────────────────────────────────────────────────
-def _build_tank_meshes(stage, pool_path: str) -> None:
-    """Tank outer wall + inner colour overlay, all in pool-local coords.
-
-    The pool *floor* mesh is intentionally omitted — its FRP material reflected
-    debris and the sturgeon up into the robot's camera view. The building
-    floor at z=0 already sits flush with the wall bottom and acts as the
-    physical/visual floor inside each pool.
-
-    Idempotent: skips meshes that already exist.
-    """
-    carb.log_info(f"[scene_builders] _build_tank_meshes called: {pool_path}")
-    
-    r  = params.TANK_RADIUS
-    h  = params.TANK_INNER_Z
-    z0 = params.TANK_FLOOR_Z
-    
-    carb.log_info(f"[scene_builders] Tank params: TANK_RADIUS={r}, TANK_INNER_Z={h}, TANK_FLOOR_Z={z0}")
-
-    wall_path = f"{pool_path}/Wall"
-    wall_exists = stage.GetPrimAtPath(wall_path).IsValid()
-    carb.log_info(f"[scene_builders] Wall path={wall_path}, exists={wall_exists}")
-    
-    if not wall_exists:
-        carb.log_info(f"[scene_builders] Creating Wall mesh...")
-        _build_tube_mesh(stage, wall_path,
-                         center=(0, 0, z0),
-                         height=h, inner_radius=r, outer_radius=r + params.WALL_THICKNESS,
-                         color=_FRP_EXTERIOR, opacity=0.78,
-                         roughness=_FRP_ROUGHNESS_EXT)
-        carb.log_info(f"[scene_builders] Wall mesh created, valid={stage.GetPrimAtPath(wall_path).IsValid()}")
-
-    interior_path = f"{pool_path}/WallInterior"
-    interior_exists = stage.GetPrimAtPath(interior_path).IsValid()
-    carb.log_info(f"[scene_builders] WallInterior path={interior_path}, exists={interior_exists}")
-    
-    if not interior_exists:
-        carb.log_info(f"[scene_builders] Creating WallInterior mesh...")
-        _build_lateral_cylinder(stage, interior_path,
-                                center=(0.0, 0.0, z0 + h / 2.0),
-                                height=h,
-                                radius=r - 0.001,
-                                color=_FRP_INTERIOR, opacity=0.88,
-                                roughness=_FRP_ROUGHNESS_INT)
-        carb.log_info(f"[scene_builders] WallInterior mesh created, valid={stage.GetPrimAtPath(interior_path).IsValid()}")
 
 
 def _build_water_body(stage, pool_path: str) -> None:
@@ -411,15 +273,20 @@ def build_pool(stage, pool_path: str, center: tuple[float, float]) -> None:
         xf.AddTranslateOp().Set(Gf.Vec3d(center[0], center[1], 0.0))
         carb.log_info(f"[scene_builders] Created Pool Xform: {pool_path}")
 
-    # Always attempt to build child components — each function checks internally
-    _build_tank_meshes(stage, pool_path)
+    # Shell: aquafarm pool_shell.usda (Outer/InnerWall/Bottom/Drain/Air×4/...).
+    # CollisionAPI lives inside pool_shell.usda (InnerWall=none, Bottom=convexHull).
+    shell_path = f"{pool_path}/Shell"
+    if not stage.GetPrimAtPath(shell_path).IsValid():
+        shell_prim = stage.DefinePrim(shell_path, "Xform")
+        shell_prim.GetReferences().AddReference(_POOL_SHELL_USD)
+        carb.log_info(f"[scene_builders] Shell reference added: {shell_path} -> {_POOL_SHELL_USD}")
+
     _build_water_body(stage, pool_path)
     _build_underwater_light(stage, pool_path)
-    
-    # Verify what was created
-    wall_exists = stage.GetPrimAtPath(f"{pool_path}/Wall").IsValid()
+
+    shell_exists = stage.GetPrimAtPath(shell_path).IsValid()
     water_exists = stage.GetPrimAtPath(f"{pool_path}/WaterBody").IsValid()
-    carb.log_info(f"[scene_builders] After build_pool: Wall={wall_exists}, WaterBody={water_exists}")
+    carb.log_info(f"[scene_builders] After build_pool: Shell={shell_exists}, WaterBody={water_exists}")
 
 
 def build_pools(stage, root: str = POOLS_ROOT) -> None:
@@ -564,96 +431,18 @@ def _build_equipment_placeholder(stage, prim_path: str) -> None:
                                roughness=0.45)
 
 
-def _build_box(stage, path: str, center: tuple[float, float, float],
-               size: tuple[float, float, float], color: tuple[float, float, float],
-               opacity: float = 1.0, collision: bool = True,
-               roughness: float = 0.6, ior: float = 1.5) -> UsdGeom.Cube:
-    """Axis-aligned cuboid via UsdGeom.Cube + translate/scale xformOps.
-
-    ``size`` is the full extent on each axis (UsdGeom.Cube starts as a 1 m
-    unit cube, so the scale equals the desired extents directly).
-    """
-    cube = UsdGeom.Cube.Define(stage, path)
-    cube.CreateSizeAttr(1.0)
-    xf = UsdGeom.Xformable(cube)
-    xf.ClearXformOpOrder()
-    xf.AddTranslateOp().Set(Gf.Vec3d(*center))
-    xf.AddScaleOp().Set(Gf.Vec3f(*size))
-
-    _bind_preview_material(stage, cube.GetPrim(), path + "_Mat",
-                           color, opacity, roughness, ior=ior)
-    if collision:
-        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-    return cube
-
-
 def build_building(stage, root: str = BUILDING_ROOT) -> None:
-    """Build a simple fish-farm hall: 40 × 30 m floor + 4 walls + ceiling slab.
+    """Reference the aquafarm building asset (walls + floor + ceiling + lights + machinery).
 
-    Coordinate convention:
-      - Interior usable footprint exactly ``params.BUILDING_X × BUILDING_Y``
-        (40 × 30 m), centred on the world origin.
-      - Walls sit *outside* that footprint, so pool meshes never clip them.
-      - Floor top surface is at ``z=0``; walls rise to ``z=_WALL_HEIGHT``.
-
-    Built procedurally instead of referencing an asset so the building owns no
-    extra UsdPhysics.Scene (which previously broke particle GPU dynamics).
-    Idempotent: each component is created only if it doesn't already exist.
+    Replaces the previous procedural cuboid build with a single Reference to
+    ``aquafarm_environment.usda``. That file contains no UsdPhysics.Scene, so
+    GPU dynamics for debris particles remain unaffected.
+    Idempotent: only defines the prim if missing; AddReference is skipped on rerun.
     """
-    # Create Building Xform if it doesn't exist
     if not stage.GetPrimAtPath(root).IsValid():
-        UsdGeom.Xform.Define(stage, root)
-
-    bx = params.BUILDING_X
-    by = params.BUILDING_Y
-    wt = _WALL_THICKNESS
-    wh = _WALL_HEIGHT
-    ft = _FLOOR_THICKNESS
-
-    # Floor — top face flush with z=0, extends slightly under the walls.
-    # Near-fully matte (roughness ≈ 1.0) and ior=1.0 to suppress fresnel
-    # reflection — otherwise sturgeons swimming above appear mirrored on the
-    # floor through the translucent water body.
-    floor_path = f"{root}/Floor"
-    if not stage.GetPrimAtPath(floor_path).IsValid():
-        _build_box(stage, floor_path,
-                   center=(0.0, 0.0, -ft / 2.0),
-                   size=(bx + 2 * wt, by + 2 * wt, ft),
-                   color=_FLOOR_COLOR, roughness=0.98, ior=1.0)
-
-    # Walls — 4 cuboids hugging the building perimeter.
-    half_bx_out = (bx + wt) / 2.0   # wall centre offset along x (south/north walls span full x)
-    half_by_out = (by + wt) / 2.0
-    full_x_len  = bx + 2 * wt       # south/north walls extend past corners
-    interior_y_len = by             # east/west walls fit between the n/s walls
-
-    wall_south_path = f"{root}/Wall_South"
-    if not stage.GetPrimAtPath(wall_south_path).IsValid():
-        _build_box(stage, wall_south_path,
-                   center=(0.0, -half_by_out, wh / 2.0),
-                   size=(full_x_len, wt, wh),
-                   color=_WALL_COLOR, roughness=0.85)
-
-    wall_north_path = f"{root}/Wall_North"
-    if not stage.GetPrimAtPath(wall_north_path).IsValid():
-        _build_box(stage, wall_north_path,
-                   center=(0.0,  half_by_out, wh / 2.0),
-                   size=(full_x_len, wt, wh),
-                   color=_WALL_COLOR, roughness=0.85)
-
-    wall_west_path = f"{root}/Wall_West"
-    if not stage.GetPrimAtPath(wall_west_path).IsValid():
-        _build_box(stage, wall_west_path,
-                   center=(-half_bx_out, 0.0, wh / 2.0),
-                   size=(wt, interior_y_len, wh),
-                   color=_WALL_COLOR, roughness=0.85)
-
-    wall_east_path = f"{root}/Wall_East"
-    if not stage.GetPrimAtPath(wall_east_path).IsValid():
-        _build_box(stage, wall_east_path,
-                   center=( half_bx_out, 0.0, wh / 2.0),
-                   size=(wt, interior_y_len, wh),
-                   color=_WALL_COLOR, roughness=0.85)
+        building_prim = stage.DefinePrim(root, "Xform")
+        building_prim.GetReferences().AddReference(_AQUAFARM_ENV_USD)
+        carb.log_info(f"[scene_builders] Building reference added: {root} -> {_AQUAFARM_ENV_USD}")
 
 
 def build_equipment(stage, root: str = EQUIPMENT_ROOT) -> None:

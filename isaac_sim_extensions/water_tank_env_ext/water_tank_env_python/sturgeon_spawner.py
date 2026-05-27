@@ -48,14 +48,14 @@ _FISH_PER_POOL_MAX = 10
 _RADIUS_MIN = 0.6
 _RADIUS_MAX = params.TANK_RADIUS - 1.0  # ≈ 3.0 m, well clear of the wall
 
-# Z spawn range — full water column from 0.30 m up to water surface.
-_SPAWN_Z_MIN = 0.30
-_SPAWN_Z_MAX = params.WATER_LEVEL - 0.1   # 1.10 m
+# Z spawn range — full water column from 30cm above floor up to surface-10cm.
+_SPAWN_Z_MIN = params.TANK_FLOOR_Z + 0.30   # 30cm above pool floor
+_SPAWN_Z_MAX = params.water_surface_z() - 0.1   # 10cm below surface
 
 # ── Flipped (belly-up) sturgeon settings ──────────────────────────────────────
 _FLIP_PROBABILITY = 0.5             # 25% chance each fish is flipped
-_FLIPPED_Z_MIN = params.WATER_LEVEL - 0.07  # slightly below surface
-_FLIPPED_Z_MAX = params.WATER_LEVEL - 0.05  # nearly at surface (floating)
+_FLIPPED_Z_MIN = params.water_surface_z() - 0.07  # slightly below surface
+_FLIPPED_Z_MAX = params.water_surface_z() - 0.05  # nearly at surface (floating)
 _FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
 _FLIP_Z_OFFSET = 0.15                # compensate for pivot offset when flipped
 

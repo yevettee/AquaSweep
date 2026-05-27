@@ -33,8 +33,8 @@ HIPPO_WHEEL_BASE_M = 0.4523
 
 ROBOT_FOOTPRINT_M = 0.686
 
-# 휠 반경 근사만큼 지면 위 스폰 (추가 스케일 없음)
-ROBOT_SPAWN_Z_M = 0.05
+# 풀 Bottom mesh 상면(z≈0.25) 위로 약간 띄워 스폰 (aquafarm_final 풀 shell 기준)
+ROBOT_SPAWN_Z_M = 0.26
 
 # D6 Joint Z 구속 — wheel_low = 0.0이 되는 base_link Z 높이
 # 바퀴 반경(0.049m) 기준으로 설정, 테스트 후 미세 조정 가능
