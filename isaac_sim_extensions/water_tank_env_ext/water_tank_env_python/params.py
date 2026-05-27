@@ -33,23 +33,22 @@ CAR_USD_FILES = (
     "ASTON_MARTIN_VULCAN.usdz",
     "Cyber_Truck.usdz",
     "Pickup_Truck_Commercial_Vehicle.usdz",
+    "007s_Aston_Martin_DB5.usdz",
 )
-CAR_STALL_INDICES = (1, 4, 6)
+CAR_STALL_INDICES = (1, 4, 6, 3)
 CAR_BASE_SCALE = 0.01                       # cm → m
 # X +90: Y-up → Z-up (puts +Y[up] onto +Z[up]).  Z +90: rotates car's forward
 # (originally along its local +X after the X-tilt) so the long axis lies along
 # the stall depth direction (our world ±X).
 CAR_BASE_ROTATE_XYZ = (90.0, 0.0, 90.0)
-# Per-car extra (translate_z, yaw_deg, scale_multiplier) tuning.
-# dz values offset each car's bbox-min-Y (in cm × scale_total) so wheels rest
-# on the ground (z=0):
-#   Aston:      bbox_min_Y = -2.3cm  × 0.01    = -0.023 m below origin
-#   Cybertruck: bbox_min_Y = +86cm   × 0.006   = +0.517 m above origin
-#   Pickup:     bbox_min_Y = -123cm  × 0.0055  = -0.676 m below origin
+# Per-car tuning: (dx, dy, dz, yaw_deg, scale_mul, color_override_or_None).
+# dx/dy offset within the stall (m). dz lifts car so wheels rest on z=0.
+# color_override binds an off-USDZ red/blue/etc. UsdPreviewSurface to recolor.
 CAR_PER_INDEX_TUNING = (
-    ( 0.023,  0.0,  1.0 ),    # Aston   — slight lift
-    (-0.517, 90.0,  0.6 ),    # Cyber   — drop to ground + 90° yaw
-    ( 0.676,  0.0,  0.55),    # Pickup  — lift up out of asphalt
+    ( 0.00,  0.00,  0.023,  0.0,  1.0,  None),                  # Aston Vulcan
+    ( 0.00,  0.00, -0.517, 90.0,  0.6,  None),                  # Cybertruck
+    ( 0.00,  0.00,  0.676,  0.0,  0.55, None),                  # Pickup
+    (-0.44,  0.00, -0.048,  0.0,  2.0,  None),                  # DB5 — GUI-tuned position/scale
 )
 
 # ── Steel hangar door on east wall (visual-only placeholder) ─────────────────
@@ -60,7 +59,7 @@ DOOR_SCALE = (0.60376, 2.44149, 5.12779)
 # ── Default viewport camera applied on every LOAD ─────────────────────────────
 # Tuned by user via /OmniverseKit_Persp in Isaac Sim viewport.
 # Looks down at the building from south-above at a 45° pitch.
-DEFAULT_VIEW_TRANSLATE = (-3.0, -45.0, 50.0)
+DEFAULT_VIEW_TRANSLATE = (-3.0, -96.59837, 101.59837)
 DEFAULT_VIEW_ROTATE_XYZ = (45.0, 0.0, 0.0)     # degrees, applied as RotateXYZ
 
 # ── Single pool dimensions ────────────────────────────────────────────────────

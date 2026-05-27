@@ -684,15 +684,16 @@ def build_parked_cars(stage, root: str = PARKED_CARS_ROOT) -> None:
     for slot_n, (stall_idx, usd_filename, tuning) in enumerate(zip(
         params.CAR_STALL_INDICES, params.CAR_USD_FILES, params.CAR_PER_INDEX_TUNING
     )):
-        dz, yaw_extra, scale_mul = tuning
-        cy = -array_half_y + stall_idx * w + w * 0.5
+        dx, dy, dz, yaw_extra, scale_mul, color_override = tuning
+        cx = stall_center_x + dx
+        cy = -array_half_y + stall_idx * w + w * 0.5 + dy
         cz = dz
         scale = params.CAR_BASE_SCALE * scale_mul
 
         car_path = f"{root}/Car_{slot_n}"
         wrapper = UsdGeom.Xform.Define(stage, car_path)
         xf = UsdGeom.Xformable(wrapper)
-        xf.AddTranslateOp().Set(Gf.Vec3d(stall_center_x, cy, cz))
+        xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy, cz))
         # Rotation order: Z first (yaw in our world), then X (Y-up→Z-up).
         # RotateXYZ applies X→Y→Z, so we encode the yaw in the Z slot.
         xf.AddRotateXYZOp().Set(Gf.Vec3f(rx, ry, rz_base + yaw_extra))
@@ -706,6 +707,25 @@ def build_parked_cars(stage, root: str = PARKED_CARS_ROOT) -> None:
             carb.log_error(f"[scene_builders] Car USDZ not found: {usdz_path}")
             continue
         inner.GetReferences().AddReference(str(usdz_path))
+
+        # Optional colour override — strongerThanDescendants forces the USDZ's
+        # nested mesh materials to inherit this paint instead of their bundled
+        # one. Works because the referenced bindings carry the default
+        # (weakerThanDescendants) strength.
+        if color_override is not None:
+            mat_path = f"{car_path}/PaintOverride"
+            paint = UsdShade.Material.Define(stage, mat_path)
+            shader = UsdShade.Shader.Define(stage, f"{mat_path}/Surface")
+            shader.CreateIdAttr("UsdPreviewSurface")
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+                Gf.Vec3f(*color_override)
+            )
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.4)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.3)
+            paint.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+            UsdShade.MaterialBindingAPI(wrapper.GetPrim()).Bind(
+                paint, UsdShade.Tokens.strongerThanDescendants
+            )
 
     carb.log_info(
         f"[scene_builders] Parked {len(params.CAR_USD_FILES)} cars at stalls "

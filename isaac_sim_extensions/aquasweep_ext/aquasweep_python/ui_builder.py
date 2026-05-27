@@ -411,7 +411,6 @@ class UIBuilder:
         scene_builders.build_door(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
-        scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
 
         if not _ROBOT_USD_PATH.is_file():

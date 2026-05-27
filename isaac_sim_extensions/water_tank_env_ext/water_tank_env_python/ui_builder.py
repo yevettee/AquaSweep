@@ -108,7 +108,6 @@ class UIBuilder:
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
         scene_builders.build_global_top_camera(stage)  # 전체 수조를 보는 단일 글로벌 카메라
-        scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
 
         # Snap viewport LAST so a camera failure can't drop later spawns.
