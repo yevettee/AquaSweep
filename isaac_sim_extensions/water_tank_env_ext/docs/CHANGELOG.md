@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.5] - 2026-05-27
+
+### 변경사항
+- 죽은 상어 수거함(`build_dead_fish_bin`) 추가 — 외부 자산 `assets/scenes/fish_bin.usdz`(Sketchfab 휠리비, Y-up + cm) reference
+  - wrapper Xform 패턴: RotateXYZ `(90, 0, -90)` 으로 Y-up→Z-up + yaw, per-axis Scale `(0.03, 0.015, 0.02)` 로 footprint 조정
+  - `DEAD_FISH_BIN_TRANSLATE/ROTATE_XYZ/SCALE` 파라미터 신설, `DEAD_FISH_BIN_ROOT = "/World/DeadFishBin"`
+- `aquasweep_ext`(통합 진입점)와 `water_tank_env_ext`(단독 테스트) 양쪽 `_setup_scene`에 빌더 호출 추가
+- `DEFAULT_VIEW_TRANSLATE` `(-3, -96.6, 101.6)` → **`(-3, -80, 100)`**, `DEFAULT_VIEW_ROTATE_XYZ` `(45, 0, 0)` → **`(40, 0, 0)`** — viewport 튜닝 반영
+
+### 현재 구현 단계
+- LOAD 시 `/World/DeadFishBin/Model` 하위로 fish_bin USDZ 합성됨 (휠 8 + cap 6 + 본체 mesh)
+- 기존 절차적 placeholder 코드는 USDZ reference 방식으로 완전 교체
+
+### 알려진 이슈 / 미완
+- v0.4.4 이전 알려진 이슈 그대로 유지
+
 ## [0.4.4] - 2026-05-22
 
 ### 변경사항

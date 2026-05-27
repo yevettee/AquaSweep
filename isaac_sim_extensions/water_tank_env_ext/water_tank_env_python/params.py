@@ -33,7 +33,7 @@ CAR_USD_FILES = (
     "ASTON_MARTIN_VULCAN.usdz",
     "Cyber_Truck.usdz",
     "Pickup_Truck_Commercial_Vehicle.usdz",
-    "007s_Aston_Martin_DB5.usdz",
+    "2007_Jeep_Wrangler_Rubicon.usdz",
 )
 CAR_STALL_INDICES = (1, 4, 6, 3)
 CAR_BASE_SCALE = 0.01                       # cm → m
@@ -41,26 +41,42 @@ CAR_BASE_SCALE = 0.01                       # cm → m
 # (originally along its local +X after the X-tilt) so the long axis lies along
 # the stall depth direction (our world ±X).
 CAR_BASE_ROTATE_XYZ = (90.0, 0.0, 90.0)
-# Per-car tuning: (dx, dy, dz, yaw_deg, scale_mul, color_override_or_None).
-# dx/dy offset within the stall (m). dz lifts car so wheels rest on z=0.
-# color_override binds an off-USDZ red/blue/etc. UsdPreviewSurface to recolor.
+# Per-car tuning fields:
+#   dx, dy, dz                  : wrapper-level translate offsets (m)
+#   yaw_deg                     : extra Z rotation added to base (90,0,90)
+#   scale_mul                   : multiplied with CAR_BASE_SCALE (0.01)
+#   color                       : (r,g,b) or None — UsdShade override
+#   inner_translate / inner_rot : applied to the *inner Model* prim, used when
+#                                 the wrapper transform isn't enough and the
+#                                 USDZ needs additional in-place offset/rotation
 CAR_PER_INDEX_TUNING = (
-    ( 0.00,  0.00,  0.023,  0.0,  1.0,  None),                  # Aston Vulcan
-    ( 0.00,  0.00, -0.517, 90.0,  0.6,  None),                  # Cybertruck
-    ( 0.00,  0.00,  0.676,  0.0,  0.55, None),                  # Pickup
-    (-0.44,  0.00, -0.048,  0.0,  2.0,  None),                  # DB5 — GUI-tuned position/scale
+    # (dx, dy, dz, yaw, scale_mul, color, inner_translate, inner_rotate_xyz)
+    ( 0.00, 0.00,  0.023, -180.0,  1.0,  None, None, None),                # Aston Vulcan — GUI yaw flip (Z: +90 → -90)
+    ( 0.00, 0.00, -0.517, 90.0,    0.6,  None, None, None),                # Cybertruck
+    ( 0.00, 0.00,  0.676,  0.0,    0.55, None, None, None),                # Pickup
+    ( 0.00, 0.00,  0.000,  0.0,  100.0,  None,
+      (0.8, 0.0, -1.5), (-180.0, 0.0, -180.0)),                            # Jeep Wrangler — model in m + GUI-tuned inner Model
 )
 
-# ── Steel hangar door on east wall (visual-only placeholder) ─────────────────
+# ── Steel hangar door on west wall (visual-only placeholder) ─────────────────
 # Values match the user-tuned cube in the Isaac Sim viewport.
-DOOR_TRANSLATE = (19.98567, 3.46947, 2.85436)
+DOOR_TRANSLATE = (-20.0, 5.2, 2.7)
 DOOR_SCALE = (0.60376, 2.44149, 5.12779)
+
+# ── Dead-sturgeon collection bin (fish_bin.usdz reference) ───────────────────
+# External Sketchfab dumpster asset (Y-up + cm). Wrapper Xform pattern:
+#   - RotateXYZ X=90 fixes Y-up → Z-up
+#   - RotateXYZ Z=yaw orients the bin
+#   - Per-axis scale combines cm→m (0.01) with non-uniform shrink to fit footprint.
+DEAD_FISH_BIN_TRANSLATE: tuple[float, float, float] = (17.0, 3.5, 0.0)
+DEAD_FISH_BIN_ROTATE_XYZ: tuple[float, float, float] = (90.0, 0.0, -90.0)  # X for axis, Z for yaw
+DEAD_FISH_BIN_SCALE: tuple[float, float, float] = (0.03, 0.015, 0.02)
 
 # ── Default viewport camera applied on every LOAD ─────────────────────────────
 # Tuned by user via /OmniverseKit_Persp in Isaac Sim viewport.
 # Looks down at the building from south-above at a 45° pitch.
-DEFAULT_VIEW_TRANSLATE = (-3.0, -96.59837, 101.59837)
-DEFAULT_VIEW_ROTATE_XYZ = (45.0, 0.0, 0.0)     # degrees, applied as RotateXYZ
+DEFAULT_VIEW_TRANSLATE = (-3.0, -80.0, 100.0)
+DEFAULT_VIEW_ROTATE_XYZ = (40.0, 0.0, 0.0)     # degrees, applied as RotateXYZ
 
 # ── Single pool dimensions ────────────────────────────────────────────────────
 TANK_RADIUS = 4.0           # diameter 8 m

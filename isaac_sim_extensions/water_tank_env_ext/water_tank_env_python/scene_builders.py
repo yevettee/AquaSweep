@@ -33,6 +33,7 @@ OUTDOOR_GROUND_ROOT = "/World/OutdoorGround"
 PARKING_ROOT = "/World/OutdoorGround/Parking"
 PARKED_CARS_ROOT = "/World/OutdoorGround/ParkedCars"
 DOOR_ROOT = "/World/Building/EastDoor"
+DEAD_FISH_BIN_ROOT = "/World/DeadFishBin"
 
 # Parking-paint diffuse — slightly off-white (avoids glare in RTX).
 _PARKING_PAINT_DIFFUSE = Gf.Vec3f(0.88, 0.88, 0.86)
@@ -54,6 +55,7 @@ _ASPHALT_MDL_NAME = "Asphalt"
 _SCENES_DIR = Path(__file__).resolve().parents[3] / "assets" / "scenes"
 _AQUAFARM_ENV_USD = str(_SCENES_DIR / "aquafarm_environment.usda")
 _POOL_SHELL_USD   = str(_SCENES_DIR / "pool_shell.usda")
+_FISH_BIN_USDZ    = str(_SCENES_DIR / "fish_bin.usdz")
 _CARS_DIR = _SCENES_DIR.parent / "car"   # /home/rokey/water_ws/src/assets/car
 
 
@@ -684,7 +686,8 @@ def build_parked_cars(stage, root: str = PARKED_CARS_ROOT) -> None:
     for slot_n, (stall_idx, usd_filename, tuning) in enumerate(zip(
         params.CAR_STALL_INDICES, params.CAR_USD_FILES, params.CAR_PER_INDEX_TUNING
     )):
-        dx, dy, dz, yaw_extra, scale_mul, color_override = tuning
+        (dx, dy, dz, yaw_extra, scale_mul, color_override,
+         inner_translate, inner_rotate) = tuning
         cx = stall_center_x + dx
         cy = -array_half_y + stall_idx * w + w * 0.5 + dy
         cz = dz
@@ -707,6 +710,16 @@ def build_parked_cars(stage, root: str = PARKED_CARS_ROOT) -> None:
             carb.log_error(f"[scene_builders] Car USDZ not found: {usdz_path}")
             continue
         inner.GetReferences().AddReference(str(usdz_path))
+
+        # Optional inner-prim transform — applied on top of the USDZ's own xforms,
+        # useful when the asset's pivot needs a final nudge/rotation the wrapper
+        # can't express cleanly.
+        if inner_translate is not None or inner_rotate is not None:
+            inner_xf = UsdGeom.Xformable(inner)
+            if inner_translate is not None:
+                inner_xf.AddTranslateOp().Set(Gf.Vec3d(*inner_translate))
+            if inner_rotate is not None:
+                inner_xf.AddRotateXYZOp().Set(Gf.Vec3f(*inner_rotate))
 
         # Optional colour override — strongerThanDescendants forces the USDZ's
         # nested mesh materials to inherit this paint instead of their bundled
@@ -766,6 +779,37 @@ def build_door(stage, root: str = DOOR_ROOT) -> None:
     carb.log_info(
         f"[scene_builders] East steel door placed at {params.DOOR_TRANSLATE} "
         f"scale={params.DOOR_SCALE}"
+    )
+
+
+def build_dead_fish_bin(stage, root: str = DEAD_FISH_BIN_ROOT) -> None:
+    """Dead-sturgeon collection bin — references ``assets/scenes/fish_bin.usdz``.
+
+    Wrapper Xform holds translate/rotate/scale so the USDZ's own xformOps stay
+    intact under a child ``/Model`` prim (same pattern as :func:`build_parked_cars`).
+    RotateXYZ X=90 corrects the asset's Y-up frame; per-axis scale combines cm→m
+    with footprint tuning. Idempotent.
+    """
+    if stage.GetPrimAtPath(root).IsValid():
+        return
+
+    if not Path(_FISH_BIN_USDZ).is_file():
+        carb.log_error(f"[scene_builders] fish_bin.usdz not found: {_FISH_BIN_USDZ}")
+        return
+
+    wrapper = UsdGeom.Xform.Define(stage, root)
+    xf = UsdGeom.Xformable(wrapper)
+    xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(*params.DEAD_FISH_BIN_TRANSLATE))
+    xf.AddRotateXYZOp().Set(Gf.Vec3f(*params.DEAD_FISH_BIN_ROTATE_XYZ))
+    xf.AddScaleOp().Set(Gf.Vec3f(*params.DEAD_FISH_BIN_SCALE))
+
+    inner = stage.DefinePrim(f"{root}/Model", "Xform")
+    inner.GetReferences().AddReference(_FISH_BIN_USDZ)
+
+    carb.log_info(
+        f"[scene_builders] Dead fish bin (fish_bin.usdz) at {params.DEAD_FISH_BIN_TRANSLATE} "
+        f"rotXYZ={params.DEAD_FISH_BIN_ROTATE_XYZ} scale={params.DEAD_FISH_BIN_SCALE}"
     )
 
 

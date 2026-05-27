@@ -409,6 +409,7 @@ class UIBuilder:
         scene_builders.build_parking_lot(stage)
         scene_builders.build_parked_cars(stage)
         scene_builders.build_door(stage)
+        scene_builders.build_dead_fish_bin(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
