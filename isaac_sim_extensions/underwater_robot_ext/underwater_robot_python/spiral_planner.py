@@ -16,9 +16,9 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-DEFAULT_ROBOT_FOOTPRINT_M = 0.4
+DEFAULT_ROBOT_FOOTPRINT_M = 1.0
 DEFAULT_TANK_DIAMETER_M   = 8.0
-DEFAULT_TANK_MARGIN_M     = 0.6
+DEFAULT_TANK_MARGIN_M     = 0.8
 DEFAULT_LINEAR_SPEED_M_S  = 4.5
 DEFAULT_OMEGA_MAX_RAD_S   = 15.0
 
@@ -170,20 +170,15 @@ def _build_segments(
     flush()
     spiral_out_count = len(spiral_out)
 
-    # 2. 수조 테두리 한 바퀴 — 나선 끝 반경에서 순회
+    # 2. 중심 복귀 — 나선 끝 위치에서 바로 출발
     r_last = k * theta_last
-    r_wall_follow = max(0.5, r_last)
-    wall_segs = _build_wall_follow(r_wall_follow, physics_dt, linear_speed)
-    wall_follow_count = len(wall_segs)
-
-    # 3. 중심 복귀 — 벽 순회 반경에서 출발
     return_segs = _build_return_to_center(
-        theta_last, k, physics_dt, linear_speed, omega_max, r_override=r_wall_follow
+        theta_last, k, physics_dt, linear_speed, omega_max, r_override=r_last
     )
     return_count = len(return_segs)
 
-    out = spiral_out + wall_segs + return_segs
-    return out, spiral_out_count, wall_follow_count, return_count
+    out = spiral_out + return_segs
+    return out, spiral_out_count, 0, return_count
 
 
 def _compute_waypoints(
