@@ -262,6 +262,8 @@ class UnderwaterSpiralScenario:
         # Stop 요청 처리
         if self._stop_requested:
             self._stop_requested = False
+            self._pause_requested = False  # Pause 요청도 취소 (CleanWall과 동일)
+            self._running = False  # 물리 비활성화 (CleanWall과 동일하게 추가!)
             self._cleaning_active = False
             self._paused = False
             if self._spiral_planner is not None:
@@ -272,6 +274,9 @@ class UnderwaterSpiralScenario:
                     self._robot.set_angular_velocity(np.zeros(3, dtype=float))
                 except Exception:
                     pass
+            # IDLE 상태를 Dashboard에 알림 (CleanWall과 동일하게)
+            if self._motion_bridge is not None:
+                self._motion_bridge.reset()
             carb.log_warn(f"{LOG_TAG} [{self._robot_name}] 청소 정지 완료")
             return
         

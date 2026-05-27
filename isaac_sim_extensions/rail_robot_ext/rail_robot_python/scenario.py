@@ -2,12 +2,9 @@
 
 동작 순서 (1수조 기준):
   0. CALIBRATE : 시뮬레이션 첫 실행 시 자동 IK 보정 (약 0.4초, 이후 캐싱)
-       - 높이별 블레이드 반경을 읽어 j3 보정값을 결정
-  1. ARM_SWEEP  : 아래→위 직선 스윕 (IK 테이블 이용, 벽면 수직 유지)
-  2. ARM_HOME   : 홈 자세 [0,0,90°,0,90°,0] 으로 이동 (이동 중 충돌 회피)
-  3. RAIL_MOVE  : 레일 캐리지 20° 스무스 회전 (코사인 이징)
-  4. ARM_RESET  : 홈 자세 → 스윕 시작(하단) 자세로 복귀
-  5. 18단계(360°) 완료 후 반복
+  1+. Planner  : RAIL_PLANNER_MODE 에 따라 궤적 실행
+       - classic : rail_planner.py (스윕 → HOME → 레일 → RESET)
+       - zigzag  : rail_planner_zigzag.py (레일+스윕 동시 보간 W 패턴)
 
 MotionCommandBridge 연동:
   - start/stop/pause/resume 서비스 제공
@@ -32,24 +29,17 @@ from .global_variables import (
     SWEEP_J3_BOTTOM,
     SWEEP_J5_TOP,
     SWEEP_J5_BOTTOM,
-    RAIL_STEPS,
-    ARM_SWEEP_DURATION,
-    ARM_HOME_DURATION,
-    ARM_HOME_JOINTS,
-    ARM_RESET_DURATION,
-    RAIL_MOVE_DURATION,
+    RAIL_PLANNER_MODE,
     TANK_RADIUS,
     SCRAPER_TOOL_Z,
     IK_CAL_N_SAMPLES,
 )
+from .rail_planner import RailPlannerClassic
+from .rail_planner_zigzag import RailPlannerZigzag, build_zigzag_path
 
 LOG_TAG = "[rail_robot]"
 
-_ARM_SWEEP = 0   # 아래→위 스윕
-_RAIL_MOVE = 1   # 레일 이동 (캐리지 20° 회전, 코사인 이징)
-_ARM_RESET = 2   # 홈 자세 → 스윕 시작 자세 복귀
 _CALIBRATE = 3   # 첫 실행 전 IK 보정 (일회성)
-_ARM_HOME  = 4   # 스윕 완료 후 홈 자세로 이동
 
 # 보정 프레임 인덱스 상수
 _CAL_FRAME_SET_MID    = 0   # 중간점 j3=1.40 설정
@@ -77,6 +67,7 @@ class RailRobotScenario:
     PHASE_ARM_HOME = "arm_home"
     PHASE_RAIL_MOVE = "rail_move"
     PHASE_ARM_RESET = "arm_reset"
+    PHASE_COUPLED_SWEEP = "coupled_sweep"
     PHASE_DONE = "done"
 
     def __init__(self, pool_idx: int, pool_center: Tuple[float, float] = (0.0, 0.0)):
@@ -93,12 +84,9 @@ class RailRobotScenario:
 
         self._running = False
         self._paused = False
-        self._phase = _ARM_SWEEP
+        self._phase = _CALIBRATE
         self._rail_angle = 0.0
-        self._rail_angle_start = 0.0   # 레일 이동 시작 각도
-        self._rail_angle_target = 0.0  # 레일 이동 목표 각도
-        self._phase_elapsed = 0.0
-        self._rail_step_count = 0      # 완료된 레일 이동 횟수
+        self._planner = None
 
         # Thread-safe 요청 플래그 (ROS 콜백 → Physics 스레드)
         self._start_requested = False
@@ -178,15 +166,15 @@ class RailRobotScenario:
         플래그만 설정하고, 실제 정지는 on_physics_step()에서 처리.
         """
         self._pause_requested = True
-        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} pause requested at step {self._rail_step_count}")
-        return self._rail_step_count
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} pause requested at step {self._current_step}")
+        return self._current_step
 
     def _on_motion_resume(self) -> int:
         """MotionCommandBridge에서 resume 서비스 호출 시."""
         self._paused = False
         self._pause_requested = False
-        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} resumed from step {self._rail_step_count}")
-        return self._rail_step_count
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} resumed from step {self._current_step}")
+        return self._current_step
 
     def set_joint_drive(self, joint_prim_path: str) -> None:
         if not joint_prim_path or self._stage is None:
@@ -208,12 +196,25 @@ class RailRobotScenario:
         self._start_requested = True
         carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} start requested (direct)")
 
+    def _create_planner(self):
+        if RAIL_PLANNER_MODE == "zigzag":
+            segments, timing = build_zigzag_path()
+            carb.log_warn(
+                f"{LOG_TAG} pool_{self._pool_idx} zigzag plan: {timing.summary()}"
+            )
+            return RailPlannerZigzag(segments, timing)
+        return RailPlannerClassic()
+
+    def _current_step(self) -> int:
+        if self._planner is None:
+            return 0
+        return self._planner.current_step
+
     def _do_start(self) -> None:
         """실제 시작 로직 (Physics 스레드에서만 호출)."""
         self._running = True
         self._rail_angle = 0.0
-        self._phase_elapsed = 0.0
-        self._rail_step_count = 0
+        self._planner = self._create_planner()
         self.set_rail_angle(self._rail_angle)
 
         # Bridge 상태를 RUNNING으로 설정 (직접 시작 시에도 상태 동기화)
@@ -229,12 +230,13 @@ class RailRobotScenario:
             self._set_cal_probe(0.5, SWEEP_J3_BOTTOM)
             carb.log_warn(f"{LOG_TAG} pool_{self._pool_idx} IK 보정 시작 ({IK_CAL_N_SAMPLES}샘플)")
         else:
-            # 이후 실행: 캐시된 테이블 사용
-            self._phase = _ARM_SWEEP
-            self._phase_elapsed = 0.0
+            self._planner.reset(self._rail_angle)
+            self._phase = self._planner.phase_name
             self.set_arm_joints(self._sweep_table[0])
 
-        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} sweep started")
+        carb.log_info(
+            f"{LOG_TAG} pool_{self._pool_idx} sweep started (planner={RAIL_PLANNER_MODE})"
+        )
 
     def stop(self) -> None:
         self._running = False
@@ -275,16 +277,15 @@ class RailRobotScenario:
         self._run_physics_logic(step_size)
 
     def _process_pending_requests(self) -> None:
-        """ROS 콜백에서 요청된 start/stop/pause를 Physics 스레드에서 안전하게 처리."""
-        # Start 요청 처리 (가장 먼저 — stop/pause보다 우선순위 낮음)
-        if self._start_requested:
-            self._start_requested = False
-            self._do_start()
-            return
+        """ROS 콜백에서 요청된 start/stop/pause를 Physics 스레드에서 안전하게 처리.
         
-        # Stop 요청 처리
+        우선순위: Stop > Pause > Start (Stop이 가장 높음)
+        """
+        # Stop 요청 처리 (최우선)
         if self._stop_requested:
             self._stop_requested = False
+            self._start_requested = False  # Start 요청도 취소
+            self._pause_requested = False  # Pause 요청도 취소
             self._running = False
             self._paused = False
             if self._motion_bridge is not None:
@@ -298,7 +299,13 @@ class RailRobotScenario:
             self._paused = True
             # 현재 위치를 타겟으로 설정하여 즉시 멈춤
             self.set_rail_angle(self._rail_angle)
-            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} paused at step {self._rail_step_count} (deferred)")
+            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} paused at step {self._current_step()} (deferred)")
+            return
+        
+        # Start 요청 처리 (가장 낮은 우선순위)
+        if self._start_requested:
+            self._start_requested = False
+            self._do_start()
 
     def _run_physics_logic(self, step_size: float) -> None:
         """Physics step 메인 로직 (on_physics_step에서 호출)."""
@@ -306,54 +313,26 @@ class RailRobotScenario:
             self._do_calibrate()
             return
 
-        self._phase_elapsed += step_size
+        if self._planner is None:
+            return
 
-        if self._phase == _ARM_SWEEP:
-            ratio = min(1.0, self._phase_elapsed / ARM_SWEEP_DURATION)
-            self.set_arm_joints(self._pose_from_table(ratio))
-            if ratio >= 1.0:
-                self._phase = _ARM_HOME
-                self._phase_elapsed = 0.0
+        result = self._planner.step(step_size, self._pose_from_table)
+        self._rail_angle = result.rail_angle
+        self.set_rail_angle(result.rail_angle)
 
-        elif self._phase == _ARM_HOME:
-            ratio = min(1.0, self._phase_elapsed / ARM_HOME_DURATION)
-            t = 0.5 * (1.0 - math.cos(math.pi * ratio))
-            top_pose = self._pose_from_table(1.0)
-            pose = {k: top_pose[k] + t * (ARM_HOME_JOINTS[k] - top_pose[k]) for k in top_pose}
-            self.set_arm_joints(pose)
-            if ratio >= 1.0:
-                self._rail_angle_start = self._rail_angle
-                step = 2.0 * math.pi / RAIL_STEPS
-                self._rail_angle_target = (self._rail_angle + step) % (2.0 * math.pi)
-                self._phase = _RAIL_MOVE
-                self._phase_elapsed = 0.0
+        if result.arm_joints is not None:
+            self.set_arm_joints(result.arm_joints)
+        elif result.height_ratio is not None:
+            self.set_arm_joints(self._pose_from_table(result.height_ratio))
 
-        elif self._phase == _RAIL_MOVE:
-            ratio = min(1.0, self._phase_elapsed / RAIL_MOVE_DURATION)
-            t = 0.5 * (1.0 - math.cos(math.pi * ratio))
-            self.set_rail_angle(self._rail_angle_start + t * (self._rail_angle_target - self._rail_angle_start))
-            self.set_arm_joints(ARM_HOME_JOINTS)  # 매 스텝 홈 자세 고정 (물리 흔들림 방지)
-            if ratio >= 1.0:
-                self._rail_angle = self._rail_angle_target
-                self._rail_step_count += 1
-                if self._rail_step_count >= RAIL_STEPS:
-                    carb.log_warn(f"{LOG_TAG} pool_{self._pool_idx} 360° 청소 완료 — 정지")
-                    self.stop()
-                    if self._motion_bridge is not None:
-                        self._motion_bridge.mark_done()
-                    return
-                self._phase = _ARM_RESET
-                self._phase_elapsed = 0.0
+        self._phase = result.phase_name
 
-        elif self._phase == _ARM_RESET:
-            ratio = min(1.0, self._phase_elapsed / ARM_RESET_DURATION)
-            t = 0.5 * (1.0 - math.cos(math.pi * ratio))
-            bottom_pose = self._pose_from_table(0.0)
-            pose = {k: ARM_HOME_JOINTS[k] + t * (bottom_pose[k] - ARM_HOME_JOINTS[k]) for k in ARM_HOME_JOINTS}
-            self.set_arm_joints(pose)
-            if ratio >= 1.0:
-                self._phase = _ARM_SWEEP
-                self._phase_elapsed = 0.0
+        if result.done:
+            carb.log_warn(f"{LOG_TAG} pool_{self._pool_idx} 360° 청소 완료 — 정지")
+            self.stop()
+            if self._motion_bridge is not None:
+                self._motion_bridge.mark_done()
+            return
 
         self._publish_state()
 
@@ -430,10 +409,12 @@ class RailRobotScenario:
         ]
         carb.log_warn(
             f"{LOG_TAG} pool_{self._pool_idx} IK 보정 완료: "
-            f"{len(self._sweep_table)}샘플 → ARM_SWEEP 진입"
+            f"{len(self._sweep_table)}샘플 → planner 진입"
         )
-        self._phase = _ARM_SWEEP
-        self._phase_elapsed = 0.0
+        if self._planner is None:
+            self._planner = self._create_planner()
+        self._planner.reset(self._rail_angle)
+        self._phase = self._planner.phase_name
         self.set_arm_joints(self._sweep_table[0])
 
     def _set_cal_probe(self, t: float, j3: float) -> None:
@@ -580,52 +561,33 @@ class RailRobotScenario:
         """MotionCommandBridge로 진행상황 발행."""
         if self._motion_bridge is None:
             return
-        
+
         progress = self._calculate_progress()
         phase_name = self._get_phase_name()
-        
+        current_step = self._current_step()
+        total_steps = self._planner.total_steps if self._planner is not None else 0
+
         self._motion_bridge.publish_status(
             progress=progress,
-            current_step=self._rail_step_count,
-            total_steps=RAIL_STEPS,
+            current_step=current_step,
+            total_steps=total_steps,
             phase=phase_name,
         )
 
     def _calculate_progress(self) -> float:
         """전체 진행률 계산 (0.0 ~ 1.0)."""
-        if RAIL_STEPS == 0:
-            return 1.0
-        
-        # 기본 진행률: 완료된 rail step 수 기준
-        base_progress = self._rail_step_count / RAIL_STEPS
-        
-        # 현재 phase 내 진행률 추가
-        phase_weight = 1.0 / RAIL_STEPS
-        if self._phase == _ARM_SWEEP:
-            phase_progress = min(1.0, self._phase_elapsed / ARM_SWEEP_DURATION)
-        elif self._phase == _ARM_HOME:
-            phase_progress = min(1.0, self._phase_elapsed / ARM_HOME_DURATION)
-        elif self._phase == _RAIL_MOVE:
-            phase_progress = min(1.0, self._phase_elapsed / RAIL_MOVE_DURATION)
-        elif self._phase == _ARM_RESET:
-            phase_progress = min(1.0, self._phase_elapsed / ARM_RESET_DURATION)
-        else:
-            phase_progress = 0.0
-        
-        return min(1.0, base_progress + phase_progress * phase_weight * 0.25)
+        if self._phase == _CALIBRATE:
+            return 0.0
+        if self._planner is None:
+            return 0.0
+        return self._planner.calculate_progress()
 
     def _get_phase_name(self) -> str:
         """현재 phase 이름 반환."""
         if self._phase == _CALIBRATE:
             return self.PHASE_CALIBRATE
-        elif self._phase == _ARM_SWEEP:
-            return self.PHASE_ARM_SWEEP
-        elif self._phase == _ARM_HOME:
-            return self.PHASE_ARM_HOME
-        elif self._phase == _RAIL_MOVE:
-            return self.PHASE_RAIL_MOVE
-        elif self._phase == _ARM_RESET:
-            return self.PHASE_ARM_RESET
+        if isinstance(self._phase, str):
+            return self._phase
         return self.PHASE_DONE
 
     def _safe_get_positions(self) -> list:

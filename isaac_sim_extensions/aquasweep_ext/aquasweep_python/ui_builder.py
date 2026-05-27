@@ -187,9 +187,13 @@ class UIBuilder:
 
     def on_physics_step(self, step: float):
         # ── StateButton과 독립적으로 항상 water scenario 실행 ──
-        # Debris spawn 시 timeline stop/play 사이클에서도 Z 클램핑 유지
         if self._water_scenario.is_loaded():
             self._water_scenario.update_scenario(step)
+
+        # 레일 로봇: 매 physics step (60Hz) — StateButton 콜백(렌더 Hz)에 두면
+        # sim-time이 wall-clock 대비 ~5× 느려짐 (60s 설정 → ~5min).
+        for rail_scenario in self._rail_scenarios:
+            rail_scenario.on_physics_step(step)
 
         try:
             robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
@@ -629,9 +633,7 @@ class UIBuilder:
             except Exception:
                 pass
 
-        # Update rail robot scenarios (wall cleaning)
-        for rail_scenario in self._rail_scenarios:
-            rail_scenario.on_physics_step(step)
+        # Update rail robot scenarios — moved to on_physics_step() (every physics tick)
 
     def _on_spawn_debris(self):
         if self._debris_scenario.is_spawned():
