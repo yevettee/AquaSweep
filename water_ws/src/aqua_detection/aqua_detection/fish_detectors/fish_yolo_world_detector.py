@@ -45,10 +45,10 @@ class FishYOLOWorldDetector(BaseDetector):
     def detect(self, image: np.ndarray) -> DetectionResult:
         result = DetectionResult()
         
-        # 1. Run YOLO-World for sharks and debris
+        # 1. Run YOLO-World to find all candidate objects
         with self._lock:
             self.model.set_classes(self.classes)
-            results = self.model(image, verbose=False, conf=0.001)
+            results = self.model(image, verbose=False, conf=0.003)
         
         if results:
             boxes = results[0].boxes
@@ -61,8 +61,8 @@ class FishYOLOWorldDetector(BaseDetector):
                 w, h = int(x2 - x1), int(y2 - y1)
                 bbox = (x, y, w, h)
                 
-                # Additional size filter to prevent merging two sharks into one big box
-                if w > 75 and h > 75:
+                # Additional size filter to ignore huge ghost boxes (e.g. empty water gradients)
+                if w > 150 or h > 150:
                     continue
                     
                 try:
@@ -74,24 +74,19 @@ class FishYOLOWorldDetector(BaseDetector):
                 if label in ["bright light", "light reflection", "white glare"]:
                     continue
                 
-                # If it's explicitly poop, or a tiny generic fish (< 15x15), it's Debris!
-                is_poop = label in ["poop", "small grayish white ball", "tiny dot", "speck"]
-                is_tiny_fish = label in ["fish", "small fish"] and (w < 20 and h < 20)
-                
-                if is_poop or is_tiny_fish:
-                    if conf >= 0.001:  # Lowered from 0.005 to 0.001 to catch ultra-faint poop
+                # Separate fish and debris with different confidence thresholds
+                if label in ["shark", "sturgeon", "fish", "small fish"]:
+                    # Sharks must have higher confidence and be reasonably sized
+                    if conf > 0.015 and w > 10 and h > 10:
+                        det = FishDetection(bbox=bbox, confidence=conf, species=label)
+                        result.fish_detections.append(det)
+                    else:
+                        # If it's too low confidence or too small, treat as debris
                         det = DebrisDetection(bbox=bbox, confidence=conf)
                         result.debris_detections.append(det)
-                
-                elif label in ["shark", "sturgeon"]:
-                    if conf >= 0.005:
-                        det = FishDetection(bbox=bbox, confidence=conf, species="shark")
-                        result.fish_detections.append(det)
-                        
-                elif label in ["fish", "small fish"]:
-                    if conf >= 0.03:  # Must be larger than 20x20 (handled above) and higher conf
-                        det = FishDetection(bbox=bbox, confidence=conf, species="shark")
-                        result.fish_detections.append(det)
+                else:
+                    det = DebrisDetection(bbox=bbox, confidence=conf)
+                    result.debris_detections.append(det)
                         
         return result
 

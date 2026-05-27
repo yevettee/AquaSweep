@@ -49,7 +49,7 @@ from aqua_detection.fish_detectors import (
     FishYOLOWorldDetector,
 )
 from aqua_detection.fish_detectors.vlm_validator import VLMValidator
-from aqua_detection.fish_detectors.base import DetectionResult
+from aqua_detection.fish_detectors.base import DetectionResult, FishDetection, DebrisDetection
 from aqua_detection.fish_analyzers import FishVelocityEstimator, SimpleFishStatusClassifier
 from aqua_detection.fish_utils.fish_visualization import draw_detection_result
 from aqua_detection.image_qos import image_subscription_qos
@@ -203,6 +203,9 @@ class FishDetectionNode(Node):
         # ROS2 components
         self.bridge = CvBridge()
         self.pool_states: Dict[int, PoolState] = {}
+        self.is_processing = {i: False for i in range(1, 8)}
+        self._representative_pool: int = 1  # VLM 검증을 수행할 대표 수조 (YOLO 탐지 개수 기반으로 동적 선정)
+        self._pool_candidate_count: Dict[int, int] = {i: 0 for i in range(1, 8)}  # 수조별 탐지 개수 축적
         
         # Publishers and subscribers per pool
         self.img_subs = {}
@@ -357,8 +360,7 @@ class FishDetectionNode(Node):
         self,
         image: np.ndarray,
         detection_result: DetectionResult,
-        fish_statuses: List[Dict],
-        unverified_debris: List = None
+        fish_statuses: List[Dict]
     ) -> np.ndarray:
         """Draw detections with status-based coloring.
         
@@ -368,14 +370,11 @@ class FishDetectionNode(Node):
         - VLM Verified Debris: Red bbox
         """
         output = image.copy()
-        if unverified_debris is None:
-            unverified_debris = []
         
         # Colors (BGR)
-        COLOR_ALIVE = (0, 255, 0)       # Green
-        COLOR_SUSPICIOUS = (0, 255, 255) # Yellow
-        COLOR_DEBRIS_CANDIDATE = (255, 255, 0)     # Cyan
-        COLOR_DEBRIS_VERIFIED = (0, 0, 255)        # Red
+        COLOR_ALIVE = (0, 255, 0)       # Green (Alive Shark)
+        COLOR_DEAD = (0, 0, 255)        # Red (Dead Shark)
+        COLOR_DEBRIS = (255, 255, 0)    # Cyan (Debris/Poop)
         
         # Draw fish with status-based colors
         for fs in fish_statuses:
@@ -385,51 +384,20 @@ class FishDetectionNode(Node):
             species = fs['species']
             confidence = fs['confidence']
             velocity = fs['velocity']
-            features = fs.get('features', {})
             
             # Choose color based on status
-            color = COLOR_SUSPICIOUS if status == "suspicious" else COLOR_ALIVE
+            color = COLOR_DEAD if status == "suspicious" else COLOR_ALIVE
             thickness = 3 if status == "suspicious" else 2
             
-            # Draw bbox
+            # Draw bbox only (no text label)
             cv2.rectangle(output, (x, y), (x + w, y + h), color, thickness)
-            
-            # Build label with fish ID
-            short_id = fish_id.replace('fish_', '#')
-            if status == "suspicious":
-                label = f"{short_id} SUSPICIOUS"
-            else:
-                label = f"{short_id} {species}"
-            
-            # Draw label background
-            (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-            cv2.rectangle(output, (x, y - label_h - 10), (x + label_w + 4, y), color, -1)
-            cv2.putText(output, label, (x + 2, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-            
-            # Show debug info: Contrast and Velocity
-            contrast = features.get('bg_contrast', 0) if features else 0
-            debug_text = f"C:{contrast:.0f} V:{velocity:.3f}"
-            cv2.putText(output, debug_text, (x, y + h + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
         
-        # Draw ALL unverified candidate debris as Cyan
-        for det in unverified_debris:
-            x, y, w, h = det.bbox
-            cv2.rectangle(output, (x, y), (x + w, y + h), COLOR_DEBRIS_CANDIDATE, 1)
-            
-        # Draw VLM Verified debris as THICK RED boxes
+        # Draw VLM Verified debris as Cyan boxes (no text)
         for det in detection_result.debris_detections:
             x, y, w, h = det.bbox
-            cv2.rectangle(output, (x, y), (x + w, y + h), COLOR_DEBRIS_VERIFIED, 3)
-            cv2.putText(output, "POOP", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_DEBRIS_VERIFIED, 2)
+            cv2.rectangle(output, (x, y), (x + w, y + h), COLOR_DEBRIS, 2)
         
-        # Stats overlay
-        alive_count = sum(1 for fs in fish_statuses if fs['status'] == 'alive')
-        suspicious_count = sum(1 for fs in fish_statuses if fs['status'] == 'suspicious')
-        stats_text = f"Fish: {len(fish_statuses)} (Alive: {alive_count}, Suspicious: {suspicious_count}) | Debris: {detection_result.debris_count}"
-        
-        # Draw stats background
-        cv2.rectangle(output, (5, 5), (500, 35), (0, 0, 0), -1)
-        cv2.putText(output, stats_text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # 통계 오버레이는 뷰어에서 그리므로 여기선 생략
         
         return output
 
@@ -501,6 +469,10 @@ class FishDetectionNode(Node):
     
     def _process_pool_image(self, cv_image: np.ndarray, pool_id: int, header=None):
         """Process a single pool's image (used by both per-pool and global modes)."""
+        if self.is_processing.get(pool_id, False):
+            return
+        
+        self.is_processing[pool_id] = True
         now = self.get_clock().now()
         self.last_img_time[pool_id] = now
         state = self.pool_states[pool_id]
@@ -510,26 +482,47 @@ class FishDetectionNode(Node):
         # Run detection
         detection_result = self.detector.detect(cv_image)
         
-        # Collect unverified debris candidates to show as Cyan
-        unverified_debris = list(detection_result.debris_detections)
+        # VLM Validation for ALL candidate objects
+        validated_debris = []
+        validated_fish = []
+        fish_statuses_temp = {}
         
-        # VLM Validation for debris
-        if self.vlm_validator:
-            validated_debris = []
-            for det in detection_result.debris_detections:
+        # 대표 수조 후보 가중치 업데이트 (탐지 개수 기록)
+        self._pool_candidate_count[pool_id] = len(detection_result.debris_detections)
+        
+        # VLM 적용: 현재 대표 수조의 '물고기 후보' 객체에 대해서만 생사 판별 (속도 최적화 및 정확도 향상)
+        if self.vlm_validator and pool_id == self._representative_pool and detection_result.fish_detections:
+            self.get_logger().info(f"Pool_{pool_id}: VLM 검증 시작 (상어 후보 {len(detection_result.fish_detections)}개)")
+            validated_fish = []
+            fish_statuses_temp = {}
+            for i, det in enumerate(detection_result.fish_detections):
                 x, y, w, h = det.bbox
-                margin = 15
+                margin = 20
                 y1, y2 = max(0, y - margin), min(cv_image.shape[0], y + h + margin)
                 x1, x2 = max(0, x - margin), min(cv_image.shape[1], x + w + margin)
                 if y2 > y1 and x2 > x1:
-                    # If YOLO-World already used its AI to classify the poop, skip the slow VLM
-                    if self.detector.get_name() == "YOLO-World":
-                        validated_debris.append(det)
+                    crop = cv_image[y1:y2, x1:x2]
+                    category = self.vlm_validator.classify_object(crop)
+                    
+                    if category == "alive" or category == "dead":
+                        validated_fish.append(det)
+                        fish_statuses_temp[len(validated_fish)-1] = "suspicious" if category == "dead" else "alive"
                     else:
-                        crop = cv_image[y1:y2, x1:x2]
-                        if self.vlm_validator.is_debris(crop):
-                            validated_debris.append(det)
-            detection_result.debris_detections = validated_debris
+                        # VLM thinks it's debris, move to debris list
+                        d_det = DebrisDetection(bbox=det.bbox, confidence=det.confidence)
+                        detection_result.debris_detections.append(d_det)
+            
+            # Update fish detections with only validated ones
+            detection_result.fish_detections = validated_fish
+            
+            self.get_logger().info(f"Pool_{pool_id}: VLM 검증 완료")
+            
+            # VLM 검증 완료 후 다음 대표 수조 선정 (가장 많은 객체가 있는 수조)
+            if self._pool_candidate_count:
+                new_rep = max(self._pool_candidate_count, key=self._pool_candidate_count.get)
+                if new_rep != self._representative_pool:
+                    self.get_logger().info(f"대표 수조 변경: Pool_{self._representative_pool} → Pool_{new_rep} (객체 수: {self._pool_candidate_count[new_rep]})")
+                    self._representative_pool = new_rep
 
         detection_result.frame_id = state.frame_count
         state.last_detection = detection_result
@@ -568,43 +561,30 @@ class FishDetectionNode(Node):
             fish_id = fish_ids[i]
             velocity = velocities.get(fish_id, 0.0)
             
-            x, y, w, h = det.bbox
-            x1, y1 = max(0, x), max(0, y)
-            x2, y2 = min(cv_image.shape[1], x + w), min(cv_image.shape[0], y + h)
+            # The status was determined by the VLM earlier
+            status = fish_statuses_temp.get(i, "alive")
             
-            if x2 > x1 and y2 > y1:
-                fish_crop = cv_image[y1:y2, x1:x2]
-                status, confidence = state.status_classifier.classify(
-                    fish_crop, velocity, full_image=cv_image, bbox=det.bbox
-                )
-                features = state.status_classifier.get_features(fish_crop)
-                
-                fish_statuses.append({
-                    'fish_id': fish_id,
-                    'bbox': det.bbox,
-                    'species': det.species,
-                    'status': status,
-                    'confidence': confidence,
-                    'velocity': velocity,
-                    'features': features,
-                })
-                
-                if status == "suspicious":
-                    fish_count_suspicious += 1
-            else:
-                fish_statuses.append({
-                    'fish_id': fish_id,
-                    'bbox': det.bbox,
-                    'species': det.species,
-                    'status': 'alive',
-                    'confidence': 0.5,
-                    'velocity': velocity,
-                    'features': {},
-                })
+            fish_statuses.append({
+                'fish_id': fish_id,
+                'bbox': det.bbox,
+                'species': det.species,
+                'status': status,
+                'confidence': det.confidence,
+                'velocity': velocity,
+                'features': {},
+            })
+            
+            if status == "suspicious":
+                fish_count_suspicious += 1
         
-        # Update fish count history and compute smoothed values
-        state.fish_count_history.append(detection_result.fish_count)
-        state.fish_suspicious_history.append(fish_count_suspicious)
+        # VLM이 실행된 프레임에서만 fish count 기록 업데이트 (non-VLM 프레임의 0으로 덮어쓰는 버그 방지)
+        if pool_id == self._representative_pool and self.vlm_validator:
+            state.fish_count_history.append(detection_result.fish_count)
+            state.fish_suspicious_history.append(fish_count_suspicious)
+        elif not state.fish_count_history:
+            # 아직 기록이 없으면 현재 값 추가 (초기화 목적)
+            state.fish_count_history.append(0)
+            state.fish_suspicious_history.append(0)
         smoothed_fish_count = int(np.median(state.fish_count_history))
         smoothed_suspicious = int(np.median(state.fish_suspicious_history))
         
@@ -647,7 +627,7 @@ class FishDetectionNode(Node):
         if self.debug_viz:
             try:
                 debug_image = self._draw_detection_with_status(
-                    cv_image, detection_result, fish_statuses, unverified_debris
+                    cv_image, detection_result, fish_statuses
                 )
                 debug_msg = self.bridge.cv2_to_imgmsg(debug_image, encoding="bgr8")
                 if header:
@@ -655,6 +635,8 @@ class FishDetectionNode(Node):
                 self.pub_debug[pool_id].publish(debug_msg)
             except Exception as e:
                 self.get_logger().error(f"Pool_{pool_id}: Debug image publish failed: {e}")
+                
+        self.is_processing[pool_id] = False
     
     def _center_crop_square(self, image: np.ndarray, size: int = 640) -> np.ndarray:
         """이미지를 중앙 기준 정사각형으로 크롭 (비율 유지, 리사이즈 없음).
@@ -704,8 +686,17 @@ class FishDetectionNode(Node):
             )
             return
         
-        # 중앙 크롭 (양옆 다른 풀 제거) - 640x480 → 480x480
-        cv_image = self._center_crop_square(cv_image)
+        # 카메라 줌아웃에 맞춰 가로/세로 크롭 설정 (세로 520, 가로 494)
+        h, w = cv_image.shape[:2]
+        crop_w = 494
+        crop_h = 520
+        
+        x1 = max(0, (w - crop_w) // 2)
+        x2 = x1 + crop_w
+        y1 = max(0, (h - crop_h) // 2)
+        y2 = y1 + crop_h
+        
+        cv_image = cv_image[y1:y2, x1:x2]
         
         # Use shared processing method
         self._process_pool_image(cv_image, pool_id, msg.header)

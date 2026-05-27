@@ -109,7 +109,7 @@ def apply_camera_and_light_settings() -> None:
         
         # 1. Set Viewport Lighting Menu Mode to Stage Lights (NOT camera)
         try:
-            omni.kit.commands.execute("SetLightingMenuMode", lighting_mode="stage")
+            omni.kit.commands.execute("SetLightingMenuMode", lighting_mode="camera")
         except Exception as e:
             import carb
             carb.log_warn(f"[top_cam] Failed to set viewport lighting mode to stage: {e}")
@@ -144,9 +144,9 @@ def apply_camera_and_light_settings() -> None:
             cam_prim = stage.GetPrimAtPath(cam_path)
             if cam_prim.IsValid():
                 camera = UsdGeom.Camera(cam_prim)
-                camera.CreateFocalLengthAttr().Set(20.0)
+                camera.CreateFocalLengthAttr().Set(17.5)
         import carb
-        carb.log_info("[Auto-Setup] Configured camera zoom (20.0mm) and set viewport mode to stage.")
+        carb.log_info("[Auto-Setup] Configured camera zoom (9.0mm) and set viewport mode to stage.")
     except Exception as e:
         import carb
         carb.log_warn(f"[Auto-Setup] Failed to configure camera/light: {e}")
@@ -162,7 +162,7 @@ def revert_camera_and_light_settings() -> None:
         
         # 1. Ensure Viewport Lighting is set to Stage Lights
         try:
-            omni.kit.commands.execute("SetLightingMenuMode", lighting_mode="stage")
+            omni.kit.commands.execute("SetLightingMenuMode", lighting_mode="camera")
         except Exception as e:
             import carb
             carb.log_warn(f"[top_cam] Failed to set viewport lighting mode to stage: {e}")

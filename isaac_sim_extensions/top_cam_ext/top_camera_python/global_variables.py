@@ -16,7 +16,7 @@ GRAPH_PATH = "/top_cam_graph"
 
 TOPIC_TEMPLATE = "/pool_{pool_id}/top_img_raw"
 FRAME_ID_TEMPLATE = "pool_{pool_id}_top_cam_{pool_id}"
-DEFAULT_RESOLUTION = (640, 480)  # 낮춤: 렌더링 속도 향상, YOLO imgsz=640과 동일
+DEFAULT_RESOLUTION = (640, 640)  # 높이를 640으로 늘려 더 넓은 세로 시야 확보
 
 # ── Global camera settings (single camera for all pools) ─────────────────────
 GLOBAL_CAM_PATH = "/World/GlobalTopCamera"

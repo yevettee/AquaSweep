@@ -249,6 +249,7 @@ class UIBuilder:
         scene_builders.build_building(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
+        scene_builders.build_global_top_camera(stage)
         scene_builders.build_equipment(stage)
         sturgeon_spawner.spawn_sturgeons(stage)
 

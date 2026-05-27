@@ -12,24 +12,18 @@ class VLMValidator:
         self.model = model
         self.logger = logging.getLogger('VLMValidator')
 
-    def is_debris(self, image: np.ndarray) -> bool:
+    def classify_object(self, image: np.ndarray) -> str:
         """
-        Verify if the image patch is a debris (shark poop).
-        
-        Args:
-            image: Cropped BGR image of the suspected debris.
-            
-        Returns:
-            bool: True if VLM confirms it is debris.
+        Classify the image crop into one of three categories: 'alive' (live shark), 'dead' (dead shark), or 'debris'.
         """
         try:
-            # Encode image to base64
             _, buffer = cv2.imencode('.jpg', image)
             img_b64 = base64.b64encode(buffer).decode('utf-8')
 
-            # A 34x34 crop is too blurry for LLaVA to recognize as "shark poop"
-            # So we ask a much simpler question that it can actually answer from a blurry dot.
-            prompt = "Look at the center of this image. Is there a small dot, speck, or grayish object visible? Answer only with 'yes' or 'no'."
+            prompt = (
+                "Look at this cropped image. Is this a live shark, a dead shark, or debris (poop/non-shark object)? "
+                "Answer with EXACTLY ONE word: 'alive', 'dead', or 'debris'."
+            )
 
             payload = {
                 "model": self.model,
@@ -38,18 +32,21 @@ class VLMValidator:
                 "stream": False
             }
 
-            # Drop the timeout to 0.5 seconds! If VLM is too slow, we just assume it's debris
-            # rather than freezing the entire ROS 2 simulation.
-            response = requests.post(self.endpoint, json=payload, timeout=0.5)
+            # Increased timeout since we are now relying entirely on VLM for classification
+            response = requests.post(self.endpoint, json=payload, timeout=2.0)
             if response.status_code == 200:
                 result = response.json().get("response", "").strip().lower()
-                print(f"[VLM] Prompt answered: {result}")
-                if "yes" in result:
-                    return True
-                return False
+                print(f"[VLM] Classification result: {result}")
+                
+                if "alive" in result:
+                    return "alive"
+                elif "dead" in result:
+                    return "dead"
+                else:
+                    return "debris"
             else:
-                self.logger.warning(f"VLM verification failed with status {response.status_code}")
-                return False
+                self.logger.warning(f"VLM classification failed with status {response.status_code}")
+                return "debris"
         except Exception:
-            # Fallback: if VLM is unreachable, return True so we don't lose detections
-            return True
+            # Fallback
+            return "debris"
