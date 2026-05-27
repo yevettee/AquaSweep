@@ -39,7 +39,19 @@ def _find_model_path(model_name: str) -> Optional[Path]:
     direct = Path(model_name)
     if direct.exists():
         return direct
-    
+
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        share_model = (
+            Path(get_package_share_directory("aqua_detection"))
+            / "models"
+            / model_name
+        )
+        if share_model.exists():
+            return share_model
+    except Exception:
+        pass
+
     # Common search locations
     search_paths = [
         Path(__file__).parent.parent.parent / "models" / model_name,
