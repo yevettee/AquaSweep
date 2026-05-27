@@ -7,14 +7,17 @@ from .debris_system import DebrisSystem
 from . import global_variables as gv
 
 
-def _resolve_pool_centers() -> list[tuple[float, float]]:
-    """Pull POOL_CENTERS from water_tank_env_ext; fall back to single origin pool."""
+def _resolve_debris_config() -> tuple[list[int], tuple[int, int], float]:
+    """Pull spawn pools and counts from water_tank_env_ext params; fall back to gv."""
     try:
-        params = importlib.import_module("water_tank_env_python.params")
-        centers = list(getattr(params, "POOL_CENTERS", []))
-        return centers if centers else [(0.0, 0.0)]
+        p = importlib.import_module("water_tank_env_python.params")
+        indices = list(getattr(p, "DEBRIS_SPAWN_POOLS", gv.DEBRIS_SPAWN_POOLS))
+        lo = int(getattr(p, "DEBRIS_COUNT_MIN", gv.DEBRIS_COUNT_MIN))
+        hi = int(getattr(p, "DEBRIS_COUNT_MAX", gv.DEBRIS_COUNT_MAX))
+        radius = float(getattr(p, "DEBRIS_RADIUS", gv.DEBRIS_RADIUS))
+        return indices, (lo, hi), radius
     except ImportError:
-        return [(0.0, 0.0)]
+        return list(gv.DEBRIS_SPAWN_POOLS), (gv.DEBRIS_COUNT_MIN, gv.DEBRIS_COUNT_MAX), gv.DEBRIS_RADIUS
 
 
 def _resolve_floor_z() -> float:
@@ -34,16 +37,17 @@ class DebrisScenario:
         self,
         count_range: tuple[int, int] | None = None,
         radius: float | None = None,
+        pool_indices: list[int] | None = None,
     ) -> None:
         stage = get_current_stage()
+        default_indices, default_range, default_radius = _resolve_debris_config()
         self._debris = DebrisSystem(
-            count_range=count_range if count_range is not None
-                       else (gv.DEBRIS_COUNT_MIN, gv.DEBRIS_COUNT_MAX),
-            radius=radius if radius is not None else gv.DEBRIS_RADIUS,
+            count_range=count_range if count_range is not None else default_range,
+            radius=radius if radius is not None else default_radius,
             color_hex=gv.DEBRIS_COLOR_HEX,
             tank_range=gv.TANK_RANGE,
             z_floor=_resolve_floor_z(),
-            pool_centers=_resolve_pool_centers(),
+            pool_indices=pool_indices if pool_indices is not None else default_indices,
         )
         self._debris.spawn(stage)
 
@@ -57,6 +61,11 @@ class DebrisScenario:
 
     def is_spawned(self) -> bool:
         return self._debris is not None and self._debris.is_spawned
+
+    def pool_counts(self) -> dict[int, int] | None:
+        if self._debris is None or not self._debris.is_spawned:
+            return None
+        return self._debris.pool_counts
 
     def update_scenario(self, step: float) -> None:
         pass

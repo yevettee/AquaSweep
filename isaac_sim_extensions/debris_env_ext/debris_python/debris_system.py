@@ -38,14 +38,14 @@ class DebrisSystem:
     # Single near-black dark-brown debris colour (#221911).
     _COLOR_RGB = (0.13, 0.10, 0.06)
 
-    def __init__(self, count_range: tuple[int, int] = (30, 70),
-                 radius: float = 0.05,
+    def __init__(self, count_range: tuple[int, int] = (30, 50),
+                 radius: float = 0.03,
                  color_hex: str = "#221911", tank_range: float = 3.8,
                  z_floor: float = 0.0,
-                 pool_centers: list[tuple[float, float]] | None = None):
+                 pool_indices: list[int] | None = None):
         """``count_range`` is the inclusive (min, max) of debris per pool;
-        each pool draws its own random count. ``pool_centers`` indexes
-        Pool_1..Pool_N.
+        each pool draws its own random count. ``pool_indices`` lists 1-based
+        pool IDs to spawn (e.g. [1, 2, 3, 6, 7]).
 
         ``color_hex`` is kept for backwards compatibility / logging — every
         particle is rendered with a single ``displayColor`` primvar set to
@@ -59,13 +59,13 @@ class DebrisSystem:
         self.color_hex   = color_hex  # retained for back-compat / logging
         self.tank_range  = tank_range
         self.z_floor     = z_floor
-        self.pool_centers = pool_centers if pool_centers else [(0.0, 0.0)]
+        self.pool_indices = list(pool_indices) if pool_indices else [1]
         self._particle_paths: list[str] = []
-        self._pool_counts: list[int] = []
+        self._pool_counts: dict[int, int] = {}
         self._spawned    = False
 
     def spawn(self, stage) -> bool:
-        """모든 풀에 파티클을 스폰. 이미 스폰돼 있으면 False."""
+        """Configured pools에 파티클을 스폰. 이미 스폰돼 있으면 False."""
         if self._spawned:
             return False
 
@@ -81,22 +81,22 @@ class DebrisSystem:
             scene_path = self._ensure_physics_scene(stage)
             rng = np.random.default_rng()
             lo, hi = self.count_range
-            self._pool_counts = []
-            for idx, _center in enumerate(self.pool_centers, start=1):
+            self._pool_counts = {}
+            for pool_idx in self.pool_indices:
                 pool_count = int(rng.integers(lo, hi + 1))
-                self._pool_counts.append(pool_count)
-                sys_path = self.pool_particle_system(idx)
-                pts_path = self.pool_particles(idx)
+                self._pool_counts[pool_idx] = pool_count
+                sys_path = self.pool_particle_system(pool_idx)
+                pts_path = self.pool_particles(pool_idx)
                 self._define_particle_system_at(stage, scene_path, sys_path)
                 self._add_particles_at(stage, sys_path, pts_path, pool_count)
                 self._apply_material_to(stage, pts_path)
                 self._particle_paths.append(pts_path)
 
             self._spawned = True
-            total = sum(self._pool_counts)
+            total = sum(self._pool_counts.values())
             carb.log_info(
-                f"[debris] {self._pool_counts} (per-pool, range "
-                f"{lo}~{hi}) = total {total} 파티클 스폰 완료 "
+                f"[debris] pools {self.pool_indices} counts {self._pool_counts} "
+                f"(range {lo}~{hi}) = total {total} 파티클 스폰 완료 "
                 f"(scene={scene_path})"
             )
 
@@ -114,9 +114,9 @@ class DebrisSystem:
             return False
 
     def clear(self, stage) -> None:
-        """모든 풀의 Debris 서브트리를 제거."""
-        for idx in range(1, len(self.pool_centers) + 1):
-            root = self.pool_debris_root(idx)
+        """Configured pools의 Debris 서브트리를 제거."""
+        for pool_idx in self.pool_indices:
+            root = self.pool_debris_root(pool_idx)
             prim = stage.GetPrimAtPath(root)
             if prim and prim.IsValid():
                 stage.RemovePrim(root)
@@ -127,6 +127,11 @@ class DebrisSystem:
     @property
     def is_spawned(self) -> bool:
         return self._spawned
+
+    @property
+    def pool_counts(self) -> dict[int, int]:
+        """Spawn counts keyed by 1-based pool ID."""
+        return dict(self._pool_counts)
 
     def get_particle_paths(self) -> list[str]:
         """Snapshot of the particle Points prim paths (one per pool)."""

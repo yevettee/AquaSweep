@@ -1,8 +1,9 @@
-"""Spawn 3–7 sturgeons into a random subset of pools.
+"""Spawn sturgeons into pools listed in ``params.STURGEON_SPAWN_POOLS``.
 
 Layout rules (drawn fresh from ``random.Random()`` each call):
-  * 1 to 3 pools are left empty (water + robot only).
-  * The remaining pools each get 3 to 7 sturgeons.
+  * Only configured pools receive fish (default: 1, 3, 6).
+  * Each occupied pool gets 5 to 7 sturgeons.
+  * At most 20% per pool are flipped (belly-up / suspicious).
   * Each sturgeon's start pose (radius, angle, yaw, z) is randomised inside
     the pool.
   * Each sturgeon picks a random shade from a dark-grey palette so the school
@@ -39,11 +40,6 @@ _STURGEON_USD = os.path.normpath(
 # ── Spawn-time tunables ──────────────────────────────────────────────────────
 TARGET_LENGTH_M = 1.0                # 1 m sturgeon (was 0.90)
 
-_EMPTY_POOLS_MIN = 3
-_EMPTY_POOLS_MAX = 3
-_FISH_PER_POOL_MIN = 3
-_FISH_PER_POOL_MAX = 7
-
 # Initial XY pose around pool centre — kept inside the inner radius with margin.
 _RADIUS_MIN = 0.6
 _RADIUS_MAX = params.TANK_RADIUS - 1.0  # ≈ 3.0 m, well clear of the wall
@@ -53,7 +49,6 @@ _SPAWN_Z_MIN = params.TANK_FLOOR_Z + 0.30   # 30cm above pool floor
 _SPAWN_Z_MAX = params.water_surface_z() - 0.1   # 10cm below surface
 
 # ── Flipped (belly-up) sturgeon settings ──────────────────────────────────────
-_FLIP_PROBABILITY = 0.5             # 25% chance each fish is flipped
 _FLIPPED_Z_MIN = params.water_surface_z() - 0.07  # slightly below surface
 _FLIPPED_Z_MAX = params.water_surface_z() - 0.05  # nearly at surface (floating)
 _FLIP_ROLL_DEG = 180.0               # X-axis rotation to show belly
@@ -77,6 +72,32 @@ def _pool_paths(stage) -> list[str]:
     if not pools_prim or not pools_prim.IsValid():
         return []
     return sorted(str(p.GetPath()) for p in pools_prim.GetChildren())
+
+
+def _pool_id_from_path(pool_path: str) -> int | None:
+    name = pool_path.rsplit("/", 1)[-1]
+    if not name.startswith("Pool_"):
+        return None
+    try:
+        return int(name.split("_", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def _spawn_pool_ids() -> set[int] | None:
+    """None means spawn in every pool on stage."""
+    configured = params.STURGEON_SPAWN_POOLS
+    if configured is None:
+        return None
+    return set(configured)
+
+
+def _flip_flags(rng: random.Random, n_fish: int) -> list[bool]:
+    max_flipped = int(n_fish * params.STURGEON_FLIPPED_MAX_RATIO)
+    k = rng.randint(0, max_flipped) if max_flipped > 0 else 0
+    flags = [True] * k + [False] * (n_fish - k)
+    rng.shuffle(flags)
+    return flags
 
 
 _LIGHT_TYPES = (
@@ -191,7 +212,7 @@ def _bind_random_palette_material(stage, prim, palette_paths: list[str], rng: ra
 
 
 def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
-    """Place 3–7 sturgeons into a random subset of pools (1–3 left empty).
+    """Place sturgeons into ``STURGEON_SPAWN_POOLS`` (default 1, 3, 6).
 
     Returns the total number of sturgeons placed. Each sturgeon gets a unique
     name ``Sturgeon_<m>`` under its pool.
@@ -210,29 +231,29 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
 
     rng = random.Random()           # fresh entropy each call → different layout per LOAD
     palette = _ensure_palette(stage)
+    allowed_ids = _spawn_pool_ids()
 
-    # Decide which pools are empty (robot only). Always leave at least one
-    # pool occupied even if there are fewer pools than the default range.
-    n_pools = len(pool_paths)
-    n_empty = min(rng.randint(_EMPTY_POOLS_MIN, _EMPTY_POOLS_MAX), n_pools - 1)
-    empty_indices = set(rng.sample(range(n_pools), n_empty))
-    occupied = [i for i in range(n_pools) if i not in empty_indices]
     carb.log_info(
-        f"[sturgeon_spawner] {n_pools} pools total, "
-        f"{len(empty_indices)} left empty: {sorted(i + 1 for i in empty_indices)}; "
-        f"{len(occupied)} occupied: {sorted(i + 1 for i in occupied)}"
+        f"[sturgeon_spawner] spawn pools: "
+        f"{sorted(allowed_ids) if allowed_ids is not None else 'all'}"
     )
 
     scale_factor: Optional[float] = None
     total_placed = 0
 
-    for pool_idx, pool_path in enumerate(pool_paths):
-        if pool_idx in empty_indices:
+    for pool_path in pool_paths:
+        pool_id = _pool_id_from_path(pool_path)
+        if pool_id is None:
+            continue
+        if allowed_ids is not None and pool_id not in allowed_ids:
             continue
 
-        n_fish = rng.randint(_FISH_PER_POOL_MIN, _FISH_PER_POOL_MAX)
+        n_fish = rng.randint(
+            params.STURGEON_PER_POOL_MIN, params.STURGEON_PER_POOL_MAX
+        )
+        flip_flags = _flip_flags(rng, n_fish)
         n_flipped_in_pool = 0
-        for fish_id in range(1, n_fish + 1):
+        for fish_id, is_flipped in enumerate(flip_flags, start=1):
             sturgeon_path = f"{pool_path}/Sturgeon_{fish_id:02d}"
             if stage.GetPrimAtPath(sturgeon_path).IsValid():
                 continue
@@ -244,8 +265,6 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             local_y = radius * math.sin(angle)
             yaw_deg = rng.uniform(0.0, 360.0)
 
-            # Determine if this fish is flipped (belly-up, floating near surface).
-            is_flipped = rng.random() < _FLIP_PROBABILITY
             if is_flipped:
                 # Add Z offset to compensate for pivot point shift after RotateX(180)
                 spawn_z = rng.uniform(_FLIPPED_Z_MIN, _FLIPPED_Z_MAX) + _FLIP_Z_OFFSET
@@ -302,9 +321,10 @@ def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
             )
             total_placed += 1
 
+        max_flipped = int(n_fish * params.STURGEON_FLIPPED_MAX_RATIO)
         carb.log_info(
-            f"[sturgeon_spawner] Pool_{pool_idx + 1}: spawned {n_fish} sturgeons "
-            f"({n_flipped_in_pool} flipped)"
+            f"[sturgeon_spawner] Pool_{pool_id}: spawned {n_fish} sturgeons "
+            f"({n_flipped_in_pool} flipped, cap {max_flipped})"
         )
 
     return total_placed

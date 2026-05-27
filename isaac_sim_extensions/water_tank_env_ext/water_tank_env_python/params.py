@@ -86,9 +86,18 @@ POOL_CENTERS: list[tuple[float, float]] = [
 EQUIPMENT_CENTER: tuple[float, float] = (12.75, 6.0)
 
 # ── Sturgeon spawn settings ──────────────────────────────────────────────────
-# 상어 spawn할 풀 번호 (1-indexed). None이면 랜덤 선택 유지
-# 예: [2, 5, 7] → Pool_2, Pool_5, Pool_7에만 상어 spawn
-STURGEON_SPAWN_POOLS: list[int] | None = [2, 5, 7]
+# 1-indexed pool IDs. None → spawn in every pool on stage.
+STURGEON_SPAWN_POOLS: list[int] | None = [1, 3, 6]
+STURGEON_PER_POOL_MIN = 5
+STURGEON_PER_POOL_MAX = 7
+STURGEON_FLIPPED_MAX_RATIO = 0.20   # belly-up (suspicious) cap per pool
+
+# ── Debris spawn settings ─────────────────────────────────────────────────────
+DEBRIS_SPAWN_POOLS: list[int] = [1, 2, 3, 6, 7]
+DEBRIS_COUNT_MIN = 30
+DEBRIS_COUNT_MAX = 50
+DEBRIS_RADIUS = 0.03
+DEBRIS_POLLUTION_SCALE = 200.0      # remaining count → pollution_level = N / scale
 
 # ── Physical constants ────────────────────────────────────────────────────────
 WATER_DENSITY = 1000.0
@@ -125,3 +134,15 @@ def is_inside_any_pool(x: float, y: float, margin: float = 0.0) -> int | None:
 def is_inside_tank(x: float, y: float, margin: float = 0.0) -> bool:
     """Backwards-compatible single-pool check (any pool)."""
     return is_inside_any_pool(x, y, margin) is not None
+
+
+def pool_centers_for_indices(
+    indices: list[int],
+) -> list[tuple[int, tuple[float, float]]]:
+    """Return (1-based pool_id, center) for valid indices into POOL_CENTERS."""
+    out: list[tuple[int, tuple[float, float]]] = []
+    n = len(POOL_CENTERS)
+    for pool_id in indices:
+        if 1 <= pool_id <= n:
+            out.append((pool_id, POOL_CENTERS[pool_id - 1]))
+    return out

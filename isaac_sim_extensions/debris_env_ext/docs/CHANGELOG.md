@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.2] - 2026-05-27
+
+### 변경사항
+- 스폰 풀: `DEBRIS_SPAWN_POOLS` = [1, 2, 3, 6, 7] (`params.py` / `global_variables.py`)
+- 풀당 개수: 30~50 (`DEBRIS_COUNT_MAX` 70 → 50)
+- `DebrisSystem.pool_counts`: `dict[int, int]` (1-based pool ID)
+- `DebrisScenario.pool_counts()` — 읽기 API
+- `pool_indices`로 spawn/clear (전체 7풀 enumerate 제거)
+
 ## [0.2.1] - 2026-05-24
 
 ### 변경사항
