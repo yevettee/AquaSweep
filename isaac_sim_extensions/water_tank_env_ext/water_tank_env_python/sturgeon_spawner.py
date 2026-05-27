@@ -1,8 +1,8 @@
-"""Spawn 5–10 sturgeons into a random subset of pools.
+"""Spawn 3–7 sturgeons into a random subset of pools.
 
 Layout rules (drawn fresh from ``random.Random()`` each call):
   * 1 to 3 pools are left empty (water + robot only).
-  * The remaining pools each get 5 to 10 sturgeons.
+  * The remaining pools each get 3 to 7 sturgeons.
   * Each sturgeon's start pose (radius, angle, yaw, z) is randomised inside
     the pool.
   * Each sturgeon picks a random shade from a dark-grey palette so the school
@@ -41,8 +41,8 @@ TARGET_LENGTH_M = 1.0                # 1 m sturgeon (was 0.90)
 
 _EMPTY_POOLS_MIN = 3
 _EMPTY_POOLS_MAX = 3
-_FISH_PER_POOL_MIN = 5
-_FISH_PER_POOL_MAX = 10
+_FISH_PER_POOL_MIN = 3
+_FISH_PER_POOL_MAX = 7
 
 # Initial XY pose around pool centre — kept inside the inner radius with margin.
 _RADIUS_MIN = 0.6
@@ -191,7 +191,7 @@ def _bind_random_palette_material(stage, prim, palette_paths: list[str], rng: ra
 
 
 def spawn_sturgeons(stage, target_length_m: float = TARGET_LENGTH_M) -> int:
-    """Place 5–10 sturgeons into a random subset of pools (1–3 left empty).
+    """Place 3–7 sturgeons into a random subset of pools (1–3 left empty).
 
     Returns the total number of sturgeons placed. Each sturgeon gets a unique
     name ``Sturgeon_<m>`` under its pool.

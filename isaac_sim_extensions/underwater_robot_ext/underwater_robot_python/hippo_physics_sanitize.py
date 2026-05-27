@@ -155,6 +155,7 @@ def tag_aquasweep_attrs(robot_prim_path: str) -> None:
         ROBOT_VOLUME_M3,
         DRAG_LINEAR_XY,
         DRAG_ANGULAR,
+        BUOYANCY_MULT_IDLE_FLOATING,
     )
 
     stage = get_current_stage()
@@ -180,10 +181,11 @@ def tag_aquasweep_attrs(robot_prim_path: str) -> None:
         return
 
     for attr_name, value in (
-        ("aquasweep:volume",      ROBOT_VOLUME_M3),
-        ("aquasweep:half_height", ROBOT_HALF_HEIGHT_M),
-        ("aquasweep:cd_linear",   DRAG_LINEAR_XY),
-        ("aquasweep:cd_angular",  DRAG_ANGULAR),
+        ("aquasweep:volume",         ROBOT_VOLUME_M3),
+        ("aquasweep:half_height",    ROBOT_HALF_HEIGHT_M),
+        ("aquasweep:cd_linear",      DRAG_LINEAR_XY),
+        ("aquasweep:cd_angular",     DRAG_ANGULAR),
+        ("aquasweep:buoyancy_mult",  BUOYANCY_MULT_IDLE_FLOATING),
     ):
         attr = target.GetAttribute(attr_name)
         if not (attr and attr.IsValid()):

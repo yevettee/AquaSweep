@@ -101,6 +101,9 @@ class UIBuilder:
         scene_builders.enable_gpu_dynamics(stage)
         scene_builders.add_lighting(stage)
         scene_builders.build_building(stage)
+        scene_builders.build_outdoor_ground(stage)
+        scene_builders.build_parking_lot(stage)
+        scene_builders.build_door(stage)
         scene_builders.build_pools(stage)
         scene_builders.build_top_cameras(stage)
         scene_builders.build_global_top_camera(stage)  # 전체 수조를 보는 단일 글로벌 카메라

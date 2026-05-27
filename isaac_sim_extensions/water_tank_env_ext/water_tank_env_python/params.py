@@ -8,6 +8,28 @@ BUILDING_X = 40.0   # long axis: 4 pools in a row
 BUILDING_Y = 30.0
 BUILDING_FLOOR_Z = 0.0
 
+# ── Outdoor ground (visual-only dry-earth plane around the building) ──────────
+# Mountain fish-farm setting: barren plain encircling the warehouse.
+# Z = -0.10 sits at the bottom of aquafarm Floor mesh (top=0, bottom=-0.10),
+# so the Floor occludes it indoors. Outside, the building reads as resting
+# on a 10 cm concrete plinth above the surrounding earth.
+GROUND_X = 200.0
+GROUND_Y = 160.0
+GROUND_Z = -0.10
+
+# ── Parking lot along the west short wall (x = -20) ──────────────────────────
+PARKING_STALL_COUNT = 8         # 8 × 3.5 = 28 m, leaves 1 m at each y-end
+PARKING_STALL_WIDTH = 3.5       # m (Y, along the wall, ×1.4 of the original 2.5)
+PARKING_STALL_DEPTH = 5.0       # m (X, away from the wall)
+PARKING_OFFSET_FROM_WALL = 2.0  # gap between wall and stall front
+PARKING_LINE_WIDTH = 0.12       # m (paint stripe thickness)
+PARKING_WALL_X = -20.0          # building west wall x-coordinate
+
+# ── Steel hangar door on east wall (visual-only placeholder) ─────────────────
+# Values match the user-tuned cube in the Isaac Sim viewport.
+DOOR_TRANSLATE = (19.98567, 3.46947, 2.85436)
+DOOR_SCALE = (0.60376, 2.44149, 5.12779)
+
 # ── Single pool dimensions ────────────────────────────────────────────────────
 TANK_RADIUS = 4.0           # diameter 8 m
 TANK_INNER_Z = 1.5
