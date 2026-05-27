@@ -21,9 +21,30 @@ from typing import Optional, Tuple
 import carb
 import numpy as np
 
-from .global_variables import ROBOT_PRIM_PATH, WATER_ROTATION_OMEGA, WATER_ROTATION_CENTER
+from .global_variables import (
+    ROBOT_PRIM_PATH,
+    WATER_ROTATION_OMEGA,
+    WATER_ROTATION_CENTER,
+    BUOYANCY_MULT_IDLE_FLOATING,
+    BUOYANCY_MULT_SINKING,
+    BUOYANCY_MULT_CLEANING,
+    BUOYANCY_MULT_ASCENDING,
+)
 
 LOG_TAG = "[underwater.robot]"
+
+# BCD 모션 상태 머신 (IDLE → SINKING → CLEANING → ASCENDING → IDLE)
+STATE_IDLE_FLOATING = "IDLE_FLOATING"  # 수면 부유, 청소 서비스 대기
+STATE_SINKING       = "SINKING"        # 부력 < 중력, 바닥까지 가라앉기
+STATE_CLEANING      = "CLEANING"       # 바닥 청소 (spiral planner)
+STATE_ASCENDING     = "ASCENDING"      # 부력 > 중력, 수면까지 떠오르기
+
+# z 임계값 — 풀 좌표계(world). water_tank_env.params.TANK_FLOOR_Z=0.25, WATER_LEVEL=1.10 → surface=1.35
+SINKING_FLOOR_REACH_Z      = 0.32   # 이 z 이하면 바닥 도달 (TANK_FLOOR_Z=0.25 + 마진)
+ASCENDING_SURFACE_REACH_Z  = 1.28   # 이 z 이상이면 수면 도달 (surface=1.35 - 마진)
+
+# USD attr (physics_applier 와 동일 키)
+_BUOYANCY_MULT_ATTR_NAME = "aquasweep:buoyancy_mult"
 
 
 def _quat_to_yaw(q) -> float:
@@ -52,8 +73,10 @@ class UnderwaterSpiralScenario:
         self._robot = None
         self._robot_name: str = "under_robot_1"
         self._pool_id: str = "pool_1"
+        self._robot_prim_path: str = ROBOT_PRIM_PATH  # initialize() 에서 갱신
         self._running: bool = False      # 물리 활성화 (RUN 버튼)
-        self._cleaning_active: bool = False  # 실제 청소 진행 중 (Action/Service 호출)
+        self._cleaning_active: bool = False  # 청소 시퀀스 활성 (SINKING/CLEANING/ASCENDING)
+        self._motion_state: str = STATE_IDLE_FLOATING  # BCD 상태 머신
         self._paused: bool = False
         self._debug_tick: int = 0
         self._physics_dt: float = 1.0 / 60.0
@@ -90,8 +113,9 @@ class UnderwaterSpiralScenario:
     ) -> None:
         self._robot = robot
         self._robot_name = robot_name
+        self._robot_prim_path = robot_prim_path
         self._physics_dt = physics_dt
-        
+
         if pool_id:
             self._pool_id = pool_id
         else:

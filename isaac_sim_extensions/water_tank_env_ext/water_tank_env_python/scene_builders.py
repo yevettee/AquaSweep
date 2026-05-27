@@ -29,6 +29,23 @@ WALL_SEGMENTS = 64
 POOLS_ROOT = "/World/Pools"
 EQUIPMENT_ROOT = "/World/Equipment"
 BUILDING_ROOT = "/World/Building"
+OUTDOOR_GROUND_ROOT = "/World/OutdoorGround"
+PARKING_ROOT = "/World/OutdoorGround/Parking"
+PARKED_CARS_ROOT = "/World/OutdoorGround/ParkedCars"
+DOOR_ROOT = "/World/Building/EastDoor"
+
+# Parking-paint diffuse — slightly off-white (avoids glare in RTX).
+_PARKING_PAINT_DIFFUSE = Gf.Vec3f(0.88, 0.88, 0.86)
+
+# Dark steel door — low albedo, metallic, slight roughness.
+_STEEL_DIFFUSE = Gf.Vec3f(0.18, 0.18, 0.20)
+
+# NVIDIA Base/Natural MDL material (S3-backed, no local Nucleus needed).
+_ASPHALT_MDL_URL = (
+    "http://omniverse-content-production.s3-us-west-2.amazonaws.com"
+    "/Materials/Base/Natural/Asphalt.mdl"
+)
+_ASPHALT_MDL_NAME = "Asphalt"
 
 # ── External USD assets (aquafarm slice) ──────────────────────────────────────
 # Resolved at runtime from __file__ — portable across team members regardless of
@@ -37,6 +54,7 @@ BUILDING_ROOT = "/World/Building"
 _SCENES_DIR = Path(__file__).resolve().parents[3] / "assets" / "scenes"
 _AQUAFARM_ENV_USD = str(_SCENES_DIR / "aquafarm_environment.usda")
 _POOL_SHELL_USD   = str(_SCENES_DIR / "pool_shell.usda")
+_CARS_DIR = _SCENES_DIR.parent / "car"   # /home/rokey/water_ws/src/assets/car
 
 
 
@@ -443,6 +461,312 @@ def build_building(stage, root: str = BUILDING_ROOT) -> None:
         building_prim = stage.DefinePrim(root, "Xform")
         building_prim.GetReferences().AddReference(_AQUAFARM_ENV_USD)
         carb.log_info(f"[scene_builders] Building reference added: {root} -> {_AQUAFARM_ENV_USD}")
+
+
+def _create_mdl_material(
+    stage,
+    prim_path: str,
+    mdl_url: str,
+    sub_identifier: str,
+    mdl_inputs: dict | None = None,
+):
+    """Build a UsdShade.Material backed by an MDL shader (S3 or Nucleus URL).
+
+    ``mdl_inputs`` lets callers override OmniPBR parameters such as
+    ``albedo_brightness`` or ``diffuse_tint`` — pass ``{name: (sdf_type, value)}``.
+    """
+    material = UsdShade.Material.Define(stage, prim_path)
+    shader = UsdShade.Shader.Define(stage, f"{prim_path}/Shader")
+    shader.CreateImplementationSourceAttr().Set(UsdShade.Tokens.sourceAsset)
+    shader.SetSourceAsset(mdl_url, "mdl")
+    shader.SetSourceAssetSubIdentifier(sub_identifier, "mdl")
+    if mdl_inputs:
+        for key, (sdf_type, value) in mdl_inputs.items():
+            shader.CreateInput(key, sdf_type).Set(value)
+    surface_output = material.CreateSurfaceOutput("mdl")
+    surface_output.ConnectToSource(shader.ConnectableAPI(), "out")
+    return material
+
+
+def build_outdoor_ground(stage, root: str = OUTDOOR_GROUND_ROOT) -> None:
+    """Visual-only dry-earth plane around the aquafarm building.
+
+    Single quad mesh at z = params.GROUND_Z (flush with the aquafarm Floor's
+    bottom face), so the building's own Floor mesh occludes it indoors.
+    No collider — purely cosmetic, no physics cost. Idempotent.
+    """
+    if stage.GetPrimAtPath(root).IsValid():
+        return
+
+    half_x = params.GROUND_X * 0.5
+    half_y = params.GROUND_Y * 0.5
+    z = params.GROUND_Z
+
+    mesh = UsdGeom.Mesh.Define(stage, root)
+    mesh.CreatePointsAttr([
+        Gf.Vec3f(-half_x, -half_y, z),
+        Gf.Vec3f( half_x, -half_y, z),
+        Gf.Vec3f( half_x,  half_y, z),
+        Gf.Vec3f(-half_x,  half_y, z),
+    ])
+    mesh.CreateFaceVertexCountsAttr([4])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+    mesh.CreateNormalsAttr([Gf.Vec3f(0, 0, 1)] * 4)
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+    mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    mesh.CreateExtentAttr([
+        Gf.Vec3f(-half_x, -half_y, z),
+        Gf.Vec3f( half_x,  half_y, z),
+    ])
+
+    # UV tiling — without primvars:st the MDL samples a single pixel (solid color).
+    # 1 repeat per ~8 m suits the asphalt texture's coarse aggregate pattern.
+    uv_tiles_x = params.GROUND_X / 8.0
+    uv_tiles_y = params.GROUND_Y / 8.0
+    st_primvar = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
+        "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex
+    )
+    st_primvar.Set([
+        Gf.Vec2f(0.0,        0.0),
+        Gf.Vec2f(uv_tiles_x, 0.0),
+        Gf.Vec2f(uv_tiles_x, uv_tiles_y),
+        Gf.Vec2f(0.0,        uv_tiles_y),
+    ])
+
+    mat_path = f"{root}/AsphaltMat"
+    material = _create_mdl_material(
+        stage, mat_path, _ASPHALT_MDL_URL, _ASPHALT_MDL_NAME,
+        mdl_inputs={"albedo_brightness": (Sdf.ValueTypeNames.Float, 0.5)},
+    )
+    UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+
+    carb.log_info(
+        f"[scene_builders] Outdoor ground built: {root} "
+        f"({params.GROUND_X}x{params.GROUND_Y}m at z={z})"
+    )
+
+
+def build_parking_lot(stage, root: str = PARKING_ROOT) -> None:
+    """Painted parking stalls along the west wall (x = PARKING_WALL_X).
+
+    Closed-rectangle pattern: each stall is fully outlined. Implemented as
+    (n+1) cross-wall division stripes (sharing edges between neighbours) plus
+    two wall-aligned stripes at the front and back, so 8 stalls render as
+    8 closed rectangles with only n+3 strips total. Single mesh, one shared
+    off-white material. Sits 5 mm above asphalt. Idempotent.
+    """
+    if stage.GetPrimAtPath(root).IsValid():
+        return
+
+    n = params.PARKING_STALL_COUNT
+    w = params.PARKING_STALL_WIDTH
+    d = params.PARKING_STALL_DEPTH
+    line = params.PARKING_LINE_WIDTH
+    half_line = line * 0.5
+    wall_x = params.PARKING_WALL_X                          # building wall (x=-20)
+    front_x = wall_x - params.PARKING_OFFSET_FROM_WALL      # stall entry (x=-22)
+    back_x = front_x - d                                     # stall back (x=-27)
+    array_half_y = (n * w) * 0.5                             # 14.0
+    z = params.GROUND_Z + 0.005                              # 5 mm above asphalt
+
+    points: list[Gf.Vec3f] = []
+    face_indices: list[int] = []
+
+    # n+1 cross-wall division stripes (along X, one between each pair + ends)
+    for i in range(n + 1):
+        cy = -array_half_y + i * w
+        base = len(points)
+        points.extend([
+            Gf.Vec3f(back_x,  cy - half_line, z),
+            Gf.Vec3f(front_x, cy - half_line, z),
+            Gf.Vec3f(front_x, cy + half_line, z),
+            Gf.Vec3f(back_x,  cy + half_line, z),
+        ])
+        face_indices.extend([base, base + 1, base + 2, base + 3])
+
+    # 2 wall-aligned stripes (front and back edges, along Y)
+    for edge_x in (front_x, back_x):
+        base = len(points)
+        points.extend([
+            Gf.Vec3f(edge_x - half_line, -array_half_y, z),
+            Gf.Vec3f(edge_x + half_line, -array_half_y, z),
+            Gf.Vec3f(edge_x + half_line,  array_half_y, z),
+            Gf.Vec3f(edge_x - half_line,  array_half_y, z),
+        ])
+        face_indices.extend([base, base + 1, base + 2, base + 3])
+
+    face_count = n + 3  # (n+1) dividers + 2 wall-aligned edges
+
+    mesh = UsdGeom.Mesh.Define(stage, root)
+    mesh.CreatePointsAttr(points)
+    mesh.CreateFaceVertexCountsAttr([4] * face_count)
+    mesh.CreateFaceVertexIndicesAttr(face_indices)
+    mesh.CreateNormalsAttr([Gf.Vec3f(0, 0, 1)] * len(points))
+    mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+    mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    mesh.CreateExtentAttr([
+        Gf.Vec3f(back_x,  -array_half_y, z),
+        Gf.Vec3f(front_x,  array_half_y, z),
+    ])
+
+    mat_path = f"{root}/PaintMat"
+    material = UsdShade.Material.Define(stage, mat_path)
+    shader = UsdShade.Shader.Define(stage, f"{mat_path}/Surface")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(_PARKING_PAINT_DIFFUSE)
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.7)
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    UsdShade.MaterialBindingAPI(mesh.GetPrim()).Bind(material)
+
+    carb.log_info(
+        f"[scene_builders] Parking lot: {n} stalls along x={wall_x:+.1f}, "
+        f"{face_count} paint stripes"
+    )
+
+
+def set_default_view(stage, camera_path: str = "/World/AquaSweep_DefaultView") -> None:
+    """Snap the viewport to a dedicated camera prim under /World.
+
+    /OmniverseKit_Persp lives on the session layer and ignores edits made on
+    the root layer (only its rotation slipped through previously, translate
+    did not). A camera we own on the root layer is fully editable, and we
+    activate it via the Viewport API so Kit reads our transform directly.
+    """
+    cam_prim = stage.GetPrimAtPath(camera_path)
+    if not cam_prim.IsValid():
+        cam = UsdGeom.Camera.Define(stage, camera_path)
+    else:
+        cam = UsdGeom.Camera(cam_prim)
+
+    xf = UsdGeom.Xformable(cam)
+    xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(*params.DEFAULT_VIEW_TRANSLATE))
+    xf.AddRotateXYZOp().Set(Gf.Vec3f(*params.DEFAULT_VIEW_ROTATE_XYZ))
+
+    try:
+        from omni.kit.viewport.utility import get_active_viewport
+        viewport = get_active_viewport()
+        if viewport is not None:
+            viewport.set_active_camera(camera_path)
+    except Exception as exc:
+        carb.log_warn(f"[scene_builders] viewport switch skipped: {exc}")
+
+    carb.log_info(
+        f"[scene_builders] Default view set on {camera_path}: "
+        f"translate={params.DEFAULT_VIEW_TRANSLATE} rotateXYZ={params.DEFAULT_VIEW_ROTATE_XYZ}"
+    )
+
+
+def build_parked_cars(stage, root: str = PARKED_CARS_ROOT) -> None:
+    """Reference real car USDZ assets into selected parking stalls.
+
+    Each car is placed at the stall's centre with a uniform Y-up→Z-up rotation
+    and cm→m scale, then optionally fine-tuned via params.CAR_PER_INDEX_TUNING
+    (z-offset, yaw, scale multiplier). Wrapper Xform pattern: our transforms
+    sit on the wrapper, the inner prim holds the USDZ reference so its own
+    xformOps remain intact. Visual-only, no collider. Idempotent.
+    """
+    if stage.GetPrimAtPath(root).IsValid():
+        return
+
+    UsdGeom.Xform.Define(stage, root)
+
+    w = params.PARKING_STALL_WIDTH
+    d = params.PARKING_STALL_DEPTH
+    wall_x = params.PARKING_WALL_X
+    front_x = wall_x - params.PARKING_OFFSET_FROM_WALL
+    array_half_y = (params.PARKING_STALL_COUNT * w) * 0.5
+    stall_center_x = front_x - d * 0.5
+
+    rx, ry, rz_base = params.CAR_BASE_ROTATE_XYZ
+
+    for slot_n, (stall_idx, usd_filename, tuning) in enumerate(zip(
+        params.CAR_STALL_INDICES, params.CAR_USD_FILES, params.CAR_PER_INDEX_TUNING
+    )):
+        dx, dy, dz, yaw_extra, scale_mul, color_override = tuning
+        cx = stall_center_x + dx
+        cy = -array_half_y + stall_idx * w + w * 0.5 + dy
+        cz = dz
+        scale = params.CAR_BASE_SCALE * scale_mul
+
+        car_path = f"{root}/Car_{slot_n}"
+        wrapper = UsdGeom.Xform.Define(stage, car_path)
+        xf = UsdGeom.Xformable(wrapper)
+        xf.AddTranslateOp().Set(Gf.Vec3d(cx, cy, cz))
+        # Rotation order: Z first (yaw in our world), then X (Y-up→Z-up).
+        # RotateXYZ applies X→Y→Z, so we encode the yaw in the Z slot.
+        xf.AddRotateXYZOp().Set(Gf.Vec3f(rx, ry, rz_base + yaw_extra))
+        xf.AddScaleOp().Set(Gf.Vec3f(scale, scale, scale))
+
+        # Inner Xform holds the reference so the USDZ's own xformOps stay intact
+        inner_path = f"{car_path}/Model"
+        inner = stage.DefinePrim(inner_path, "Xform")
+        usdz_path = _CARS_DIR / usd_filename
+        if not usdz_path.is_file():
+            carb.log_error(f"[scene_builders] Car USDZ not found: {usdz_path}")
+            continue
+        inner.GetReferences().AddReference(str(usdz_path))
+
+        # Optional colour override — strongerThanDescendants forces the USDZ's
+        # nested mesh materials to inherit this paint instead of their bundled
+        # one. Works because the referenced bindings carry the default
+        # (weakerThanDescendants) strength.
+        if color_override is not None:
+            mat_path = f"{car_path}/PaintOverride"
+            paint = UsdShade.Material.Define(stage, mat_path)
+            shader = UsdShade.Shader.Define(stage, f"{mat_path}/Surface")
+            shader.CreateIdAttr("UsdPreviewSurface")
+            shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(
+                Gf.Vec3f(*color_override)
+            )
+            shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.4)
+            shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.3)
+            paint.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+            UsdShade.MaterialBindingAPI(wrapper.GetPrim()).Bind(
+                paint, UsdShade.Tokens.strongerThanDescendants
+            )
+
+    carb.log_info(
+        f"[scene_builders] Parked {len(params.CAR_USD_FILES)} cars at stalls "
+        f"{params.CAR_STALL_INDICES}"
+    )
+
+
+def build_door(stage, root: str = DOOR_ROOT) -> None:
+    """Visual-only steel hangar door on the east wall.
+
+    Placeholder UsdGeom.Cube sized/placed to match the user-tuned viewport
+    transform (``params.DOOR_TRANSLATE`` / ``params.DOOR_SCALE``). Embedded
+    in the wall is intentional — purely cosmetic, no collider. Idempotent.
+    """
+    if stage.GetPrimAtPath(root).IsValid():
+        return
+
+    cube = UsdGeom.Cube.Define(stage, root)
+    # Match Isaac Sim GUI's cube (size=1.0, extent ±0.5) rather than the USD
+    # default of 2.0 — otherwise the same scale values yield a 2× thicker box.
+    cube.CreateSizeAttr(1.0)
+    xf = UsdGeom.Xformable(cube)
+    xf.ClearXformOpOrder()
+    xf.AddTranslateOp().Set(Gf.Vec3d(*params.DOOR_TRANSLATE))
+    xf.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
+    xf.AddScaleOp().Set(Gf.Vec3f(*params.DOOR_SCALE))
+
+    mat_path = f"{root}/SteelMat"
+    material = UsdShade.Material.Define(stage, mat_path)
+    shader = UsdShade.Shader.Define(stage, f"{mat_path}/Surface")
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(_STEEL_DIFFUSE)
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.4)
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.85)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    UsdShade.MaterialBindingAPI(cube.GetPrim()).Bind(material)
+
+    carb.log_info(
+        f"[scene_builders] East steel door placed at {params.DOOR_TRANSLATE} "
+        f"scale={params.DOOR_SCALE}"
+    )
 
 
 def build_equipment(stage, root: str = EQUIPMENT_ROOT) -> None:
