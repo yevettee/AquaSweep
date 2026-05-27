@@ -29,6 +29,11 @@ def generate_launch_description():
             package='aqua_detection',
             executable='fish_detection_node',
             name='fish_detection_node',
+            parameters=[os.path.join(
+                get_package_share_directory('aqua_detection'),
+                'config',
+                'fish_detection_params.yaml'
+            )],
             output='screen',
         ),
         Node(

@@ -10,7 +10,7 @@
 
 fish_detection_node:
   ros__parameters:
-    use_global_camera: true      # /global/top_img_raw (true) or /pool_N/top_img_raw (false)
+    use_global_camera: false      # /global/top_img_raw (true) or /pool_N/top_img_raw (false)
     num_pools: 7
     debug_visualization: true    # /pool_N/top_img_det
 
@@ -27,6 +27,7 @@ fish_detection_node:
       debris_min_area: 3         # OpenCV blob detector (not a .pt model)
       debris_max_area: 8
 
-    # suspicious when debug overlay C (bg_contrast) >= this (per YOLO bbox)
+    # suspicious when activity index is <= this value
     classifier:
-      contrast_threshold: 8.0
+      activity_threshold: 20.0  # Act 20 미만은 죽은 물고기(노란색)로 판정
+      history_size: 24
