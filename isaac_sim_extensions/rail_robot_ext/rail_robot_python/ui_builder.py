@@ -58,8 +58,8 @@ class UIBuilder:
             self._scenario_state_btn.enabled = False
 
     def on_physics_step(self, step: float):
-        # 실제 처리는 StateButton physics_callback_fn(_update_scenario)에서 담당
-        pass
+        for scenario in self._scenarios:
+            scenario.on_physics_step(step)
 
     def on_stage_event(self, event):
         if event.type == int(StageEventType.OPENED):
@@ -229,9 +229,8 @@ class UIBuilder:
         self._scenario_state_btn.enabled = False
 
     def _update_scenario(self, step: float):
-        """RUN 상태일 때 매 physics step — 전 수조 시나리오 일괄 실행."""
-        for scenario in self._scenarios:
-            scenario.on_physics_step(step)
+        """StateButton RUN 중 호출 — rail은 on_physics_step()에서 처리."""
+        pass
 
     def _on_run_scenario_a_text(self):
         for s in self._scenarios:

@@ -236,6 +236,14 @@ def _build_bridge_class() -> bool:
                     self._state = self.STATE_PAUSED
                     self._paused_at_step = paused_step
                 
+                # Publish PAUSED status immediately
+                self.publish_status(
+                    self._current_step / max(self._total_steps, 1),
+                    self._current_step,
+                    self._total_steps,
+                    "paused"
+                )
+                
                 response.success = True
                 response.message = f"Paused at step {paused_step}"
                 response.paused_at_step = paused_step
@@ -268,6 +276,14 @@ def _build_bridge_class() -> bool:
                 
                 with self._lock:
                     self._state = self.STATE_RUNNING
+                
+                # Publish RUNNING status immediately
+                self.publish_status(
+                    self._current_step / max(self._total_steps, 1),
+                    self._current_step,
+                    self._total_steps,
+                    "resumed"
+                )
                 
                 response.success = True
                 response.message = f"Resumed from step {resumed_step}"
