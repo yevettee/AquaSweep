@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-DEFAULT_ROBOT_FOOTPRINT_M = 0.686
+DEFAULT_ROBOT_FOOTPRINT_M = 0.4
 DEFAULT_TANK_DIAMETER_M   = 8.0
 DEFAULT_TANK_MARGIN_M     = 0.6
 DEFAULT_LINEAR_SPEED_M_S  = 4.5
