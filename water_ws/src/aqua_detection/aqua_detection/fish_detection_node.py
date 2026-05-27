@@ -49,7 +49,6 @@ from aqua_detection.fish_detectors import (
 )
 from aqua_detection.fish_detectors.base import DetectionResult
 from aqua_detection.fish_analyzers import FishVelocityEstimator, SimpleFishStatusClassifier
-from aqua_detection.fish_utils.fish_visualization import draw_detection_result
 from aqua_detection.image_qos import image_subscription_qos
 
 

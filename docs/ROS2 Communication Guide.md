@@ -145,9 +145,10 @@ world/
 
 **Services:**
 
-- `/planner/start` - 대시보드 전체 시작
+- `/planner/start` - 전체 청소 시작 (fish_count == 0인 풀에 CleanWall → CleanFloor 순차 실행)
 - `/planner/pause` - 대시보드 전체 일시 정지
-- `/pool_1/start_clean_floor` - 대시보드 개별 under_robot 시작
+- `/{pool_id}/start_clean_floor` - 개별 풀 바닥 청소만 시작 (CleanFloor만)
+- `/{pool_id}/start_clean_wall` - 개별 풀 벽면+바닥 청소 시작 (CleanWall → CleanFloor 순차)
 - `/sturgeon/pause` - 철갑상어 애니메이션 일시 정지 (청소 시작 시 자동 호출)
 - `/sturgeon/resume` - 철갑상어 애니메이션 재개 (청소 완료 시 자동 호출)
 - `/{pool_id}/activate_robot` - 로봇 ActionGraph 생성 (청소 시작 시 자동 호출)
@@ -176,9 +177,9 @@ world/
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| state | string | `IDLE`, `RUNNING`, `PAUSED`, `DISCHARGED` 등 |
-| battery_level | float | 배터리 잔량 (0.0 ~ 1.0) |
-| collision_force | float | 충돌 힘 (N) |
+| state | uint8 | 상태 코드: `IDLE=0`, `RUNNING=1`, `PAUSED=2`, `DISCHARGED=3` |
+| battery_level | float32 | 배터리 잔량 (0.0 ~ 1.0) |
+| collision_force | float32 | 충돌 힘 (N) |
 
 ---
 
@@ -237,7 +238,7 @@ world/
 | `/pool_1/physical_variables`  | `water_tank_env/` or `underwater_robot/`  
 **** 확인 필요 **** | controller | **1차 필수** |
 | `/under_robot_1/status` | `underwater_robot_env/` | dashboard, planner | **1차 필수** |
-| `/under_robot_1/cmd_vel` | controller node | `underwater_robot_env/` | **1차 필수** |
+| `/under_robot_1/cmd_vel` | `underwater_robot_ext/` (내부 플래너) | `underwater_robot_ext/` | 내부 사용 |
 | `/under_robot_1/joint_state` | `underwater_robot_ext/` | controller node | 확장 |
 | `/under_robot_1/planned_path` | controller node | `underwater_robot_env/` | 확장 |
 | `/under_robot_1/imu` | `underwater_robot_env/` | controller | 확장 |
@@ -249,11 +250,17 @@ world/
 | --- | --- | --- | --- |
 | `/planner/start` | dashboard node | planner node | **1차 필수** |
 | `/planner/pause` | dashboard node | planner node | **1차 필수** |
-| `/pool_1/start_clean_floor` | dashboard node | planner node | **1차 필수** |
+| `/{pool_id}/start_clean_floor` | dashboard node | planner node | **1차 필수** |
+| `/{pool_id}/start_clean_wall` | dashboard node | planner node | **1차 필수** |
 | `/sturgeon/pause` | planner node | `aquasweep_ext` (Isaac Sim) | **1차 필수** |
 | `/sturgeon/resume` | planner node | `aquasweep_ext` (Isaac Sim) | **1차 필수** |
 | `/{pool_id}/activate_robot` | planner node | `aquasweep_ext` (Isaac Sim) | **1차 필수** |
 | `/{pool_id}/deactivate_robot` | planner node | `aquasweep_ext` (Isaac Sim) | 확장 |
+
+> **청소 시퀀스 흐름 (CleanWall → CleanFloor):**
+> - `/planner/start` 호출 시 fish_count == 0인 풀에 대해 CleanWall 먼저 시작
+> - CleanWall 완료 후 자동으로 CleanFloor 시작
+> - 모든 풀 청소 완료 시 global_task_active = False
 
 > **철갑상어 애니메이션 제어 흐름:**
 > - 청소 시작 시 (`/planner/start` 또는 `/{pool_id}/start_clean_floor`) → planner가 `/sturgeon/pause` 자동 호출
@@ -269,9 +276,36 @@ world/
 
 | Action | Client | Server | 구현 상태 |
 | --- | --- | --- | --- |
-| `/pool_1/clean_floor` | planner node | controller node | ✅ 실제 구현 (SpiralPlanner) |
-| `/pool_1/clean_wall` | planner node | controller node | stub |
-| `/pool_1/move_fish` | planner node | controller node | stub |
+| `/{pool_id}/clean_floor` | planner node | controller node | ✅ 실제 구현 |
+| `/{pool_id}/clean_wall` | planner node | controller node | ✅ 실제 구현 |
+| `/{pool_id}/move_fish` | planner node | controller node | stub |
+
+### 4.4 모션 제어 인터페이스
+
+> Isaac Sim 내부 플래너(SpiralPlanner)를 사용하는 서비스 기반 아키텍처입니다.
+> Controller는 Isaac Sim에 모션 시작/정지 서비스를 호출하고, motion_status 토픽으로 진행상황을 모니터링합니다.
+
+#### Services (Controller → Isaac Sim)
+
+> **중요**: Isaac Sim 서비스는 `/isaac/` prefix를 사용하여 Planner 서비스와 구분됩니다.
+
+| Service | 타입 | 설명 |
+| --- | --- | --- |
+| `/{pool_id}/isaac/start_clean_floor` | StartMotion | 바닥 청소 시작 (파라미터 포함) |
+| `/{pool_id}/isaac/stop_clean_floor` | StopMotion | 바닥 청소 정지 |
+| `/{pool_id}/isaac/pause_clean_floor` | PauseMotion | 바닥 청소 일시정지 |
+| `/{pool_id}/isaac/resume_clean_floor` | ResumeMotion | 바닥 청소 재개 |
+| `/{pool_id}/isaac/start_clean_wall` | StartMotion | 벽면 청소 시작 |
+| `/{pool_id}/isaac/stop_clean_wall` | StopMotion | 벽면 청소 정지 |
+| `/{pool_id}/isaac/pause_clean_wall` | PauseMotion | 벽면 청소 일시정지 |
+| `/{pool_id}/isaac/resume_clean_wall` | ResumeMotion | 벽면 청소 재개 |
+
+#### Topics (Isaac Sim → Controller)
+
+| Topic | 타입 | 설명 |
+| --- | --- | --- |
+| `/{pool_id}/clean_floor_status` | MotionStatus | 바닥 청소 진행상황 (state, progress, phase) |
+| `/{pool_id}/clean_wall_status` | MotionStatus | 벽면 청소 진행상황 |
 
 ---
 
@@ -285,37 +319,59 @@ aqua_interfaces/
 │   ├── CleanFloor.action
 │   ├── CleanWall.action
 │   └── MoveFish.action
-└── msg/
-    ├── RobotStatus.msg
-    ├── TankStatus.msg                # PoolStatus 로 변경 예정
-    └── TankPhysicalVariables.msg     # PoolPhysicalVariables 로 변경 예정
+├── msg/
+│   ├── RobotStatus.msg               # 로봇 상태 (state: uint8 상수)
+│   ├── PoolStatus.msg
+│   ├── PoolPhysicalVariables.msg
+│   ├── MotionParams.msg              # 모션 파라미터 (SpiralPlanner용)
+│   └── MotionStatus.msg              # 모션 상태 (state: uint8 상수)
+└── srv/
+    ├── StartMotion.srv               # 모션 시작 (MotionParams 포함)
+    ├── StopMotion.srv                # 모션 정지
+    ├── PauseMotion.srv               # 모션 일시정지
+    └── ResumeMotion.srv              # 모션 재개
 ```
+
+**MotionStatus 상태 코드:**
+| 상수 | 값 | 설명 |
+| --- | --- | --- |
+| IDLE | 0 | 대기 중 |
+| RUNNING | 1 | 모션 실행 중 |
+| PAUSED | 2 | 일시정지 |
+| DONE | 3 | 완료 |
 
 ### 5.2 aqua_planner
 
 ```
 aqua_planner/aqua_planner/
+├── __init__.py                  # 패키지 초기화
 ├── planner_node.py              # 메인 노드 + 서비스
+├── pool_state.py                # 풀 상태 관리 (CleaningPhase enum)
+├── cleaning_orchestrator.py     # CleanWall → CleanFloor 시퀀스 오케스트레이션
 ├── task_executor.py             # Action Client 관리
 └── mockup_vision_publisher.py   # 테스트용 풀 상태 발행
 ```
 
 **Services:**
 
-- `/planner/start` - CleanFloor Action Goal 전송
+- `/planner/start` - CleanWall → CleanFloor 순차 Action Goal 전송 (fish_count == 0인 풀)
 - `/planner/pause` - 현재 작업 취소
+- `/{pool_id}/start_clean_floor` - 개별 풀 CleanFloor만 시작
+- `/{pool_id}/start_clean_wall` - 개별 풀 CleanWall → CleanFloor 순차 시작
 
 ### 5.3 aqua_controller
+
+> Isaac Sim 내부 플래너와 연동하는 서비스 기반 아키텍처입니다.
+> Controller는 Action Server를 제공하며, Isaac Sim에 서비스 호출로 모션을 요청합니다.
 
 ```
 aqua_controller/aqua_controller/
 ├── controller_node.py           # 메인 노드 + Action Servers
-├── spiral_planner.py            # 나선형 경로 계획
 ├── action_handlers/
 │   ├── __init__.py
 │   ├── base_handler.py          # 추상 기본 클래스
-│   ├── clean_floor_handler.py   # ✅ 실제 구현
-│   ├── clean_wall_handler.py    # stub
+│   ├── clean_floor_handler.py   # ✅ 실제 구현 (Isaac Sim 서비스 연동)
+│   ├── clean_wall_handler.py    # ✅ 실제 구현 (Isaac Sim 서비스 연동)
 │   └── move_fish_handler.py     # stub
 ├── mockup_controller_server.py  # 테스트용 Action Server
 └── mockup_robot_status.py       # 테스트용 로봇 상태 발행
@@ -325,8 +381,8 @@ aqua_controller/aqua_controller/
 
 | Handler | 상태 | 설명 |
 | --- | --- | --- |
-| CleanFloorHandler | ✅ 실제 구현 | SpiralPlanner + cmd_vel 발행 |
-| CleanWallHandler | stub | 요청 수락 → 바로 성공 반환 |
+| CleanFloorHandler | ✅ 실제 구현 | Isaac Sim start_clean_floor 서비스 호출 + motion_status 모니터링 |
+| CleanWallHandler | ✅ 실제 구현 | Isaac Sim start_clean_wall 서비스 호출 + motion_status 모니터링 |
 | MoveFishHandler | stub | 요청 수락 → 바로 성공 반환 |
 
 ---

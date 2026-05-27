@@ -1,14 +1,15 @@
 """Planner node for AquaSweep - orchestrates cleaning tasks.
 
 Services:
-    /planner/start               - Start cleaning for all eligible pools (fish_count == 0)
+    /planner/start               - Start cleaning sequence (CleanWall → CleanFloor) 
+                                   for all eligible pools (fish_count == 0)
     /planner/pause               - Cancel all current tasks
     /planner/status              - Get current status summary
-    /{pool_id}/start_clean_floor - Start cleaning for a specific pool
+    /{pool_id}/start_clean_floor - Start CleanFloor only for a specific pool
+    /{pool_id}/start_clean_wall  - Start CleanWall → CleanFloor for a specific pool
 """
 
 from functools import partial
-from typing import Dict, Optional
 
 import rclpy
 from rclpy.node import Node
@@ -18,211 +19,164 @@ from std_srvs.srv import Trigger
 
 from aqua_interfaces.msg import PoolStatus
 
+from .pool_state import PoolStateManager
 from .task_executor import TaskExecutor
+from .cleaning_orchestrator import CleaningOrchestrator
 
 
 class PlannerNode(Node):
-    """Main planner node with global and per-pool start services."""
+    """Main planner node with global and per-pool cleaning services."""
 
     def __init__(self) -> None:
         super().__init__('aqua_planner')
 
-        self.declare_parameter('pool_ids', ['pool_1', 'pool_2', 'pool_3', 'pool_4', 'pool_5', 'pool_6', 'pool_7'])
-        pool_ids = self.get_parameter('pool_ids').get_parameter_value().string_array_value
-
-        self._pool_ids = list(pool_ids)
-        self._executors: Dict[str, TaskExecutor] = {}
-        self._pool_status: Dict[str, Optional[PoolStatus]] = {}
-        self._is_running: Dict[str, bool] = {}
-        self._global_task_active = False
-
-        cb = ReentrantCallbackGroup()
-
-        cb = ReentrantCallbackGroup()
-
-        for pool_id in self._pool_ids:
-            self._executors[pool_id] = TaskExecutor(self, pool_id=pool_id)
-            self._pool_status[pool_id] = None
-            self._is_running[pool_id] = False
-
-            self.create_subscription(
-                PoolStatus,
-                f'/{pool_id}/status',
-                partial(self._on_pool_status, pool_id),
-                10,
-                callback_group=cb,
-            )
-
-            self.create_service(
-                Trigger,
-                f'/{pool_id}/start_clean_floor',
-                partial(self._handle_pool_start, pool_id),
-                callback_group=cb,
-            )
-
-        self.create_service(Trigger, '/planner/start',  self._handle_global_start, callback_group=cb)
-        self.create_service(Trigger, '/planner/pause',  self._handle_pause,        callback_group=cb)
-        self.create_service(Trigger, '/planner/status', self._handle_status,       callback_group=cb)
-
-        pool_services = ', '.join(f'/{pid}/start_clean_floor' for pid in self._pool_ids)
-        self.get_logger().info(
-            f'PlannerNode ready | pools={self._pool_ids}\n'
-            f'  global services: /planner/start, /planner/pause, /planner/status\n'
-            f'  pool services: {pool_services}'
+        self.declare_parameter(
+            'pool_ids',
+            ['pool_1', 'pool_2', 'pool_3', 'pool_4', 'pool_5', 'pool_6', 'pool_7']
         )
+        pool_ids = list(
+            self.get_parameter('pool_ids').get_parameter_value().string_array_value
+        )
+
+        self._state = PoolStateManager(pool_ids)
+        self._executors: dict[str, TaskExecutor] = {}
+        self._cb = ReentrantCallbackGroup()
+
+        for pool_id in pool_ids:
+            self._executors[pool_id] = TaskExecutor(self, pool_id=pool_id)
+            self._setup_pool_subscriptions(pool_id)
+            self._setup_pool_services(pool_id)
+
+        self._orchestrator = CleaningOrchestrator(
+            node=self,
+            state_manager=self._state,
+            executors=self._executors,
+        )
+
+        self._setup_global_services()
+        self._log_startup_info(pool_ids)
+
+    def _setup_pool_subscriptions(self, pool_id: str) -> None:
+        """Setup ROS subscriptions for a pool."""
+        self.create_subscription(
+            PoolStatus,
+            f'/{pool_id}/status',
+            partial(self._on_pool_status, pool_id),
+            10,
+            callback_group=self._cb,
+        )
+
+    def _setup_pool_services(self, pool_id: str) -> None:
+        """Setup per-pool ROS services."""
+        self.create_service(
+            Trigger,
+            f'/{pool_id}/start_clean_floor',
+            partial(self._handle_pool_floor_start, pool_id),
+            callback_group=self._cb,
+        )
+        self.create_service(
+            Trigger,
+            f'/{pool_id}/start_clean_wall',
+            partial(self._handle_pool_wall_start, pool_id),
+            callback_group=self._cb,
+        )
+
+    def _setup_global_services(self) -> None:
+        """Setup global ROS services."""
+        self.create_service(
+            Trigger, '/planner/start',
+            self._handle_global_start,
+            callback_group=self._cb
+        )
+        self.create_service(
+            Trigger, '/planner/pause',
+            self._handle_pause,
+            callback_group=self._cb
+        )
+        self.create_service(
+            Trigger, '/planner/status',
+            self._handle_status,
+            callback_group=self._cb
+        )
+
+    def _log_startup_info(self, pool_ids: list[str]) -> None:
+        """Log startup information."""
+        floor_services = ', '.join(f'/{pid}/start_clean_floor' for pid in pool_ids)
+        wall_services = ', '.join(f'/{pid}/start_clean_wall' for pid in pool_ids)
+        self.get_logger().info(
+            f'PlannerNode ready | pools={pool_ids}\n'
+            f'  global services: /planner/start, /planner/pause, /planner/status\n'
+            f'  floor services: {floor_services}\n'
+            f'  wall services: {wall_services}'
+        )
+
+    # ── Subscription Callbacks ─────────────────────────────────────────────
 
     def _on_pool_status(self, pool_id: str, msg: PoolStatus) -> None:
         """Cache the latest status for each pool."""
-        self._pool_status[pool_id] = msg
+        self._state.update_status(pool_id, msg)
+
+    # ── Service Handlers ───────────────────────────────────────────────────
 
     def _handle_global_start(
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        """Handle /planner/start - start cleaning for pools with fish_count == 0."""
-        if self._global_task_active or any(self._is_running.values()):
-            response.success = False
-            response.message = 'Task already running'
-            return response
-
-        eligible_pools = []
-        skipped_pools = []
-
-        for pool_id in self._pool_ids:
-            status = self._pool_status.get(pool_id)
-            if status is None:
-                skipped_pools.append(f'{pool_id}(no status)')
-                continue
-            if status.fish_count != 0:
-                skipped_pools.append(f'{pool_id}(fish_count={status.fish_count})')
-                continue
-            eligible_pools.append(pool_id)
-
-        if not eligible_pools:
-            response.success = False
-            response.message = f'No eligible pools (fish_count != 0 or no status). Skipped: {skipped_pools}'
-            self.get_logger().warn(response.message)
-            return response
-
-        self._global_task_active = True
-        started = []
-
-        for pool_id in eligible_pools:
-            success = self._start_pool_cleaning(pool_id)
-            if success:
-                started.append(pool_id)
-
-        if started:
-            response.success = True
-            response.message = f'CleanFloor started for: {started}'
-            if skipped_pools:
-                response.message += f' | Skipped: {skipped_pools}'
-            self.get_logger().info(response.message)
-        else:
-            self._global_task_active = False
-            response.success = False
-            response.message = 'Failed to start any pool (action servers not available)'
-            self.get_logger().warn(response.message)
-
+        """Handle /planner/start - start CleanWall → CleanFloor for eligible pools."""
+        success, message = self._orchestrator.start_global_cleaning()
+        response.success = success
+        response.message = message
+        if not success:
+            self.get_logger().warn(message)
         return response
 
-    def _handle_pool_start(
+    def _handle_pool_floor_start(
         self, pool_id: str, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        """Handle /{pool_id}/start_clean_floor service call."""
-        if self._is_running.get(pool_id, False):
-            response.success = False
-            response.message = f'{pool_id}: Task already running'
-            return response
-
-        if self._global_task_active:
-            response.success = False
-            response.message = f'{pool_id}: Global task in progress'
-            return response
-
-        success = self._start_pool_cleaning(pool_id)
-
+        """Handle /{pool_id}/start_clean_floor - CleanFloor only (legacy)."""
+        success, message = self._orchestrator.start_pool_cleaning(
+            pool_id, wall_first=False
+        )
+        response.success = success
+        response.message = message
         if success:
-            response.success = True
-            response.message = f'CleanFloor started for {pool_id}'
-            self.get_logger().info(response.message)
+            self.get_logger().info(message)
         else:
-            response.success = False
-            response.message = f'{pool_id}: Failed to send goal (server not available)'
-            self.get_logger().warn(response.message)
-
+            self.get_logger().warn(message)
         return response
 
-    def _start_pool_cleaning(self, pool_id: str) -> bool:
-        """Start CleanFloor action for a specific pool."""
-        executor = self._executors.get(pool_id)
-        if executor is None:
-            return False
-
-        success = executor.send_clean_floor_goal(
-            feedback_callback=partial(self._on_feedback, pool_id),
-            done_callback=partial(self._on_done, pool_id)
+    def _handle_pool_wall_start(
+        self, pool_id: str, request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """Handle /{pool_id}/start_clean_wall - CleanWall → CleanFloor sequence."""
+        success, message = self._orchestrator.start_pool_cleaning(
+            pool_id, wall_first=True
         )
-
+        response.success = success
+        response.message = message
         if success:
-            self._is_running[pool_id] = True
-
-        return success
+            self.get_logger().info(message)
+        else:
+            self.get_logger().warn(message)
+        return response
 
     def _handle_pause(
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
         """Handle /planner/pause - cancel all running tasks."""
-        if not any(self._is_running.values()):
-            response.success = False
-            response.message = 'No tasks running'
-            return response
-
-        cancelled = []
-        for pool_id, running in self._is_running.items():
-            if running:
-                executor = self._executors.get(pool_id)
-                if executor and executor.cancel_current_goal():
-                    cancelled.append(pool_id)
-
-        if cancelled:
-            response.success = True
-            response.message = f'Cancellation requested for: {cancelled}'
-            self.get_logger().info(response.message)
-        else:
-            response.success = False
-            response.message = 'No active goals to cancel'
-
+        success, message = self._orchestrator.cancel_all()
+        response.success = success
+        response.message = message
+        if success:
+            self.get_logger().info(message)
         return response
 
     def _handle_status(
         self, request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        lines = []
-        for pool_id in self._pool_ids:
-            status = self._pool_status.get(pool_id)
-            running = self._is_running.get(pool_id, False)
-            fish = str(status.fish_count) if status is not None else 'N/A'
-            lines.append(f'{pool_id}: fish={fish} running={running}')
+        """Handle /planner/status - return status summary."""
         response.success = True
-        response.message = ' | '.join(lines)
+        response.message = self._state.get_status_summary()
         return response
-
-    def _on_feedback(self, pool_id: str, feedback) -> None:
-        """Handle feedback from action server."""
-        self.get_logger().info(f'{pool_id}: Progress {feedback.progress * 100:.1f}%')
-
-    def _on_done(self, pool_id: str, result) -> None:
-        """Handle action completion for a pool."""
-        self._is_running[pool_id] = False
-
-        if result.success:
-            self.get_logger().info(f'{pool_id}: Task completed successfully')
-        else:
-            self.get_logger().warn(f'{pool_id}: Task failed')
-
-        if not any(self._is_running.values()):
-            self._global_task_active = False
-            self.get_logger().info('All pool tasks completed')
 
 
 def main(args=None) -> None:

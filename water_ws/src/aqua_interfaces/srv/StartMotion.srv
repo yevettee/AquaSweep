@@ -1,0 +1,5 @@
+# 모션 시작 요청 (파라미터 포함)
+aqua_interfaces/MotionParams params
+---
+bool success
+string message

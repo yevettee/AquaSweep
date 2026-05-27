@@ -12,7 +12,7 @@ Subscriptions:
 Service Clients:
     /planner/start            - Start cleaning for all eligible pools
     /planner/pause            - Pause all cleaning operations
-    /pool_{id}/start_clean_floor - Start cleaning for a specific pool
+    /pool_{id}/start_clean_wall - Start cleaning sequence (CleanWall → CleanFloor) for a specific pool
 
 For the GUI version with PyQt5, use:
     ros2 run aqua_dashboard dashboard_gui
@@ -33,7 +33,7 @@ from .ros_topics import (
     planner_start_service,
     pool_ids,
     pool_robot_status_topic,
-    pool_start_clean_floor_service,
+    pool_start_clean_wall_service,
     pool_status_topic,
     pool_top_cam_det_topic,
     pool_under_cam_det_topic,
@@ -110,7 +110,7 @@ class DashboardNode(Node):
 
             self._pool_start_clients[pool_id] = self.create_client(
                 Trigger,
-                pool_start_clean_floor_service(pool_id)
+                pool_start_clean_wall_service(pool_id)
             )
 
         self._planner_start_client = self.create_client(
@@ -127,7 +127,7 @@ class DashboardNode(Node):
         self.get_logger().info(
             f'DashboardNode ready | pools={list(pool_ids())}\n'
             f'  Subscriptions: /pool_<id>/status, /under_robot_<id>/status\n'
-            f'  Clients: /planner/start, /planner/pause, /pool_<id>/start_clean_floor'
+            f'  Clients: /planner/start, /planner/pause, /pool_<id>/start_clean_wall'
         )
 
     def _on_pool_status(self, pool_id: int, msg: PoolStatus) -> None:
@@ -200,7 +200,7 @@ class DashboardNode(Node):
             self.get_logger().error(f'Global start error: {exc}')
 
     def call_pool_start(self, pool_id: int) -> None:
-        """Call /{pool_id}/start_clean_floor service asynchronously."""
+        """Call /{pool_id}/start_clean_wall service (CleanWall → CleanFloor sequence)."""
         client = self._pool_start_clients.get(pool_id)
         if client is None:
             self.get_logger().warn(f'No client for pool {pool_id}')
@@ -213,7 +213,7 @@ class DashboardNode(Node):
         request = Trigger.Request()
         future = client.call_async(request)
         future.add_done_callback(partial(self._on_pool_start_response, pool_id))
-        self.get_logger().info(f'Calling /pool_{pool_id}/start_clean_floor...')
+        self.get_logger().info(f'Calling /pool_{pool_id}/start_clean_wall (CleanWall → CleanFloor)...')
 
     def _on_pool_start_response(self, pool_id: int, future) -> None:
         """Handle response from pool start service."""

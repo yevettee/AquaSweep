@@ -8,6 +8,10 @@
   3. RAIL_MOVE  : 레일 캐리지 20° 스무스 회전 (코사인 이징)
   4. ARM_RESET  : 홈 자세 → 스윕 시작(하단) 자세로 복귀
   5. 18단계(360°) 완료 후 반복
+
+MotionCommandBridge 연동:
+  - start/stop/pause/resume 서비스 제공
+  - clean_wall_status 토픽으로 진행상황 발행
 """
 
 import math
@@ -60,7 +64,20 @@ class RailRobotScenario:
     첫 번째 RUN 시 약 20 physics 프레임 동안 자동 보정하여
     블레이드 팁이 수조 벽면을 따라 수직 직선 궤적을 그리도록 j3를 최적화.
     이후 실행에서는 캐싱된 테이블을 재사용 (추가 오버헤드 없음).
+    
+    Thread Safety:
+        ROS 콜백(서비스 핸들러)은 PhysX 스레드와 다른 스레드에서 실행됨.
+        USD/Physics 객체 접근은 on_physics_step()에서만 수행하고,
+        ROS 콜백에서는 플래그만 설정하여 race condition 방지.
     """
+
+    # Phase names for status reporting
+    PHASE_CALIBRATE = "calibrate"
+    PHASE_ARM_SWEEP = "arm_sweep"
+    PHASE_ARM_HOME = "arm_home"
+    PHASE_RAIL_MOVE = "rail_move"
+    PHASE_ARM_RESET = "arm_reset"
+    PHASE_DONE = "done"
 
     def __init__(self, pool_idx: int, pool_center: Tuple[float, float] = (0.0, 0.0)):
         self._pool_idx = pool_idx
@@ -70,16 +87,23 @@ class RailRobotScenario:
         self._carriage_prim_path = ""
         self._joint_drive = None
         self._bridge = None
+        self._motion_bridge = None  # MotionCommandBridge 인스턴스
         self._stage = None
         self._dof_index: dict = {}
 
         self._running = False
+        self._paused = False
         self._phase = _ARM_SWEEP
         self._rail_angle = 0.0
         self._rail_angle_start = 0.0   # 레일 이동 시작 각도
         self._rail_angle_target = 0.0  # 레일 이동 목표 각도
         self._phase_elapsed = 0.0
         self._rail_step_count = 0      # 완료된 레일 이동 횟수
+
+        # Thread-safe 요청 플래그 (ROS 콜백 → Physics 스레드)
+        self._start_requested = False
+        self._stop_requested = False
+        self._pause_requested = False
 
         # IK 테이블 (보정 완료 후 캐싱)
         self._sweep_table: Optional[list] = None
@@ -114,7 +138,55 @@ class RailRobotScenario:
         carb.log_warn(f"{LOG_TAG} pool_{self._pool_idx} initialized @ {carriage_prim_path}")
 
     def set_bridge(self, bridge) -> None:
+        """기존 joint_state_bridge 설정."""
         self._bridge = bridge
+
+    def set_motion_bridge(self, motion_bridge) -> None:
+        """MotionCommandBridge 인스턴스 설정 (ui_builder에서 호출)."""
+        self._motion_bridge = motion_bridge
+        if motion_bridge is not None:
+            motion_bridge.set_scenario_callbacks(
+                on_start=self._on_motion_start,
+                on_stop=self._on_motion_stop,
+                on_pause=self._on_motion_pause,
+                on_resume=self._on_motion_resume,
+            )
+            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} MotionCommandBridge 연결됨")
+
+    def _on_motion_start(self, params: dict) -> None:
+        """MotionCommandBridge에서 start 서비스 호출 시 — 시작 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. USD/Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 시작은 on_physics_step()에서 처리.
+        """
+        self._start_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} start requested")
+
+    def _on_motion_stop(self) -> None:
+        """MotionCommandBridge에서 stop 서비스 호출 시 — 정지 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. USD/Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 정지는 on_physics_step()에서 처리.
+        """
+        self._stop_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} stop requested")
+
+    def _on_motion_pause(self) -> int:
+        """MotionCommandBridge에서 pause 서비스 호출 시 — 일시정지 요청.
+        
+        NOTE: ROS 콜백 스레드에서 호출됨. USD/Physics 객체 직접 접근 금지!
+        플래그만 설정하고, 실제 정지는 on_physics_step()에서 처리.
+        """
+        self._pause_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} pause requested at step {self._rail_step_count}")
+        return self._rail_step_count
+
+    def _on_motion_resume(self) -> int:
+        """MotionCommandBridge에서 resume 서비스 호출 시."""
+        self._paused = False
+        self._pause_requested = False
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} resumed from step {self._rail_step_count}")
+        return self._rail_step_count
 
     def set_joint_drive(self, joint_prim_path: str) -> None:
         if not joint_prim_path or self._stage is None:
@@ -129,11 +201,24 @@ class RailRobotScenario:
     # ── 제어 진입점 ───────────────────────────────────────────────────────────
 
     def start(self) -> None:
+        """시작 요청 (외부에서 호출용 — 플래그만 설정).
+        
+        실제 시작 로직은 _do_start()에서 Physics 스레드 안에서 처리.
+        """
+        self._start_requested = True
+        carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} start requested (direct)")
+
+    def _do_start(self) -> None:
+        """실제 시작 로직 (Physics 스레드에서만 호출)."""
         self._running = True
         self._rail_angle = 0.0
         self._phase_elapsed = 0.0
         self._rail_step_count = 0
         self.set_rail_angle(self._rail_angle)
+
+        # Bridge 상태를 RUNNING으로 설정 (직접 시작 시에도 상태 동기화)
+        if self._motion_bridge is not None:
+            self._motion_bridge.set_state_running()
 
         if self._sweep_table is None:
             # 첫 실행: 보정 페이즈 진입
@@ -153,14 +238,19 @@ class RailRobotScenario:
 
     def stop(self) -> None:
         self._running = False
+        self._paused = False
+        # Bridge 상태도 리셋
+        if self._motion_bridge is not None:
+            self._motion_bridge.reset()
         carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} sweep stopped")
 
     # ── physics step 메인 루프 ────────────────────────────────────────────────
 
     def on_physics_step(self, step_size: float) -> None:
-        if not self._running:
-            return
-
+        # Thread-safe 요청 처리 (ROS 콜백에서 설정된 플래그)
+        self._process_pending_requests()
+        
+        # 외부 명령(override 모드)은 running 상태와 무관하게 처리
         if self._bridge is not None:
             cmd = self._bridge.get_command()
             if cmd is not None and cmd.get("override"):
@@ -169,6 +259,49 @@ class RailRobotScenario:
                 self._publish_state()
                 return
 
+        if not self._running:
+            # running 아니어도 step_sync는 발행 (aqua_controller 연동용)
+            if self._bridge is not None:
+                self._bridge.publish_step_sync()
+            self._publish_motion_status()
+            return
+
+        # 일시정지 상태 체크
+        if self._paused:
+            self._publish_motion_status()
+            return
+
+        # 메인 로직 실행
+        self._run_physics_logic(step_size)
+
+    def _process_pending_requests(self) -> None:
+        """ROS 콜백에서 요청된 start/stop/pause를 Physics 스레드에서 안전하게 처리."""
+        # Start 요청 처리 (가장 먼저 — stop/pause보다 우선순위 낮음)
+        if self._start_requested:
+            self._start_requested = False
+            self._do_start()
+            return
+        
+        # Stop 요청 처리
+        if self._stop_requested:
+            self._stop_requested = False
+            self._running = False
+            self._paused = False
+            if self._motion_bridge is not None:
+                self._motion_bridge.reset()
+            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} sweep stopped (deferred)")
+            return
+        
+        # Pause 요청 처리
+        if self._pause_requested:
+            self._pause_requested = False
+            self._paused = True
+            # 현재 위치를 타겟으로 설정하여 즉시 멈춤
+            self.set_rail_angle(self._rail_angle)
+            carb.log_info(f"{LOG_TAG} pool_{self._pool_idx} paused at step {self._rail_step_count} (deferred)")
+
+    def _run_physics_logic(self, step_size: float) -> None:
+        """Physics step 메인 로직 (on_physics_step에서 호출)."""
         if self._phase == _CALIBRATE:
             self._do_calibrate()
             return
@@ -206,6 +339,8 @@ class RailRobotScenario:
                 if self._rail_step_count >= RAIL_STEPS:
                     carb.log_warn(f"{LOG_TAG} pool_{self._pool_idx} 360° 청소 완료 — 정지")
                     self.stop()
+                    if self._motion_bridge is not None:
+                        self._motion_bridge.mark_done()
                     return
                 self._phase = _ARM_RESET
                 self._phase_elapsed = 0.0
@@ -437,7 +572,61 @@ class RailRobotScenario:
     def _publish_state(self) -> None:
         if self._bridge is None:
             return
-        self._bridge.publish_joint_states(self._safe_get_positions())
+        self._bridge.publish_joint_states(self._safe_get_positions(), self._rail_angle)
+        self._bridge.publish_step_sync()
+        self._publish_motion_status()
+
+    def _publish_motion_status(self) -> None:
+        """MotionCommandBridge로 진행상황 발행."""
+        if self._motion_bridge is None:
+            return
+        
+        progress = self._calculate_progress()
+        phase_name = self._get_phase_name()
+        
+        self._motion_bridge.publish_status(
+            progress=progress,
+            current_step=self._rail_step_count,
+            total_steps=RAIL_STEPS,
+            phase=phase_name,
+        )
+
+    def _calculate_progress(self) -> float:
+        """전체 진행률 계산 (0.0 ~ 1.0)."""
+        if RAIL_STEPS == 0:
+            return 1.0
+        
+        # 기본 진행률: 완료된 rail step 수 기준
+        base_progress = self._rail_step_count / RAIL_STEPS
+        
+        # 현재 phase 내 진행률 추가
+        phase_weight = 1.0 / RAIL_STEPS
+        if self._phase == _ARM_SWEEP:
+            phase_progress = min(1.0, self._phase_elapsed / ARM_SWEEP_DURATION)
+        elif self._phase == _ARM_HOME:
+            phase_progress = min(1.0, self._phase_elapsed / ARM_HOME_DURATION)
+        elif self._phase == _RAIL_MOVE:
+            phase_progress = min(1.0, self._phase_elapsed / RAIL_MOVE_DURATION)
+        elif self._phase == _ARM_RESET:
+            phase_progress = min(1.0, self._phase_elapsed / ARM_RESET_DURATION)
+        else:
+            phase_progress = 0.0
+        
+        return min(1.0, base_progress + phase_progress * phase_weight * 0.25)
+
+    def _get_phase_name(self) -> str:
+        """현재 phase 이름 반환."""
+        if self._phase == _CALIBRATE:
+            return self.PHASE_CALIBRATE
+        elif self._phase == _ARM_SWEEP:
+            return self.PHASE_ARM_SWEEP
+        elif self._phase == _ARM_HOME:
+            return self.PHASE_ARM_HOME
+        elif self._phase == _RAIL_MOVE:
+            return self.PHASE_RAIL_MOVE
+        elif self._phase == _ARM_RESET:
+            return self.PHASE_ARM_RESET
+        return self.PHASE_DONE
 
     def _safe_get_positions(self) -> list:
         if self._articulation is None:
@@ -456,3 +645,11 @@ class RailRobotScenario:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    @property
+    def progress(self) -> float:
+        return self._calculate_progress()

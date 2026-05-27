@@ -22,7 +22,8 @@ writeTarget.kit = true
 # (RUN time), but declaring them here guarantees load order anyway.
 "top_cam_ext" = {}
 "under_cam_ext" = {}
-"top_cam_ext" = {}
+# Rail robot for wall cleaning — RailRobotScenario imported in ui_builder.py
+"rail_robot_ext" = {}
 
 [[python.module]]
 name = "aquasweep_python"
