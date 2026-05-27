@@ -17,16 +17,17 @@ fish_detection_node:
     image_qos_reliability: "best_effort"
     image_qos_depth: 10
 
-    # YOLO OBB — models/yolo26n_fish_species_v1.pt (sturgeon only)
+    # YOLO OBB — models/yolo_obb_new.pt (sunga_6 retrained)
     yolo:
-      model_path: "models/yolo26n_fish_species_v1.pt"
-      confidence_threshold: 0.5
+      model_path: "models/yolo_obb_new.pt"
+      confidence_threshold: 0.6
       iou_threshold: 0.45
       imgsz: 640
       half: true
       debris_min_area: 3         # OpenCV blob detector (not a .pt model)
       debris_max_area: 8
 
-    # suspicious when debug overlay C (bg_contrast) >= this (per YOLO bbox)
+    # suspicious when activity index (Act) <= this value
     classifier:
-      contrast_threshold: 8.0
+      activity_threshold: 20.0
+      history_size: 24

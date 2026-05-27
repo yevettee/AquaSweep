@@ -3,7 +3,7 @@
 
 """ROS2 Fish Detection Node for AquaSweep.
 
-Pipeline: YOLO OBB (sturgeon) + OpenCV blob debris + contrast-based status.
+Pipeline: YOLO OBB (sturgeon) + OpenCV blob debris + activity-based status.
 
 Supports two camera modes:
 - Per-pool mode: 7 separate camera topics (/pool_N/top_img_raw)
@@ -37,7 +37,7 @@ except ImportError:
 
 from aqua_detection.fish_detectors import FishYOLODetector
 from aqua_detection.fish_detectors.base import DetectionResult
-from aqua_detection.fish_analyzers import SimpleFishStatusClassifier
+from aqua_detection.fish_analyzers import ActivityFishStatusClassifier
 from aqua_detection.image_qos import image_subscription_qos
 
 
@@ -81,8 +81,9 @@ class PoolState:
         self.fish_suspicious_history = deque(maxlen=7)
         
         cls_cfg = classifier_config or {}
-        self.status_classifier = SimpleFishStatusClassifier(
-            contrast_threshold=cls_cfg.get('contrast_threshold', 8.0),
+        self.status_classifier = ActivityFishStatusClassifier(
+            history_size=cls_cfg.get('history_size', 24),
+            activity_threshold=cls_cfg.get('activity_threshold', 20.0),
         )
 
 
@@ -94,8 +95,8 @@ class FishDetectionNode(Node):
         
         # Declare parameters
         self.declare_parameter('num_pools', NUM_POOLS)
-        self.declare_parameter('yolo.model_path', 'models/yolo26n_fish_species_v1.pt')
-        self.declare_parameter('yolo.confidence_threshold', 0.7)
+        self.declare_parameter('yolo.model_path', 'models/yolo_obb_new.pt')
+        self.declare_parameter('yolo.confidence_threshold', 0.6)
         self.declare_parameter('yolo.iou_threshold', 0.45)
         self.declare_parameter('yolo.imgsz', 640)
         self.declare_parameter('yolo.half', True)
@@ -106,15 +107,16 @@ class FishDetectionNode(Node):
         self.declare_parameter('image_qos_depth', 10)
         self.declare_parameter('use_global_camera', False)
         
-        # suspicious if bbox bg_contrast (C on debug image) >= this value
-        self.declare_parameter('classifier.contrast_threshold', 8.0)
+        self.declare_parameter('classifier.activity_threshold', 20.0)
+        self.declare_parameter('classifier.history_size', 24)
         
         self.num_pools = self.get_parameter('num_pools').value
         self.debug_viz = self.get_parameter('debug_visualization').value
         self.use_global_camera = self.get_parameter('use_global_camera').value
         
         self._classifier_config = {
-            'contrast_threshold': self.get_parameter('classifier.contrast_threshold').value,
+            'activity_threshold': self.get_parameter('classifier.activity_threshold').value,
+            'history_size': self.get_parameter('classifier.history_size').value,
         }
         image_qos = image_subscription_qos(
             self.get_parameter('image_qos_reliability').value,
@@ -128,9 +130,9 @@ class FishDetectionNode(Node):
             f"ROS env: ROS_DOMAIN_ID={self._ros_domain_id}, "
             f"RMW_IMPLEMENTATION={self._rmw}, ROS_DISTRO={self._ros_distro}"
         )
+        at = self._classifier_config['activity_threshold']
         self.get_logger().info(
-            f"Classifier: suspicious when bg_contrast (C) >= "
-            f"{self._classifier_config['contrast_threshold']}"
+            f"Classifier: suspicious when activity (Act) <= {at}"
         )
         
         self.detector = self._create_detector()
@@ -208,7 +210,7 @@ class FishDetectionNode(Node):
         )
     
     def _create_detector(self) -> FishYOLODetector:
-        """Load YOLO OBB fish detector (models/yolo26n_fish_species_v1.pt)."""
+        """Load YOLO OBB fish detector (models/yolo_obb_new.pt)."""
         detector = FishYOLODetector(
             model_path=self.get_parameter('yolo.model_path').value,
             confidence_threshold=self.get_parameter('yolo.confidence_threshold').value,
@@ -309,8 +311,8 @@ class FishDetectionNode(Node):
             cv2.rectangle(output, (x, y - label_h - 10), (x + label_w + 4, y), color, -1)
             cv2.putText(output, label, (x + 2, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
             
-            contrast = features.get('bg_contrast', 0) if features else 0
-            debug_text = f"C:{contrast:.0f}"
+            activity = features.get('activity', 0) if features else 0
+            debug_text = f"Act:{activity:.1f}"
             cv2.putText(output, debug_text, (x, y + h + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
         
         # Draw debris
@@ -422,6 +424,7 @@ class FishDetectionNode(Node):
         fish_count_suspicious = 0
         fish_statuses = []
         
+        state.status_classifier.update_frame_start()
         for i, det in enumerate(detection_result.fish_detections):
             fish_id = fish_ids[i]
             
@@ -430,11 +433,10 @@ class FishDetectionNode(Node):
             x2, y2 = min(cv_image.shape[1], x + w), min(cv_image.shape[0], y + h)
             
             if x2 > x1 and y2 > y1:
-                fish_crop = cv_image[y1:y2, x1:x2]
-                status, confidence = state.status_classifier.classify(
-                    fish_crop, full_image=cv_image, bbox=det.bbox
+                status, confidence, track_id = state.status_classifier.classify(
+                    bbox=det.bbox
                 )
-                features = state.status_classifier.get_features(fish_crop)
+                features = state.status_classifier.get_features(track_id)
                 
                 fish_statuses.append({
                     'fish_id': fish_id,
@@ -456,6 +458,8 @@ class FishDetectionNode(Node):
                     'confidence': 0.5,
                     'features': {},
                 })
+        
+        state.status_classifier.update_frame_end()
         
         # Update fish count history and compute smoothed values (median of last 7 frames)
         state.fish_count_history.append(detection_result.fish_count)
