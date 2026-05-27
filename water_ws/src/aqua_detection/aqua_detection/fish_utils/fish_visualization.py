@@ -68,8 +68,6 @@ def draw_fish_status(
         
         # Draw status text
         label = f"{status.fish_id}: {status.status}"
-        if status.velocity > 0:
-            label += f" v={status.velocity:.2f}"
         
         cv2.putText(
             result, label,

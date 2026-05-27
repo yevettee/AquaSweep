@@ -3,7 +3,7 @@
 <package format="3">
   <name>aqua_detection</name>
   <version>0.1.0</version>
-  <description>AquaSweep Fish Detection Package - SAM2/YOLO + DINOv2 Pipeline</description>
+  <description>AquaSweep Fish Detection Package - YOLO OBB + OpenCV status</description>
   <maintainer email="woody.myung@gmail.com">woody</maintainer>
   <license>Apache-2.0</license>
 

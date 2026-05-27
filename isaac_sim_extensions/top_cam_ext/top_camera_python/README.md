@@ -27,8 +27,17 @@ Isaac Sim 실행 시 다음 플래그 사용:
 
 | 파일 | 설명 |
 |------|------|
-| `collect_yolo_standalone.py` | YOLO 학습용 데이터셋 수집 스크립트. Replicator bbox annotator 사용. Script Editor에서 직접 실행 가능 |
-| `debug_bbox_annotator.py` | Replicator bbox annotator 디버그용. 여러 semantic labeling 방식 테스트 |
+| `collect_yolo_standalone.py` | YOLO 학습용 데이터셋 수집 (axis-aligned bbox). Replicator annotator 사용 |
+| `debug_bbox_annotator.py` | Replicator bbox annotator 디버그용 |
+
+### `local/` (git 미추적, 로컬 전용)
+
+OBB 학습·디버그 스크립트는 `local/` 아래에 두며 저장소에는 올리지 않습니다.
+
+| 파일 | 설명 |
+|------|------|
+| `local/collect_yolo_obb_standalone.py` | YOLO OBB 데이터셋 수집 (회전 bbox) |
+| `local/debug_obb_visualization.py` | OBB 투영 시각화 검증 → `aqua_detection/debug_obb_viz.png` |
 
 ## UI 기능
 
@@ -52,16 +61,59 @@ Isaac Sim 실행 시 다음 플래그 사용:
 
 ## YOLO 데이터셋 수집
 
+### 1. 일반 YOLO (Axis-Aligned BBox)
+
 Script Editor에서 `collect_yolo_standalone.py` 실행:
 
 ```python
 exec(open("/path/to/collect_yolo_standalone.py").read())
 ```
 
-설정값은 파일 상단의 `CONFIG` 섹션에서 수정:
+학습:
+```bash
+yolo train data=dataset.yaml model=yolov8n.pt epochs=50
+```
+
+### 2. YOLO OBB (Oriented BBox) - 권장
+
+회전된 bounding box로 물고기를 더 정확히 감지합니다.
+
+**사용법:**
+1. Isaac Sim에서 AquaSweep 환경 로드
+2. Play 버튼으로 시뮬레이션 시작
+3. **로봇 청소 시작** (로봇이 배경에 포함되어 robustness 향상)
+4. Script Editor에서 실행:
+
+```python
+exec(open("/path/to/top_camera_python/local/collect_yolo_obb_standalone.py").read())
+```
+
+**OBB 검증:**
+
+수집 전에 OBB 투영이 정확한지 확인:
+```python
+exec(open("/path/to/top_camera_python/local/debug_obb_visualization.py").read())
+```
+
+**학습 (YOLO26n OBB 권장 — v8n보다 가볍고 CPU에 유리):**
+```bash
+cd ~/AquaSweep/water_ws/src/aqua_detection
+yolo obb train data=dataset_obb/dataset.yaml model=yolo26n-obb.pt epochs=100 imgsz=640
+```
+
+대안: `model=yolov8n-obb.pt` (Ultralytics 구버전만 지원 시)
+
+**설정값** (파일 상단 CONFIG 섹션):
 - `OUTPUT_DIR`: 출력 디렉토리
 - `NUM_FRAMES`: 수집할 프레임 수
 - `POOLS_TO_COLLECT`: 수집할 풀 ID 목록
+- `MIN_OBB_AREA`: 최소 OBB 면적 (너무 작은 것 제외)
+
+**출력 형식 (YOLO OBB):**
+```
+# class_id x1 y1 x2 y2 x3 y3 x4 y4 (normalized 0-1)
+0 0.45 0.32 0.52 0.30 0.55 0.38 0.48 0.40
+```
 
 ## Fish Status Classification (Suspicious vs Alive)
 

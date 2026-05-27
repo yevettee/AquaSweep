@@ -54,13 +54,7 @@ class DetectionResult:
 
 
 class BaseDetector(ABC):
-    """Abstract base class for fish/debris detectors.
-    
-    Implementations:
-    - FishOpenCVDetector: Traditional CV with adaptive threshold
-    - FishSAM2Detector: Zero-shot segmentation (Track A)
-    - FishYOLODetector: Learned species classification (Track B)
-    """
+    """Abstract base class for fish/debris detectors (FishYOLODetector)."""
     
     @abstractmethod
     def detect(self, image: np.ndarray) -> DetectionResult:
@@ -80,64 +74,36 @@ class BaseDetector(ABC):
         pass
 
 
-class BaseTracker(ABC):
-    """Abstract base class for fish trackers.
-    
-    Assigns persistent IDs to detected fish across frames.
-    """
-    
-    @abstractmethod
-    def update(self, detections: List[FishDetection]) -> List[tuple]:
-        """Update tracker with new detections.
-        
-        Args:
-            detections: List of FishDetection from current frame
-            
-        Returns:
-            List of (fish_id, FishDetection) tuples with assigned IDs
-        """
-        pass
-    
-    @abstractmethod
-    def reset(self):
-        """Reset tracker state."""
-        pass
-
-
 @dataclass
 class FishStatus:
     """Status analysis result for a single fish."""
     
     fish_id: str
     species: str  # From detector (YOLO)
-    status: str  # "alive" or "suspicious" (from DINOv2)
-    velocity: float  # Relative velocity
+    status: str  # "alive" or "suspicious" (from CV classifier)
     position: tuple  # (x, y) in image
     status_confidence: float = 1.0
     
-    # DINOv2 features for debugging
     sharpness_variance: float = 0.0
     saturation_variance: float = 0.0
 
 
 class BaseStatusClassifier(ABC):
-    """Abstract base class for fish status classification.
-    
-    Determines if a fish is alive or suspicious (dead/sick)
-    using DINOv2 features + velocity.
-    """
+    """Abstract base class for fish status classification (CV features only)."""
     
     @abstractmethod
     def classify(
         self,
         fish_image: np.ndarray,
-        velocity: float
+        full_image: Optional[np.ndarray] = None,
+        bbox: Optional[tuple] = None,
     ) -> tuple:
         """Classify fish status.
         
         Args:
             fish_image: Cropped fish region
-            velocity: Computed velocity from optical flow/tracking
+            full_image: Full frame (optional, for background contrast)
+            bbox: Fish bbox in full image (optional)
             
         Returns:
             (status, confidence) where status is "alive" or "suspicious"
