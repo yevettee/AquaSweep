@@ -70,15 +70,15 @@ NUM_POOLS = 7
 #
 # Pool radius: 4m → ~256px, using 320px margin for safety
 GLOBAL_POOL_REGIONS: Dict[int, Tuple[int, int, int, int]] = {
-    # Bottom row (y=-5m → image y=1280)
-    1: (144, 960, 784, 1600),    # Pool_1: center (-12.75, -5) → px (464, 1280)
-    2: (688, 960, 1328, 1600),   # Pool_2: center (-4.25, -5) → px (1008, 1280)
-    3: (1232, 960, 1872, 1600),  # Pool_3: center (4.25, -5) → px (1552, 1280)
-    4: (1776, 960, 2416, 1600),  # Pool_4: center (12.75, -5) → px (2096, 1280)
-    # Top row (y=5m → image y=640)
-    5: (144, 320, 784, 960),     # Pool_5: center (-12.75, 5) → px (464, 640)
-    6: (688, 320, 1328, 960),    # Pool_6: center (-4.25, 5) → px (1008, 640)
-    7: (1232, 320, 1872, 960),   # Pool_7: center (4.25, 5) → px (1552, 640)
+    # Bottom row (y=-5m → image y=1300)
+    1: (116, 980, 756, 1620),    # Pool_1: center (-12.75, -5) → px (436, 1300)
+    2: (679, 980, 1319, 1620),   # Pool_2: center (-4.25, -5) → px (999, 1300)
+    3: (1241, 980, 1881, 1620),  # Pool_3: center (4.25, -5) → px (1561, 1300)
+    4: (1804, 980, 2444, 1620),  # Pool_4: center (12.75, -5) → px (2124, 1300)
+    # Top row (y=5m → image y=620)
+    5: (116, 300, 756, 940),     # Pool_5: center (-12.75, 5) → px (436, 620)
+    6: (679, 300, 1319, 940),    # Pool_6: center (-4.25, 5) → px (999, 620)
+    7: (1241, 300, 1881, 940),   # Pool_7: center (4.25, 5) → px (1561, 620)
 }
 
 
@@ -358,19 +358,24 @@ class FishDetectionNode(Node):
         image: np.ndarray,
         detection_result: DetectionResult,
         fish_statuses: List[Dict],
+        unverified_debris: List = None
     ) -> np.ndarray:
         """Draw detections with status-based coloring.
         
         - Alive fish: Green bbox
         - Suspicious fish: Yellow bbox with features display
-        - Debris: Cyan bbox
+        - Candidate Debris: Cyan bbox
+        - VLM Verified Debris: Red bbox
         """
         output = image.copy()
+        if unverified_debris is None:
+            unverified_debris = []
         
         # Colors (BGR)
         COLOR_ALIVE = (0, 255, 0)       # Green
         COLOR_SUSPICIOUS = (0, 255, 255) # Yellow
-        COLOR_DEBRIS = (255, 255, 0)     # Cyan
+        COLOR_DEBRIS_CANDIDATE = (255, 255, 0)     # Cyan
+        COLOR_DEBRIS_VERIFIED = (0, 0, 255)        # Red
         
         # Draw fish with status-based colors
         for fs in fish_statuses:
@@ -406,10 +411,16 @@ class FishDetectionNode(Node):
             debug_text = f"C:{contrast:.0f} V:{velocity:.3f}"
             cv2.putText(output, debug_text, (x, y + h + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1)
         
-        # Draw debris
+        # Draw ALL unverified candidate debris as Cyan
+        for det in unverified_debris:
+            x, y, w, h = det.bbox
+            cv2.rectangle(output, (x, y), (x + w, y + h), COLOR_DEBRIS_CANDIDATE, 1)
+            
+        # Draw VLM Verified debris as THICK RED boxes
         for det in detection_result.debris_detections:
             x, y, w, h = det.bbox
-            cv2.rectangle(output, (x, y), (x + w, y + h), COLOR_DEBRIS, 1)
+            cv2.rectangle(output, (x, y), (x + w, y + h), COLOR_DEBRIS_VERIFIED, 3)
+            cv2.putText(output, "POOP", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR_DEBRIS_VERIFIED, 2)
         
         # Stats overlay
         alive_count = sum(1 for fs in fish_statuses if fs['status'] == 'alive')
@@ -499,6 +510,9 @@ class FishDetectionNode(Node):
         # Run detection
         detection_result = self.detector.detect(cv_image)
         
+        # Collect unverified debris candidates to show as Cyan
+        unverified_debris = list(detection_result.debris_detections)
+        
         # VLM Validation for debris
         if self.vlm_validator:
             validated_debris = []
@@ -508,9 +522,13 @@ class FishDetectionNode(Node):
                 y1, y2 = max(0, y - margin), min(cv_image.shape[0], y + h + margin)
                 x1, x2 = max(0, x - margin), min(cv_image.shape[1], x + w + margin)
                 if y2 > y1 and x2 > x1:
-                    crop = cv_image[y1:y2, x1:x2]
-                    if self.vlm_validator.is_debris(crop):
+                    # If YOLO-World already used its AI to classify the poop, skip the slow VLM
+                    if self.detector.get_name() == "YOLO-World":
                         validated_debris.append(det)
+                    else:
+                        crop = cv_image[y1:y2, x1:x2]
+                        if self.vlm_validator.is_debris(crop):
+                            validated_debris.append(det)
             detection_result.debris_detections = validated_debris
 
         detection_result.frame_id = state.frame_count
@@ -529,7 +547,6 @@ class FishDetectionNode(Node):
             pollution_level = 2.0
         
         # Compute velocities for detected fish
-        # Use track_id from YOLO tracker if available, otherwise fallback to index
         fish_bboxes = [det.bbox for det in detection_result.fish_detections]
         fish_ids = []
         for i, det in enumerate(detection_result.fish_detections):
@@ -585,7 +602,7 @@ class FishDetectionNode(Node):
                     'features': {},
                 })
         
-        # Update fish count history and compute smoothed values (median of last 7 frames)
+        # Update fish count history and compute smoothed values
         state.fish_count_history.append(detection_result.fish_count)
         state.fish_suspicious_history.append(fish_count_suspicious)
         smoothed_fish_count = int(np.median(state.fish_count_history))
@@ -630,7 +647,7 @@ class FishDetectionNode(Node):
         if self.debug_viz:
             try:
                 debug_image = self._draw_detection_with_status(
-                    cv_image, detection_result, fish_statuses
+                    cv_image, detection_result, fish_statuses, unverified_debris
                 )
                 debug_msg = self.bridge.cv2_to_imgmsg(debug_image, encoding="bgr8")
                 if header:

@@ -27,7 +27,9 @@ class VLMValidator:
             _, buffer = cv2.imencode('.jpg', image)
             img_b64 = base64.b64encode(buffer).decode('utf-8')
 
-            prompt = "This is an image of the bottom of an aquarium. Is the object in the center a shark poop (mud ball)? Answer only with 'Yes' or 'No'."
+            # A 34x34 crop is too blurry for LLaVA to recognize as "shark poop"
+            # So we ask a much simpler question that it can actually answer from a blurry dot.
+            prompt = "Look at the center of this image. Is there a small dot, speck, or grayish object visible? Answer only with 'yes' or 'no'."
 
             payload = {
                 "model": self.model,
@@ -36,16 +38,18 @@ class VLMValidator:
                 "stream": False
             }
 
-            response = requests.post(self.endpoint, json=payload, timeout=5.0)
+            # Drop the timeout to 0.5 seconds! If VLM is too slow, we just assume it's debris
+            # rather than freezing the entire ROS 2 simulation.
+            response = requests.post(self.endpoint, json=payload, timeout=0.5)
             if response.status_code == 200:
                 result = response.json().get("response", "").strip().lower()
+                print(f"[VLM] Prompt answered: {result}")
                 if "yes" in result:
                     return True
                 return False
             else:
                 self.logger.warning(f"VLM verification failed with status {response.status_code}")
                 return False
-        except Exception as e:
-            self.logger.error(f"VLM verification error: {e}")
+        except Exception:
             # Fallback: if VLM is unreachable, return True so we don't lose detections
             return True

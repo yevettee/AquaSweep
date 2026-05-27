@@ -14,51 +14,85 @@ class IntegratedViewer(Node):
         super().__init__('integrated_viewer')
         self.bridge = CvBridge()
         
-        # Subscriptions
-        # 1. 인지 & VLM 판단 결과가 담긴 이미지 토픽
-        self.sub_img = self.create_subscription(
-            Image, '/pool_1/top_img_det', self.img_callback, 10)
-        # 2. VLM 최종 판단 결과가 담긴 상태 문자열
-        self.sub_status = self.create_subscription(
-            String, '/pool_1/status_string', self.status_callback, 10)
-        # 3. 로봇의 이동 명령 (실행 과정)
-        self.sub_cmd = self.create_subscription(
-            Twist, '/under_robot_1/cmd_vel', self.cmd_callback, 10)
+        self.num_pools = 7
+        self.active_pool_id = 1
+        self.auto_select = True
         
-        self.latest_status = {}
-        self.latest_cmd = Twist()
+        self.latest_status = {i: {} for i in range(1, self.num_pools + 1)}
+        self.latest_cmd = {i: Twist() for i in range(1, self.num_pools + 1)}
         
-        self.get_logger().info("통합 뷰어 노드가 시작되었습니다! 데이터를 기다리는 중...")
+        # 동적 구독 생성
+        self.sub_imgs = {}
+        self.sub_statuses = {}
+        self.sub_cmds = {}
+        
+        for i in range(1, self.num_pools + 1):
+            # 람다 캡처 문제 해결을 위해 pool_id를 기본 인자로 전달
+            self.sub_imgs[i] = self.create_subscription(
+                Image, f'/pool_{i}/top_img_det', lambda msg, pid=i: self.img_callback(msg, pid), 10)
+            self.sub_statuses[i] = self.create_subscription(
+                String, f'/pool_{i}/status_string', lambda msg, pid=i: self.status_callback(msg, pid), 10)
+            self.sub_cmds[i] = self.create_subscription(
+                Twist, f'/under_robot_{i}/cmd_vel', lambda msg, pid=i: self.cmd_callback(msg, pid), 10)
+                
+        self.get_logger().info("통합 뷰어 노드가 시작되었습니다! (키보드 1~7을 눌러 수동으로 수조 변경 가능)")
 
-    def status_callback(self, msg):
+    def status_callback(self, msg, pool_id):
         try:
-            self.latest_status = json.loads(msg.data)
+            status_data = json.loads(msg.data)
+            self.latest_status[pool_id] = status_data
+            
+            # 자동 선택 모드일 경우, 가장 "대표적인" 수조를 찾습니다 (이물질과 상어가 모두 있는 곳)
+            if self.auto_select:
+                best_pool = self.active_pool_id
+                max_score = -1
+                for pid in range(1, self.num_pools + 1):
+                    s = self.latest_status.get(pid, {})
+                    debris_count = s.get("debris_count", 0)
+                    fish_count = s.get("fish_count", 0)
+                    suspicious_count = s.get("fish_count_suspicious", 0)
+                    
+                    # 점수: 상어가 있고 이물질이 있으면 높은 점수
+                    score = 0
+                    if fish_count > 0: score += 10
+                    if suspicious_count > 0: score += 5
+                    if debris_count > 0: score += 20 + debris_count
+                    
+                    if score > max_score and score > 0:
+                        max_score = score
+                        best_pool = pid
+                
+                if best_pool != self.active_pool_id and max_score > 0:
+                    self.active_pool_id = best_pool
+                    self.get_logger().info(f"대표 수조 자동 선택: Pool_{self.active_pool_id} (이물질 및 상어 스폰 감지됨)")
+                    
         except Exception:
             pass
 
-    def cmd_callback(self, msg):
-        self.latest_cmd = msg
+    def cmd_callback(self, msg, pool_id):
+        self.latest_cmd[pool_id] = msg
 
-    def img_callback(self, msg):
+    def img_callback(self, msg, pool_id):
+        # 현재 활성화된 수조의 이미지만 렌더링
+        if pool_id != self.active_pool_id:
+            return
+            
         try:
-            # ROS 이미지를 OpenCV 이미지로 변환
             cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
         except Exception as e:
             self.get_logger().error(f"이미지 변환 실패: {e}")
             return
             
-        # 1. VLM 최종 통과한 이물질(상어똥) 시각화
-        debris_positions = self.latest_status.get("debris_positions", [])
-        for pos in debris_positions:
-            cx, cy = pos
-            # 빨간색 십자 마커와 VLM 검증 완료 텍스트
-            cv2.drawMarker(cv_image, (int(cx), int(cy)), (0, 0, 255), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
-            cv2.putText(cv_image, "VLM Verified: POOP", (int(cx) + 10, int(cy) - 10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        status = self.latest_status.get(pool_id, {})
+        cmd = self.latest_cmd.get(pool_id, Twist())
+            
+        # 1. VLM 최종 통과한 이물질(상어똥) 개수 파악
+        debris_positions = status.get("debris_positions", [])
+        # 마커와 텍스트는 가시성을 위해 제거 (fish_detection_node에서 바운딩 박스로 그려짐)
             
         # 2. 로봇 현재 Action 상태 표시
-        linear_x = self.latest_cmd.linear.x
-        angular_z = self.latest_cmd.angular.z
+        linear_x = cmd.linear.x
+        angular_z = cmd.angular.z
         
         if abs(linear_x) > 0.01 or abs(angular_z) > 0.01:
             robot_state = f"ROBOT ACTION: Moving to target (v: {linear_x:.2f}, w: {angular_z:.2f})"
@@ -69,17 +103,28 @@ class IntegratedViewer(Node):
             
         # 상단 오버레이 패널
         overlay = cv_image.copy()
-        cv2.rectangle(overlay, (10, 10), (600, 100), (0, 0, 0), -1)
+        cv2.rectangle(overlay, (10, 10), (600, 120), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.6, cv_image, 0.4, 0, cv_image)
         
-        cv2.putText(cv_image, "[Perception -> VLM Validation -> Action]", (20, 40), 
+        cv2.putText(cv_image, f"[Pool {pool_id} View] Perception -> VLM -> Action", (20, 40), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         cv2.putText(cv_image, robot_state, (20, 80), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
-        # 화면 출력
+        mode_text = "Mode: AUTO (finding best pool)" if self.auto_select else f"Mode: MANUAL (Pool {self.active_pool_id})"
+        cv2.putText(cv_image, mode_text, (20, 110), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        
         cv2.imshow("AquaSweep - Integrated Process Viewer", cv_image)
-        cv2.waitKey(1)
+        
+        key = cv2.waitKey(1) & 0xFF
+        if ord('1') <= key <= ord('7'):
+            self.active_pool_id = key - ord('0')
+            self.auto_select = False
+            self.get_logger().info(f"수동으로 수조 {self.active_pool_id}번으로 변경했습니다.")
+        elif key == ord('a') or key == ord('A'):
+            self.auto_select = True
+            self.get_logger().info("자동 수조 선택 모드로 변경했습니다.")
 
 def main(args=None):
     rclpy.init(args=args)
