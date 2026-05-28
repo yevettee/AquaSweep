@@ -174,6 +174,8 @@ class UIBuilder:
         # MotionCommandBridge 인스턴스 (내부 플래너 모드용)
         self._floor_bridges: list = []
         self._wall_bridges: list = []
+        # GantryCommandBridge 인스턴스 (Move Fish용)
+        self._gantry_bridge = None
         # CleanWall action server (per pool)
         self._clean_wall_server = None
 
@@ -189,6 +191,10 @@ class UIBuilder:
         if event.type == int(omni.timeline.TimelineEventType.STOP):
             self._scenario_state_btn.reset()
             self._scenario_state_btn.enabled = False
+        elif event.type == int(omni.timeline.TimelineEventType.PLAY):
+            # Gantry bridge: PLAY 시작 시 대기 중인 요청 처리
+            if self._gantry_bridge is not None:
+                self._gantry_bridge.process_pending_requests()
 
     def on_physics_step(self, step: float):
         # ── StateButton과 독립적으로 항상 water scenario 실행 ──
@@ -199,6 +205,10 @@ class UIBuilder:
         # sim-time이 wall-clock 대비 ~5× 느려짐 (60s 설정 → ~5min).
         for rail_scenario in self._rail_scenarios:
             rail_scenario.on_physics_step(step)
+
+        # Gantry bridge: 대기 중인 빌드/제거 요청 처리 (메인 스레드에서 USD 작업)
+        if self._gantry_bridge is not None:
+            self._gantry_bridge.process_pending_requests()
 
         try:
             robot = World.instance().scene.get_object(PRIMARY_ROBOT_SCENE_NAME)
@@ -628,6 +638,9 @@ class UIBuilder:
 
         _set_viewport_lighting_mode("stage")
 
+        # Gantry 자동 빌드 (LOAD 시 기본 포함)
+        self._build_gantry_on_load()
+
         self._scenario_state_btn.reset()
         self._scenario_state_btn.enabled = True
         self._reset_btn.enabled = True
@@ -832,6 +845,37 @@ class UIBuilder:
             except Exception as e:
                 carb.log_warn(f"[aquasweep] {pool_id} CleanWall MotionBridge 생성 실패: {e}")
 
+        # Gantry (Move Fish) 브릿지
+        self._init_gantry_bridge()
+
+    def _init_gantry_bridge(self) -> None:
+        """Gantry (Move Fish) 브릿지 생성 및 콜백 연결."""
+        try:
+            from gantry_command_bridge import create_gantry_bridge
+        except ImportError as e:
+            carb.log_warn(f"[aquasweep] GantryCommandBridge import 실패: {e}")
+            return
+
+        try:
+            bridge = create_gantry_bridge()
+            if bridge is not None:
+                self._ros_executor.add_node(bridge)
+                
+                # 콜백 설정: gantry_builder 모션 제어 함수 연결
+                bridge.set_gantry_callbacks(
+                    on_start_motion=_gantry.start_motion,
+                    on_pause_motion=_gantry.pause_motion,
+                    on_resume_motion=_gantry.resume_motion,
+                    is_motion_enabled=_gantry.is_motion_enabled,
+                    is_built=_gantry.is_built,
+                    get_stage=get_current_stage,
+                )
+                
+                self._gantry_bridge = bridge
+                carb.log_warn("[aquasweep] GantryCommandBridge 생성 완료 (/gantry/start, /gantry/stop)")
+        except Exception as e:
+            carb.log_warn(f"[aquasweep] GantryCommandBridge 생성 실패: {e}")
+
     def _stop_ros(self) -> None:
         if self._ros_executor is not None:
             self._ros_executor.shutdown(timeout_sec=1.0)
@@ -839,6 +883,7 @@ class UIBuilder:
         self._cmd_receivers = [None] * _NUM_ROBOTS
         self._floor_bridges = []
         self._wall_bridges = []
+        self._gantry_bridge = None
 
     def _on_trail_on(self):
         _uw_gv.DEBUG_CENTER_TRAIL_ENABLED = True
@@ -846,6 +891,18 @@ class UIBuilder:
     def _on_trail_off(self):
         _uw_gv.DEBUG_CENTER_TRAIL_ENABLED = False
         reset_center_trail_debug()
+
+    def _build_gantry_on_load(self):
+        """LOAD 시 Gantry 자동 빌드 (prim 생성, 모션은 비활성)."""
+        stage = get_current_stage()
+        if stage is None:
+            return
+        if _gantry.is_built(stage):
+            carb.log_info("[aquasweep] Gantry already built")
+            return
+        animator = getattr(self._water_scenario, "sturgeon_animator", None)
+        _gantry.build(stage, animator=animator)
+        carb.log_warn("[aquasweep] Gantry 자동 빌드 완료 (모션은 /gantry/start로 시작)")
 
     def _on_gantry_build(self):
         stage = get_current_stage()

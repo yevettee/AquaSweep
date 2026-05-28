@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
 )
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from aqua_interfaces.action import CleanFloor, CleanWall
@@ -44,6 +45,9 @@ from aqua_interfaces.msg import MotionStatus, PoolStatus, RobotStatus
 from aqua_interfaces.srv import PauseMotion, ResumeMotion
 
 from .ros_topics import (
+    gantry_start_service,
+    gantry_status_topic,
+    gantry_stop_service,
     planner_pause_service,
     planner_start_service,
     pool_clean_floor_action,
@@ -80,6 +84,7 @@ class SignalEmitter(QObject):
     top_cam_received = pyqtSignal(int, object)
     under_cam_received = pyqtSignal(int, object)
     service_response_received = pyqtSignal(str, bool, str)
+    gantry_status_received = pyqtSignal(str)  # status string
 
 
 class RosSpinThread(QThread):
@@ -176,6 +181,17 @@ class DashboardRosNode(Node):
         self._planner_start_client = self.create_client(Trigger, planner_start_service())
         self._planner_pause_client = self.create_client(Trigger, planner_pause_service())
 
+        # Gantry (Move Fish) services and status
+        self._gantry_start_client = self.create_client(Trigger, gantry_start_service())
+        self._gantry_stop_client = self.create_client(Trigger, gantry_stop_service())
+        self._gantry_status_sub = self.create_subscription(
+            String,
+            gantry_status_topic(),
+            self._on_gantry_status,
+            _BEST_EFFORT_QOS
+        )
+        self._gantry_running = False
+
         self.get_logger().info(f'DashboardRosNode ready | pools={list(pool_ids())}')
 
     def set_active_pool(self, pool_id: int) -> None:
@@ -252,6 +268,48 @@ class DashboardRosNode(Node):
             self.signals.service_response_received.emit("global_stop", response.success, response.message)
         except Exception as exc:
             self.signals.service_response_received.emit("global_stop", False, str(exc))
+
+    # --- Gantry (Move Fish) Services ---
+    def _on_gantry_status(self, msg: String) -> None:
+        status = msg.data.split(":")[0]  # "PAUSED:state=XXX" → "PAUSED"
+        # STOPPED, PAUSED, ERROR, 빈 문자열 → 비활성 (Move Fish 버튼 표시)
+        # 그 외 (IDLE, SEEK_XY, ...) → 활성 (Stop Fish 버튼 표시)
+        self._gantry_running = status not in ("STOPPED", "PAUSED", "ERROR", "")
+        self.signals.gantry_status_received.emit(msg.data)
+
+    def call_gantry_start(self) -> None:
+        if not self._gantry_start_client.service_is_ready():
+            self.signals.service_response_received.emit("gantry_start", False, "Gantry start service not available")
+            return
+        request = Trigger.Request()
+        future = self._gantry_start_client.call_async(request)
+        future.add_done_callback(self._on_gantry_start_response)
+
+    def _on_gantry_start_response(self, future) -> None:
+        try:
+            response = future.result()
+            self.signals.service_response_received.emit("gantry_start", response.success, response.message)
+        except Exception as exc:
+            self.signals.service_response_received.emit("gantry_start", False, str(exc))
+
+    def call_gantry_stop(self) -> None:
+        if not self._gantry_stop_client.service_is_ready():
+            self.signals.service_response_received.emit("gantry_stop", False, "Gantry stop service not available")
+            return
+        request = Trigger.Request()
+        future = self._gantry_stop_client.call_async(request)
+        future.add_done_callback(self._on_gantry_stop_response)
+
+    def _on_gantry_stop_response(self, future) -> None:
+        try:
+            response = future.result()
+            self.signals.service_response_received.emit("gantry_stop", response.success, response.message)
+        except Exception as exc:
+            self.signals.service_response_received.emit("gantry_stop", False, str(exc))
+
+    @property
+    def is_gantry_running(self) -> bool:
+        return self._gantry_running
 
     # --- Per-Pool Actions (Dashboard → Controller → Isaac Sim) ---
     def call_pool_clean_wall(self, pool_id: int) -> None:
@@ -816,6 +874,13 @@ class DashboardWindow(QMainWindow):
         self.stop_all_btn.hide()
         header.addWidget(self.stop_all_btn)
 
+        # Move Fish (Gantry) button
+        self.move_fish_btn = QPushButton("Move Fish")
+        self._gantry_active = False
+        self._update_move_fish_btn_style()
+        self.move_fish_btn.clicked.connect(self._on_move_fish_clicked)
+        header.addWidget(self.move_fish_btn)
+
         main_layout.addLayout(header)
 
         # Status box
@@ -920,6 +985,7 @@ class DashboardWindow(QMainWindow):
         self.ros_node.signals.top_cam_received.connect(self._on_top_cam)
         self.ros_node.signals.under_cam_received.connect(self._on_under_cam)
         self.ros_node.signals.service_response_received.connect(self._on_service_response)
+        self.ros_node.signals.gantry_status_received.connect(self._on_gantry_status)
 
     def _on_pool_tab_clicked(self, pool_id: int):
         if pool_id == self.active_pool_id:
@@ -1038,6 +1104,30 @@ class DashboardWindow(QMainWindow):
             # individual_active는 motion status가 IDLE이 되면 _check_all_idle에서 자동 해제
             self._update_ui_state()
 
+        elif service_name == "gantry_start":
+            self.move_fish_btn.setEnabled(True)
+            if success:
+                self._gantry_active = True
+                self._update_move_fish_btn_style()
+                self.global_status_label.setText(f"Gantry: {message}")
+                self.global_status_label.setStyleSheet("color: #6f42c1; font-size: 16px;")
+            else:
+                self._gantry_active = False
+                self._update_move_fish_btn_style()
+                self.global_status_label.setText(f"Gantry error: {message}")
+                self.global_status_label.setStyleSheet("color: #ff6b6b; font-size: 16px;")
+
+        elif service_name == "gantry_stop":
+            self.move_fish_btn.setEnabled(True)
+            if success:
+                self._gantry_active = False
+                self._update_move_fish_btn_style()
+                self.global_status_label.setText(f"Gantry: {message}")
+                self.global_status_label.setStyleSheet("color: #ffc107; font-size: 16px;")
+            else:
+                self.global_status_label.setText(f"Gantry error: {message}")
+                self.global_status_label.setStyleSheet("color: #ff6b6b; font-size: 16px;")
+
         elif service_name.startswith("pool_"):
             # Parse: pool_{id}_clean_wall or pool_{id}_clean_floor
             parts = service_name.split("_")
@@ -1152,6 +1242,66 @@ class DashboardWindow(QMainWindow):
         self.pool_panel.clean_floor_btn.setText("Resuming...")
         self.pool_panel.set_status("Resuming CleanFloor...", "#888")
         self.ros_node.call_resume_floor(pool_id)
+
+    # --- Move Fish (Gantry) ---
+    def _update_move_fish_btn_style(self):
+        """Update Move Fish button style based on gantry state."""
+        if self._gantry_active:
+            self.move_fish_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #fd7e14;
+                    color: white;
+                    border: none;
+                    padding: 12px 24px;
+                    font-weight: bold;
+                    font-size: 16px;
+                    border-radius: 6px;
+                }
+                QPushButton:hover { background-color: #e76f00; }
+                QPushButton:disabled { background-color: #555; color: #888; }
+            """)
+            self.move_fish_btn.setText("Stop Fish")
+        else:
+            self.move_fish_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #6f42c1;
+                    color: white;
+                    border: none;
+                    padding: 12px 24px;
+                    font-weight: bold;
+                    font-size: 16px;
+                    border-radius: 6px;
+                }
+                QPushButton:hover { background-color: #5a32a3; }
+                QPushButton:disabled { background-color: #555; color: #888; }
+            """)
+            self.move_fish_btn.setText("Move Fish")
+
+    def _on_move_fish_clicked(self):
+        """Handle Move Fish button click."""
+        self.move_fish_btn.setEnabled(False)
+        if self._gantry_active:
+            self.move_fish_btn.setText("Stopping...")
+            self.global_status_label.setText("Stopping gantry...")
+            self.global_status_label.setStyleSheet("color: #888; font-size: 16px;")
+            self.ros_node.call_gantry_stop()
+        else:
+            self.move_fish_btn.setText("Starting...")
+            self.global_status_label.setText("Starting gantry...")
+            self.global_status_label.setStyleSheet("color: #888; font-size: 16px;")
+            self.ros_node.call_gantry_start()
+
+    def _on_gantry_status(self, status: str):
+        """Handle gantry status update from ROS2."""
+        # Parse status (e.g., "PAUSED:state=SEEK_XY" → "PAUSED")
+        state = status.split(":")[0] if status else ""
+        # STOPPED, PAUSED, ERROR → 비활성 (Move Fish 버튼)
+        # IDLE, SEEK_XY, etc. → 활성 (Stop Fish 버튼)
+        is_running = state not in ("STOPPED", "PAUSED", "ERROR", "")
+        if is_running != self._gantry_active:
+            self._gantry_active = is_running
+            self._update_move_fish_btn_style()
+            self.move_fish_btn.setEnabled(True)
 
     def _update_connection_status(self):
         if rclpy.ok():

@@ -72,6 +72,7 @@ _OPS:   dict = {}
 _SHAFT_T = None
 _SHAFT_S = None
 _ANIMATOR = None
+_MOTION_ENABLED = False  # 모션 활성화 플래그 (prim과 별개로 제어)
 
 # 흡착 패드 USD 핸들
 _SUCTION_T    = None   # translate op (Xform)
@@ -96,12 +97,21 @@ _SM: dict = {
 # ── 공개 API ──────────────────────────────────────────────────────────────────
 
 def build(stage, animator=None) -> None:
-    """겐트리를 스테이지에 빌드하고 상태 머신 훅을 등록한다."""
-    global _SHAFT_T, _SHAFT_S, _ANIMATOR
+    """겐트리를 스테이지에 빌드하고 타임라인 훅을 등록한다.
+    
+    Note: 모션은 기본 비활성. start_motion()으로 별도 시작해야 함.
+    """
+    global _SHAFT_T, _SHAFT_S, _ANIMATOR, _MOTION_ENABLED
     global _SUCTION_T, _SUCTION_S, _SUCTION_PRIM, _MAT_SUCTION_OFF, _MAT_SUCTION_ON
     if stage is None:
         carb.log_error("[GantryRobot] stage is None — 빌드 취소")
         return
+    
+    # 기존 훅 정리 (hot reload 또는 재빌드 시 stale 참조 방지)
+    _HOOKS["phys"] = None
+    _HOOKS["tl"] = None
+    _MOTION_ENABLED = False  # 모션은 start_motion()으로 별도 시작
+    
     _ANIMATOR = animator
     _OPS.clear()
     _SHAFT_T = _SHAFT_S = None
@@ -115,7 +125,7 @@ def build(stage, animator=None) -> None:
     })
     _build_prims(stage)
     _hook_timeline()
-    carb.log_info("[GantryRobot] 빌드 완료 — PLAY 누르면 동작")
+    carb.log_info("[GantryRobot] 빌드 완료 — start_motion()으로 모션 시작")
 
 
 def remove(stage) -> None:
@@ -129,6 +139,66 @@ def remove(stage) -> None:
 
 def is_built(stage) -> bool:
     return stage is not None and stage.GetPrimAtPath(ROOT).IsValid()
+
+
+def start_motion() -> bool:
+    """겐트리 모션(상태 머신)을 처음 시작한다. 상태 초기화."""
+    global _MOTION_ENABLED
+    if not _OPS:
+        carb.log_warn("[GantryRobot] start_motion 실패 — 먼저 build()를 호출하세요")
+        return False
+    _MOTION_ENABLED = True
+    _SM["state"] = _IDLE
+    _SM["idle_wait"] = 0.0
+    carb.log_info("[GantryRobot] 모션 시작")
+    return True
+
+
+def pause_motion() -> bool:
+    """겐트리 모션을 일시정지한다. 현재 상태 유지."""
+    global _MOTION_ENABLED
+    if not _MOTION_ENABLED:
+        carb.log_warn("[GantryRobot] pause_motion — 이미 정지 상태")
+        return False
+    _MOTION_ENABLED = False
+    carb.log_info(f"[GantryRobot] 모션 일시정지 (state={_SM['state']})")
+    return True
+
+
+def resume_motion() -> bool:
+    """겐트리 모션을 재개한다. 이전 상태에서 계속."""
+    global _MOTION_ENABLED
+    if not _OPS:
+        carb.log_warn("[GantryRobot] resume_motion 실패 — 먼저 build()를 호출하세요")
+        return False
+    if _MOTION_ENABLED:
+        carb.log_warn("[GantryRobot] resume_motion — 이미 실행 중")
+        return False
+    _MOTION_ENABLED = True
+    carb.log_info(f"[GantryRobot] 모션 재개 (state={_SM['state']})")
+    return True
+
+
+def stop_motion() -> bool:
+    """겐트리 모션을 완전히 정지하고 상태 초기화."""
+    global _MOTION_ENABLED
+    _MOTION_ENABLED = False
+    _SM["state"] = _IDLE
+    _SM["idle_wait"] = 0.0
+    _SM["grabbed_prim"] = None
+    _SM["grabbed_t_op"] = None
+    carb.log_info("[GantryRobot] 모션 정지 (상태 초기화)")
+    return True
+
+
+def is_motion_enabled() -> bool:
+    """모션 활성화 여부 반환."""
+    return _MOTION_ENABLED
+
+
+def get_current_state() -> str:
+    """현재 상태 머신 상태 반환."""
+    return _SM.get("state", _IDLE)
 
 
 # ── prim 생성 ─────────────────────────────────────────────────────────────────
@@ -237,26 +307,31 @@ def _update(x: float, y: float, z: float) -> None:
     if not _OPS or _SHAFT_T is None:
         return
 
-    bz  = CEILING_Z
-    cz  = CEILING_Z - 0.18
+    try:
+        bz  = CEILING_Z
+        cz  = CEILING_Z - 0.18
 
-    shaft_top = cz  - _YCARR_HALF
-    zcz       = cz  - _YCARR_HALF - _ZCARR_GAP - _ZCARR_HALF - z
-    shaft_bot = zcz + _ZCARR_HALF
-    shaft_len = max(shaft_top - shaft_bot, 0.04)
-    shaft_cen = (shaft_top + shaft_bot) / 2
+        shaft_top = cz  - _YCARR_HALF
+        zcz       = cz  - _YCARR_HALF - _ZCARR_GAP - _ZCARR_HALF - z
+        shaft_bot = zcz + _ZCARR_HALF
+        shaft_len = max(shaft_top - shaft_bot, 0.04)
+        shaft_cen = (shaft_top + shaft_bot) / 2
 
-    _OPS["crossbeam"].Set(Gf.Vec3d(x,  0.0,           bz))
-    _OPS["sl_f"].Set(     Gf.Vec3d(x, +RAIL_GAP / 2,  bz))
-    _OPS["sl_b"].Set(     Gf.Vec3d(x, -RAIL_GAP / 2,  bz))
-    _OPS["ycarr"].Set(    Gf.Vec3d(x,  y,             cz))
-    _SHAFT_T.Set(         Gf.Vec3d(x,  y,             shaft_cen))
-    _SHAFT_S.Set(         Gf.Vec3f(0.09, 0.09, shaft_len))
-    _OPS["zcarr"].Set(    Gf.Vec3d(x,  y,             zcz))
+        _OPS["crossbeam"].Set(Gf.Vec3d(x,  0.0,           bz))
+        _OPS["sl_f"].Set(     Gf.Vec3d(x, +RAIL_GAP / 2,  bz))
+        _OPS["sl_b"].Set(     Gf.Vec3d(x, -RAIL_GAP / 2,  bz))
+        _OPS["ycarr"].Set(    Gf.Vec3d(x,  y,             cz))
+        _SHAFT_T.Set(         Gf.Vec3d(x,  y,             shaft_cen))
+        _SHAFT_S.Set(         Gf.Vec3f(0.09, 0.09, shaft_len))
+        _OPS["zcarr"].Set(    Gf.Vec3d(x,  y,             zcz))
 
-    # 흡착 패드 — ZCarriage 하단에 고정 추종
-    if _SUCTION_T is not None:
-        _SUCTION_T.Set(Gf.Vec3d(x, y, zcz - _PAD_OFFSET))
+        # 흡착 패드 — ZCarriage 하단에 고정 추종
+        if _SUCTION_T is not None:
+            _SUCTION_T.Set(Gf.Vec3d(x, y, zcz - _PAD_OFFSET))
+    except RuntimeError:
+        # Stale prim reference - stage가 리로드되어 프림이 무효화됨
+        _OPS.clear()
+        _HOOKS["phys"] = None
 
 
 def _set_suction_active(active: bool) -> None:
@@ -344,6 +419,18 @@ def _carry_sturgeon(x: float, y: float, z: float) -> None:
 
 def _on_step(dt: float) -> None:
     if not _OPS or _SHAFT_T is None:
+        return
+    
+    # 프림이 유효한지 확인 (stage 리로드 시 무효화됨)
+    stage = get_current_stage()
+    if stage is None or not stage.GetPrimAtPath(ROOT).IsValid():
+        # 프림이 없으면 훅 해제
+        _HOOKS["phys"] = None
+        _OPS.clear()
+        return
+    
+    # 모션 비활성화 시 상태 머신 스킵 (prim은 유지)
+    if not _MOTION_ENABLED:
         return
 
     sm    = _SM
@@ -487,3 +574,10 @@ def _hook_timeline() -> None:
         return
     stream = omni.timeline.get_timeline_interface().get_timeline_event_stream()
     _HOOKS["tl"] = stream.create_subscription_to_pop(_on_tl)
+    
+    # 이미 PLAY 상태라면 즉시 physics step 구독
+    tl = omni.timeline.get_timeline_interface()
+    if tl.is_playing() and _HOOKS["phys"] is None:
+        _SM["idle_wait"] = 0.0
+        _HOOKS["phys"] = _physx.get_physx_interface().subscribe_physics_step_events(_on_step)
+        carb.log_info("[GantryRobot] Timeline already playing — physics hook registered")
