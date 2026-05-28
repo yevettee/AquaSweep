@@ -574,9 +574,8 @@ def _on_step(dt: float) -> None:
             _BIN_COUNT += 1
             carb.log_info(f"[GantryRobot] 수거함 적재 완료 (누적 {_BIN_COUNT}마리, z={stack_z:.2f})")
 
+        # grabbed_paths에서 제거하지 않음 — animator가 bin 위치를 덮어쓰지 못하도록 영구 유지
         _COLLECTED_PATHS.add(sm["grabbed_path"])
-        if _ANIMATOR is not None and hasattr(_ANIMATOR, "grabbed_paths"):
-            _ANIMATOR.grabbed_paths.discard(sm["grabbed_path"])
 
         sm.update({
             "grabbed_prim": None, "grabbed_t_op": None, "grabbed_path": "",
