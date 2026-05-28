@@ -17,11 +17,14 @@ from isaacsim.core.utils.stage import get_current_stage
 from pxr import Gf, Sdf, UsdGeom, UsdShade
 
 ROOT      = "/World/GantryRobot"
+BIN_PATH  = "/World/DeadFishBin"
 CEILING_Z = 7.0
 X_HALF    = 19.0
 Y_HALF    = 12.0
 Z_STROKE  = 5.7
 RAIL_GAP  = 28.0
+
+_FISH_STACK_HEIGHT = 0.5   # 수거함 내 상어 한 마리당 적재 높이 (m)
 
 _YCARR_HALF = 0.11
 _ZCARR_HALF = 0.10
@@ -39,20 +42,23 @@ _PAD_OFFSET  = _ZCARR_HALF + _PAD_HEIGHT / 2  # ZCarriage 중심 기준 아래 �
 _GRAB_ZCZ = 1.375
 _GRAB_Z   = min(_ZCZ_OFFSET - _GRAB_ZCZ, Z_STROKE)   # z_param ≈ 5.065
 
-# 운반 높이 — 사람이 걸리지 않을 만큼만 올림 (ZCarriage 3 m)
+# 운반 높이 — ZCarriage 3 m
 _CARRY_ZCZ = 3.0
 _CARRY_Z   = _ZCZ_OFFSET - _CARRY_ZCZ                # z_param ≈ 3.44
 
 # GRAB 흡착 펄스 지속시간 (초)
 _GRAB_PULSE_DURATION = 0.4
 
-# 투하 지점
-_DROP_X = 12.75
-_DROP_Y = 6.0
+# 투하 지점 (params.DEAD_FISH_BIN_TRANSLATE 와 동기화)
+_DROP_X = 17.0
+_DROP_Y = 3.5
+
+# 수거함 내부 바닥 높이 — 첫 번째 상어가 놓일 z (지면 0m 기준)
+_BIN_STACK_BASE_Z = 0.3
 
 # 이동 속도
-_XY_SPEED = 3.0
-_Z_SPEED  = 1.5
+_XY_SPEED = 6.0
+_Z_SPEED  = 3.0
 
 # 도착 허용 오차
 _XY_TOL = 0.15
@@ -73,6 +79,8 @@ _SHAFT_T = None
 _SHAFT_S = None
 _ANIMATOR = None
 _MOTION_ENABLED = False  # 모션 활성화 플래그 (prim과 별개로 제어)
+_BIN_COUNT = 0           # 수거함에 쌓인 상어 수
+_COLLECTED_PATHS: set = set()   # 이미 수거된 상어 경로 (재탐지 방지)
 
 # 흡착 패드 USD 핸들
 _SUCTION_T    = None   # translate op (Xform)
@@ -83,7 +91,7 @@ _MAT_SUCTION_ON  = None
 
 _SM: dict = {
     "state": _IDLE,
-    "x": 0.0, "y": 0.0, "z": 0.0,
+    "x": 0.0, "y": 0.0, "z": _CARRY_Z,
     "idle_wait": 0.0,
     "grab_t": 0.0,
     "grabbed_prim": None,
@@ -91,41 +99,42 @@ _SM: dict = {
     "grabbed_pool_cx": 0.0,
     "grabbed_pool_cy": 0.0,
     "grabbed_path": "",
+    "bin_x": _DROP_X, "bin_y": _DROP_Y, "bin_z": 0.0,
 }
 
 
 # ── 공개 API ──────────────────────────────────────────────────────────────────
 
 def build(stage, animator=None) -> None:
-    """겐트리를 스테이지에 빌드하고 타임라인 훅을 등록한다.
-    
-    Note: 모션은 기본 비활성. start_motion()으로 별도 시작해야 함.
-    """
-    global _SHAFT_T, _SHAFT_S, _ANIMATOR, _MOTION_ENABLED
+    """겐트리를 스테이지에 빌드하고 타임라인 훅을 등록한다."""
+    global _SHAFT_T, _SHAFT_S, _ANIMATOR, _MOTION_ENABLED, _BIN_COUNT, _COLLECTED_PATHS
     global _SUCTION_T, _SUCTION_S, _SUCTION_PRIM, _MAT_SUCTION_OFF, _MAT_SUCTION_ON
     if stage is None:
         carb.log_error("[GantryRobot] stage is None — 빌드 취소")
         return
-    
+
     # 기존 훅 정리 (hot reload 또는 재빌드 시 stale 참조 방지)
     _HOOKS["phys"] = None
     _HOOKS["tl"] = None
-    _MOTION_ENABLED = False  # 모션은 start_motion()으로 별도 시작
-    
+    _MOTION_ENABLED = False
+
     _ANIMATOR = animator
+    _BIN_COUNT = 0
+    _COLLECTED_PATHS = set()
     _OPS.clear()
     _SHAFT_T = _SHAFT_S = None
     _SUCTION_T = _SUCTION_S = _SUCTION_PRIM = None
     _MAT_SUCTION_OFF = _MAT_SUCTION_ON = None
     _SM.update({
-        "state": _IDLE, "x": 0.0, "y": 0.0, "z": 0.0,
+        "state": _IDLE, "x": 0.0, "y": 0.0, "z": _CARRY_Z,
         "idle_wait": 0.0, "grab_t": 0.0,
         "grabbed_prim": None, "grabbed_t_op": None,
         "grabbed_pool_cx": 0.0, "grabbed_pool_cy": 0.0, "grabbed_path": "",
+        "bin_x": _DROP_X, "bin_y": _DROP_Y, "bin_z": 0.0,
     })
     _build_prims(stage)
     _hook_timeline()
-    carb.log_info("[GantryRobot] 빌드 완료 — start_motion()으로 모션 시작")
+    carb.log_info("[GantryRobot] 빌드 완료 — PLAY 시 자동 시작")
 
 
 def remove(stage) -> None:
@@ -227,7 +236,6 @@ def _build_prims(stage) -> None:
     m_steel  = mat("Steel",      (0.62, 0.64, 0.67))
     m_dark   = mat("Dark",       (0.22, 0.23, 0.25), metallic=0.5, roughness=0.4)
     m_slider = mat("Slider",     (0.35, 0.36, 0.40))
-    # 흡착 패드: 비활성(어두운 고무) / 활성(주황-적색 가압)
     _MAT_SUCTION_OFF = mat("SuctionOff", (0.12, 0.12, 0.12), metallic=0.0, roughness=0.95)
     _MAT_SUCTION_ON  = mat("SuctionOn",  (0.90, 0.28, 0.04), metallic=0.0, roughness=0.45)
 
@@ -260,18 +268,19 @@ def _build_prims(stage) -> None:
     _OPS["ycarr"], _ = cube_mesh(ROOT + "/YCarriage", (0.26, 0.26, 0.22),
                                  (0.0, 0.0, cz), m_dark)
 
-    init_shaft_len = _ZCARR_GAP
-    init_shaft_cen = cz - _YCARR_HALF - init_shaft_len / 2
+    init_zcz   = _ZCZ_OFFSET - _CARRY_Z          # carry height = 3.0m
+    shaft_top  = cz - _YCARR_HALF
+    shaft_bot  = init_zcz + _ZCARR_HALF
+    init_shaft_len = max(shaft_top - shaft_bot, 0.04)
+    init_shaft_cen = (shaft_top + shaft_bot) / 2
     _SHAFT_T, _SHAFT_S = cube_mesh(ROOT + "/ZShaft",
                                    (0.09, 0.09, init_shaft_len),
                                    (0.0, 0.0, init_shaft_cen), m_steel)
 
-    init_zcz = cz - _YCARR_HALF - _ZCARR_GAP - _ZCARR_HALF
     _OPS["zcarr"], _ = cube_mesh(ROOT + "/ZCarriage", (0.22, 0.22, 0.20),
                                  (0.0, 0.0, init_zcz), m_slider)
 
     # ── 흡착 패드 ────────────────────────────────────────────────────────────
-    # Xform: translate + XY scale (펄스 애니메이션용)
     pad_path = ROOT + "/SuctionPad"
     xf_pad = UsdGeom.Xform.Define(stage, pad_path)
     _SUCTION_T = UsdGeom.Xformable(xf_pad).AddTranslateOp()
@@ -279,7 +288,6 @@ def _build_prims(stage) -> None:
     _SUCTION_S = UsdGeom.Xformable(xf_pad).AddScaleOp()
     _SUCTION_S.Set(Gf.Vec3f(1.0, 1.0, 1.0))
 
-    # 납작한 원반 — Cylinder(axis=Z)
     cyl = UsdGeom.Cylinder.Define(stage, pad_path + "/Disc")
     cyl.CreateRadiusAttr(_PAD_RADIUS)
     cyl.CreateHeightAttr(_PAD_HEIGHT)
@@ -287,17 +295,16 @@ def _build_prims(stage) -> None:
     _SUCTION_PRIM = cyl.GetPrim()
     UsdShade.MaterialBindingAPI(_SUCTION_PRIM).Bind(_MAT_SUCTION_OFF)
 
-    # 외곽 립(lip) — 얇은 링 표현
     lip_path = pad_path + "/Lip"
     xf_lip = UsdGeom.Xform.Define(stage, lip_path)
     lip_t = UsdGeom.Xformable(xf_lip).AddTranslateOp()
-    lip_t.Set(Gf.Vec3d(0.0, 0.0, 0.0))   # SuctionPad Xform 기준 로컬 0
+    lip_t.Set(Gf.Vec3d(0.0, 0.0, 0.0))
     lip_cyl = UsdGeom.Cylinder.Define(stage, lip_path + "/M")
     lip_cyl.CreateRadiusAttr(_PAD_RADIUS + 0.015)
     lip_cyl.CreateHeightAttr(0.008)
     lip_cyl.CreateAxisAttr("Z")
     UsdShade.MaterialBindingAPI(lip_cyl.GetPrim()).Bind(_MAT_SUCTION_OFF)
-    _OPS["lip_t"] = lip_t     # 흡착 활성 시 색상 재바인딩을 위해 저장
+    _OPS["lip_t"] = lip_t
     _OPS["lip_prim"] = lip_cyl.GetPrim()
 
 
@@ -312,7 +319,7 @@ def _update(x: float, y: float, z: float) -> None:
         cz  = CEILING_Z - 0.18
 
         shaft_top = cz  - _YCARR_HALF
-        zcz       = cz  - _YCARR_HALF - _ZCARR_GAP - _ZCARR_HALF - z
+        zcz       = min(_ZCZ_OFFSET - z, 3.0)   # ZCarriage 월드 Z ≤ 3.0m 강제
         shaft_bot = zcz + _ZCARR_HALF
         shaft_len = max(shaft_top - shaft_bot, 0.04)
         shaft_cen = (shaft_top + shaft_bot) / 2
@@ -325,17 +332,14 @@ def _update(x: float, y: float, z: float) -> None:
         _SHAFT_S.Set(         Gf.Vec3f(0.09, 0.09, shaft_len))
         _OPS["zcarr"].Set(    Gf.Vec3d(x,  y,             zcz))
 
-        # 흡착 패드 — ZCarriage 하단에 고정 추종
         if _SUCTION_T is not None:
             _SUCTION_T.Set(Gf.Vec3d(x, y, zcz - _PAD_OFFSET))
     except RuntimeError:
-        # Stale prim reference - stage가 리로드되어 프림이 무효화됨
         _OPS.clear()
         _HOOKS["phys"] = None
 
 
 def _set_suction_active(active: bool) -> None:
-    """흡착 패드 색상 교체 + 립 색상 교체."""
     if _SUCTION_PRIM is None:
         return
     mat = _MAT_SUCTION_ON if active else _MAT_SUCTION_OFF
@@ -343,6 +347,20 @@ def _set_suction_active(active: bool) -> None:
     lip_prim = _OPS.get("lip_prim")
     if lip_prim is not None:
         UsdShade.MaterialBindingAPI(lip_prim).Bind(mat)
+
+
+# ── 수거함 위치 ──────────────────────────────────────────────────────────────
+
+def _get_bin_pos(stage) -> tuple[float, float, float]:
+    """DeadFishBin 월드 X, Y, Z를 반환. prim이 없으면 기본 투하 지점 사용."""
+    prim = stage.GetPrimAtPath(BIN_PATH)
+    if prim and prim.IsValid():
+        t = UsdGeom.XformCache().GetLocalToWorldTransform(prim).ExtractTranslation()
+        x, y, z = float(t[0]), float(t[1]), float(t[2])
+        carb.log_warn(f"[GantryRobot] DeadFishBin 위치: ({x:.2f}, {y:.2f}, {z:.2f})")
+        return x, y, z
+    carb.log_warn(f"[GantryRobot] DeadFishBin prim 없음({BIN_PATH}) — 기본값({_DROP_X}, {_DROP_Y}) 사용")
+    return _DROP_X, _DROP_Y, 0.0
 
 
 # ── 죽은 상어 탐색 ────────────────────────────────────────────────────────────
@@ -367,7 +385,7 @@ def _find_dead_sturgeons(stage) -> list[dict]:
             if not child.GetName().startswith("Sturgeon"):
                 continue
             path_str = str(child.GetPath())
-            if path_str in already_grabbed:
+            if path_str in already_grabbed or path_str in _COLLECTED_PATHS:
                 continue
             flip_attr = child.GetAttribute("aquasweep:isFlipped")
             if not (flip_attr and flip_attr.IsValid() and flip_attr.Get()):
@@ -420,16 +438,14 @@ def _carry_sturgeon(x: float, y: float, z: float) -> None:
 def _on_step(dt: float) -> None:
     if not _OPS or _SHAFT_T is None:
         return
-    
+
     # 프림이 유효한지 확인 (stage 리로드 시 무효화됨)
     stage = get_current_stage()
     if stage is None or not stage.GetPrimAtPath(ROOT).IsValid():
-        # 프림이 없으면 훅 해제
         _HOOKS["phys"] = None
         _OPS.clear()
         return
-    
-    # 모션 비활성화 시 상태 머신 스킵 (prim은 유지)
+
     if not _MOTION_ENABLED:
         return
 
@@ -455,6 +471,7 @@ def _on_step(dt: float) -> None:
 
         best = min(candidates,
                    key=lambda c: (c["world_x"] - x) ** 2 + (c["world_y"] - y) ** 2)
+        bx, by, bz = _get_bin_pos(stage)
         sm.update({
             "tx": best["world_x"], "ty": best["world_y"],
             "grabbed_prim":    best["prim"],
@@ -462,6 +479,7 @@ def _on_step(dt: float) -> None:
             "grabbed_pool_cx": best["pool_cx"],
             "grabbed_pool_cy": best["pool_cy"],
             "grabbed_path":    best["path"],
+            "bin_x": bx, "bin_y": by, "bin_z": bz,
             "state": _SEEK_XY,
         })
         carb.log_info(f"[GantryRobot] SEEK_XY → ({best['world_x']:.1f}, {best['world_y']:.1f})")
@@ -470,7 +488,7 @@ def _on_step(dt: float) -> None:
     elif state == _SEEK_XY:
         new_x = _step_toward(x, sm["tx"], _XY_SPEED, dt)
         new_y = _step_toward(y, sm["ty"], _XY_SPEED, dt)
-        new_z = _step_toward(z, 0.0,     _Z_SPEED,  dt)
+        new_z = _step_toward(z, _CARRY_Z, _Z_SPEED,  dt)
         sm["x"], sm["y"], sm["z"] = new_x, new_y, new_z
         _update(new_x, new_y, new_z)
 
@@ -494,11 +512,9 @@ def _on_step(dt: float) -> None:
         sm["grab_t"] += dt
         t_norm = sm["grab_t"] / _GRAB_PULSE_DURATION  # 0 → 1
 
-        # 처음 진입 시 패드를 주황색으로 전환
         if sm["grab_t"] <= dt + 1e-6:
             _set_suction_active(True)
 
-        # XY 팽창 펄스: sin 반주기 (1.0 → 1.5 → 1.0)
         pulse = 1.0 + 0.5 * math.sin(min(t_norm, 1.0) * math.pi)
         if _SUCTION_S is not None:
             _SUCTION_S.Set(Gf.Vec3f(pulse, pulse, 1.0))
@@ -506,7 +522,6 @@ def _on_step(dt: float) -> None:
         _update(x, y, z)
 
         if t_norm >= 1.0:
-            # 펄스 끝 — 스케일 복원
             if _SUCTION_S is not None:
                 _SUCTION_S.Set(Gf.Vec3f(1.0, 1.0, 1.0))
             if _ANIMATOR is not None and hasattr(_ANIMATOR, "grabbed_paths"):
@@ -523,29 +538,43 @@ def _on_step(dt: float) -> None:
 
         if abs(new_z - _CARRY_Z) < _Z_TOL:
             sm["state"] = _DELIVER
-            carb.log_info(f"[GantryRobot] DELIVER → ({_DROP_X}, {_DROP_Y})")
+            carb.log_info(f"[GantryRobot] DELIVER → 수거함 ({sm['bin_x']:.1f}, {sm['bin_y']:.1f})")
 
     # ── DELIVER ──────────────────────────────────────────────────────────────
     elif state == _DELIVER:
-        new_x = _step_toward(x, _DROP_X, _XY_SPEED, dt)
-        new_y = _step_toward(y, _DROP_Y, _XY_SPEED, dt)
+        bx, by = sm["bin_x"], sm["bin_y"]
+        new_x = _step_toward(x, bx, _XY_SPEED, dt)
+        new_y = _step_toward(y, by, _XY_SPEED, dt)
         sm["x"], sm["y"], sm["z"] = new_x, new_y, z
         _update(new_x, new_y, z)
         _carry_sturgeon(new_x, new_y, z)
 
-        if abs(new_x - _DROP_X) < _XY_TOL and abs(new_y - _DROP_Y) < _XY_TOL:
+        if abs(new_x - bx) < _XY_TOL and abs(new_y - by) < _XY_TOL:
+            sm["x"], sm["y"] = bx, by   # 수거함 중심에 정확히 스냅
+            _update(bx, by, z)
+            _carry_sturgeon(bx, by, z)
             sm["state"] = _DROP_ST
             carb.log_info("[GantryRobot] DROP")
 
     # ── DROP ─────────────────────────────────────────────────────────────────
     elif state == _DROP_ST:
-        # 패드 색상 복귀
+        global _BIN_COUNT
         _set_suction_active(False)
 
+        t_op = sm["grabbed_t_op"]
         grabbed_prim = sm["grabbed_prim"]
-        if grabbed_prim is not None and grabbed_prim.IsValid():
-            grabbed_prim.SetActive(False)
+        if grabbed_prim is not None and grabbed_prim.IsValid() and t_op is not None:
+            # 수거함 위치에 적재 (pool 로컬 좌표로 변환)
+            stack_z = sm["bin_z"] + _BIN_STACK_BASE_Z + _BIN_COUNT * _FISH_STACK_HEIGHT
+            t_op.Set(Gf.Vec3d(
+                sm["bin_x"] - sm["grabbed_pool_cx"],
+                sm["bin_y"] - sm["grabbed_pool_cy"],
+                stack_z,
+            ))
+            _BIN_COUNT += 1
+            carb.log_info(f"[GantryRobot] 수거함 적재 완료 (누적 {_BIN_COUNT}마리, z={stack_z:.2f})")
 
+        _COLLECTED_PATHS.add(sm["grabbed_path"])
         if _ANIMATOR is not None and hasattr(_ANIMATOR, "grabbed_paths"):
             _ANIMATOR.grabbed_paths.discard(sm["grabbed_path"])
 
@@ -559,13 +588,17 @@ def _on_step(dt: float) -> None:
 # ── 타임라인 / physics step 훅 ───────────────────────────────────────────────
 
 def _on_tl(event) -> None:
+    global _MOTION_ENABLED
     play = int(omni.timeline.TimelineEventType.PLAY)
     stop = int(omni.timeline.TimelineEventType.STOP)
     ev   = int(event.type)
     if ev == play and _HOOKS["phys"] is None:
         _SM["idle_wait"] = 0.0
+        _MOTION_ENABLED = True   # PLAY 시 자동 모션 시작
         _HOOKS["phys"] = _physx.get_physx_interface().subscribe_physics_step_events(_on_step)
+        carb.log_info("[GantryRobot] PLAY 감지 — 모션 자동 시작")
     elif ev == stop:
+        _MOTION_ENABLED = False
         _HOOKS["phys"] = None
 
 
@@ -574,10 +607,12 @@ def _hook_timeline() -> None:
         return
     stream = omni.timeline.get_timeline_interface().get_timeline_event_stream()
     _HOOKS["tl"] = stream.create_subscription_to_pop(_on_tl)
-    
+
     # 이미 PLAY 상태라면 즉시 physics step 구독
+    global _MOTION_ENABLED
     tl = omni.timeline.get_timeline_interface()
     if tl.is_playing() and _HOOKS["phys"] is None:
         _SM["idle_wait"] = 0.0
+        _MOTION_ENABLED = True
         _HOOKS["phys"] = _physx.get_physx_interface().subscribe_physics_step_events(_on_step)
-        carb.log_info("[GantryRobot] Timeline already playing — physics hook registered")
+        carb.log_info("[GantryRobot] Timeline already playing — 모션 자동 시작")

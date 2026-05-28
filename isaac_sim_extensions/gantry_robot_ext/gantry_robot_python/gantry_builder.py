@@ -49,13 +49,16 @@ _CARRY_Z   = _ZCZ_OFFSET - _CARRY_ZCZ                # z_param ≈ 3.44
 # GRAB 흡착 펄스 지속시간 (초)
 _GRAB_PULSE_DURATION = 0.4
 
-# 투하 지점
-_DROP_X = 12.75
-_DROP_Y = 6.0
+# 투하 지점 (params.DEAD_FISH_BIN_TRANSLATE 와 동기화)
+_DROP_X = 17.0
+_DROP_Y = 3.5
+
+# 수거함 내부 바닥 높이 — 첫 번째 상어가 놓일 z (지면 0m 기준)
+_BIN_STACK_BASE_Z = 0.3
 
 # 이동 속도
-_XY_SPEED = 3.0
-_Z_SPEED  = 1.5
+_XY_SPEED = 6.0
+_Z_SPEED  = 3.0
 
 # 도착 허용 오차
 _XY_TOL = 0.15
@@ -75,7 +78,8 @@ _OPS:   dict = {}
 _SHAFT_T = None
 _SHAFT_S = None
 _ANIMATOR = None
-_BIN_COUNT = 0   # 수거함에 쌓인 상어 수
+_BIN_COUNT = 0          # 수거함에 쌓인 상어 수
+_COLLECTED_PATHS: set = set()   # 이미 수거된 상어 경로 (재탐지 방지)
 
 # 흡착 패드 USD 핸들
 _SUCTION_T    = None   # translate op (Xform)
@@ -102,13 +106,14 @@ _SM: dict = {
 
 def build(stage, animator=None) -> None:
     """겐트리를 스테이지에 빌드하고 상태 머신 훅을 등록한다."""
-    global _SHAFT_T, _SHAFT_S, _ANIMATOR, _BIN_COUNT
+    global _SHAFT_T, _SHAFT_S, _ANIMATOR, _BIN_COUNT, _COLLECTED_PATHS
     global _SUCTION_T, _SUCTION_S, _SUCTION_PRIM, _MAT_SUCTION_OFF, _MAT_SUCTION_ON
     if stage is None:
         carb.log_error("[GantryRobot] stage is None — 빌드 취소")
         return
     _ANIMATOR = animator
     _BIN_COUNT = 0
+    _COLLECTED_PATHS = set()
     _OPS.clear()
     _SHAFT_T = _SHAFT_S = None
     _SUCTION_T = _SUCTION_S = _SUCTION_PRIM = None
@@ -197,13 +202,14 @@ def _build_prims(stage) -> None:
     _OPS["ycarr"], _ = cube_mesh(ROOT + "/YCarriage", (0.26, 0.26, 0.22),
                                  (0.0, 0.0, cz), m_dark)
 
-    init_shaft_len = _ZCARR_GAP
-    init_shaft_cen = cz - _YCARR_HALF - init_shaft_len / 2
+    init_zcz   = _ZCZ_OFFSET - _CARRY_Z          # carry height = 3.0m
+    shaft_top  = cz - _YCARR_HALF
+    shaft_bot  = init_zcz + _ZCARR_HALF
+    init_shaft_len = max(shaft_top - shaft_bot, 0.04)
+    init_shaft_cen = (shaft_top + shaft_bot) / 2
     _SHAFT_T, _SHAFT_S = cube_mesh(ROOT + "/ZShaft",
                                    (0.09, 0.09, init_shaft_len),
                                    (0.0, 0.0, init_shaft_cen), m_steel)
-
-    init_zcz = cz - _YCARR_HALF - _ZCARR_GAP - _ZCARR_HALF
     _OPS["zcarr"], _ = cube_mesh(ROOT + "/ZCarriage", (0.22, 0.22, 0.20),
                                  (0.0, 0.0, init_zcz), m_slider)
 
@@ -248,7 +254,7 @@ def _update(x: float, y: float, z: float) -> None:
     cz  = CEILING_Z - 0.18
 
     shaft_top = cz  - _YCARR_HALF
-    zcz       = cz  - _YCARR_HALF - _ZCARR_GAP - _ZCARR_HALF - z
+    zcz       = min(_ZCZ_OFFSET - z, 3.0)   # ZCarriage 월드 Z ≤ 3.0m 강제
     shaft_bot = zcz + _ZCARR_HALF
     shaft_len = max(shaft_top - shaft_bot, 0.04)
     shaft_cen = (shaft_top + shaft_bot) / 2
@@ -313,7 +319,7 @@ def _find_dead_sturgeons(stage) -> list[dict]:
             if not child.GetName().startswith("Sturgeon"):
                 continue
             path_str = str(child.GetPath())
-            if path_str in already_grabbed:
+            if path_str in already_grabbed or path_str in _COLLECTED_PATHS:
                 continue
             flip_attr = child.GetAttribute("aquasweep:isFlipped")
             if not (flip_attr and flip_attr.IsValid() and flip_attr.Get()):
@@ -471,6 +477,9 @@ def _on_step(dt: float) -> None:
         _carry_sturgeon(new_x, new_y, z)
 
         if abs(new_x - bx) < _XY_TOL and abs(new_y - by) < _XY_TOL:
+            sm["x"], sm["y"] = bx, by   # 수거함 중심에 정확히 스냅
+            _update(bx, by, z)
+            _carry_sturgeon(bx, by, z)
             sm["state"] = _DROP_ST
             carb.log_info("[GantryRobot] DROP")
 
@@ -483,7 +492,7 @@ def _on_step(dt: float) -> None:
         grabbed_prim = sm["grabbed_prim"]
         if grabbed_prim is not None and grabbed_prim.IsValid() and t_op is not None:
             # 수거함 위치에 적재 (pool 로컬 좌표로 변환)
-            stack_z = sm["bin_z"] + _BIN_COUNT * _FISH_STACK_HEIGHT
+            stack_z = sm["bin_z"] + _BIN_STACK_BASE_Z + _BIN_COUNT * _FISH_STACK_HEIGHT
             t_op.Set(Gf.Vec3d(
                 sm["bin_x"] - sm["grabbed_pool_cx"],
                 sm["bin_y"] - sm["grabbed_pool_cy"],
@@ -492,6 +501,7 @@ def _on_step(dt: float) -> None:
             _BIN_COUNT += 1
             carb.log_info(f"[GantryRobot] 수거함 적재 완료 (누적 {_BIN_COUNT}마리, z={stack_z:.2f})")
 
+        _COLLECTED_PATHS.add(sm["grabbed_path"])
         if _ANIMATOR is not None and hasattr(_ANIMATOR, "grabbed_paths"):
             _ANIMATOR.grabbed_paths.discard(sm["grabbed_path"])
 
