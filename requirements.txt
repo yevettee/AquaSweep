@@ -1,0 +1,20 @@
+# AquaSweep — Python dependencies (pip-installable)
+#
+# ROS 2 Humble and NVIDIA Isaac Sim are installed separately (see README.md).
+# These packages cover the ROS 2 Python nodes that are NOT provided by the
+# ROS 2 / Isaac Sim installs.
+#
+#   aqua_detection : numpy, opencv-python, ultralytics (YOLO OBB)
+#   aqua_dashboard : numpy, opencv-python, PyQt5
+#
+#   Install:  pip install -r requirements.txt
+
+numpy>=1.24
+opencv-python>=4.8
+ultralytics>=8.1          # YOLO OBB inference (pulls in torch / torchvision)
+PyQt5>=5.15               # dashboard GUI
+
+# NOTE — provided by the ROS 2 Humble install, NOT pip:
+#   rclpy, std_msgs, std_srvs, geometry_msgs, sensor_msgs, nav_msgs
+#   cv_bridge   (apt: ros-humble-cv-bridge, or via rosdep)
+#   aqua_interfaces  (built from this repo with colcon)
