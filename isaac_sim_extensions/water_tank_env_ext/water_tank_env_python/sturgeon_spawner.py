@@ -3,7 +3,7 @@
 Layout rules (drawn fresh from ``random.Random()`` each call):
   * Only configured pools receive fish (default: 1, 3, 6).
   * Each occupied pool gets 5 to 7 sturgeons.
-  * At most 20% per pool are flipped (belly-up / suspicious).
+  * Between 10-20% per pool are flipped (belly-up / suspicious).
   * Each sturgeon's start pose (radius, angle, yaw, z) is randomised inside
     the pool.
   * Each sturgeon picks a random shade from a dark-grey palette so the school
@@ -93,8 +93,9 @@ def _spawn_pool_ids() -> set[int] | None:
 
 
 def _flip_flags(rng: random.Random, n_fish: int) -> list[bool]:
-    max_flipped = int(n_fish * params.STURGEON_FLIPPED_MAX_RATIO)
-    k = rng.randint(0, max_flipped) if max_flipped > 0 else 0
+    min_flipped = max(1, int(n_fish * params.STURGEON_FLIPPED_MIN_RATIO))
+    max_flipped = max(min_flipped, int(n_fish * params.STURGEON_FLIPPED_MAX_RATIO))
+    k = rng.randint(min_flipped, max_flipped)
     flags = [True] * k + [False] * (n_fish - k)
     rng.shuffle(flags)
     return flags

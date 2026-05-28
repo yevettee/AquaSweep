@@ -106,6 +106,7 @@ EQUIPMENT_CENTER: tuple[float, float] = (12.75, 6.0)
 STURGEON_SPAWN_POOLS: list[int] | None = [1, 3, 6]
 STURGEON_PER_POOL_MIN = 5
 STURGEON_PER_POOL_MAX = 7
+STURGEON_FLIPPED_MIN_RATIO = 0.10   # belly-up (suspicious) floor per pool
 STURGEON_FLIPPED_MAX_RATIO = 0.20   # belly-up (suspicious) cap per pool
 
 # ── Debris spawn settings ─────────────────────────────────────────────────────

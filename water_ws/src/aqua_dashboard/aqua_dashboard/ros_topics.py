@@ -69,6 +69,22 @@ def pool_ids() -> range:
     return range(1, POOL_COUNT + 1)
 
 
+# Gantry (Move Fish) services and topics
+def gantry_start_service() -> str:
+    """Start gantry service."""
+    return "/gantry/start"
+
+
+def gantry_stop_service() -> str:
+    """Stop gantry service."""
+    return "/gantry/stop"
+
+
+def gantry_status_topic() -> str:
+    """Gantry status topic."""
+    return "/gantry/status"
+
+
 # Aliases for backward compatibility
 tank_status_topic = pool_status_topic
 tank_robot_status_topic = pool_robot_status_topic
