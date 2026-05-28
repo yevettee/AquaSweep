@@ -110,7 +110,7 @@ STURGEON_FLIPPED_MIN_RATIO = 0.10   # belly-up (suspicious) floor per pool
 STURGEON_FLIPPED_MAX_RATIO = 0.20   # belly-up (suspicious) cap per pool
 
 # ── Debris spawn settings ─────────────────────────────────────────────────────
-DEBRIS_SPAWN_POOLS: list[int] = [1, 2, 3, 6, 7]
+DEBRIS_SPAWN_POOLS: list[int] = [1, 2, 3, 4, 5, 6, 7]
 DEBRIS_COUNT_MIN = 30
 DEBRIS_COUNT_MAX = 50
 DEBRIS_RADIUS = 0.03

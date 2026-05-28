@@ -4,7 +4,7 @@ EXTENSION_DESCRIPTION = "Tank debris particle system for AquaSweep simulation."
 DEBRIS_COUNT_MIN = 30
 DEBRIS_COUNT_MAX = 50
 DEBRIS_RADIUS = 0.03        # m
-DEBRIS_SPAWN_POOLS = [1, 2, 3, 6, 7]
+DEBRIS_SPAWN_POOLS = [1, 2, 3, 4, 5, 6, 7]
 DEBRIS_COLOR_HEX = "#221911"  # near-black dark brown
 
 # 이물질 스폰 범위: water_tank_env_ext params.py의 TANK_RADIUS(4.0m)보다 작아야 함
